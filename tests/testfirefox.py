@@ -58,7 +58,7 @@ TEST_PREFS = {
 
 
 def sidebery_xpi():
-    """Sidebery: KITSUNE_SIDEBERY_XPI, or as you have it installed (the same version as yours)."""
+    """Sidebery: KITSUNE_SIDEBERY_XPI (an .xpi, or a folder for a temporary add-on), or as you have it installed."""
     if os.environ.get("KITSUNE_SIDEBERY_XPI"):
         return os.environ["KITSUNE_SIDEBERY_XPI"]
     found = glob.glob(os.path.expanduser(f"~/Library/Application Support/Firefox/Profiles/*.default-release/extensions/{SIDEBERY_ID}.xpi"))
@@ -112,7 +112,8 @@ class TestFirefox:
 
     def _setup(self):
         m = self.m
-        m.cmd("Addon:Install", {"path": sidebery_xpi(), "temporary": False})
+        sb = sidebery_xpi()  # a folder is loaded as a temporary add-on (e.g. a patched Sidebery)
+        m.cmd("Addon:Install", {"path": sb, "temporary": os.path.isdir(sb)})
         time.sleep(4)
         fixture = json.load(open(f"{FIXTURES}/sidebery.json"))
         fixture["sidebarCSS"] = open(f"{DOTFILES}/sidebery.css").read()

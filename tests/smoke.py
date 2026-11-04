@@ -94,7 +94,7 @@ def press(m, key, *mods):
 
 def extension_message(m, msg):
     """Send a runtime message from one of the extension's own pages, and return the reply."""
-    m.js(H + """const w = main(); w.focus();
+    m.js(H + """const w = main(); w.focus(); w.__beforeHelper = w.gBrowser.selectedTab;
       const t = w.gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]] + "/ghost.html?kind=test", {});
       w.gBrowser.selectedTab = t; await wait(1500); return 1;""", EXT_ID)
     m.cmd("Marionette:SetContext", {"value": "content"})
@@ -106,8 +106,13 @@ def extension_message(m, msg):
       const done = arguments[arguments.length - 1];
       (window.wrappedJSObject || window).browser.runtime.sendMessage(arguments[0]).then(r => done(JSON.parse(JSON.stringify(r ?? null))), e => done({error: String(e)}));""",
       "args": [msg]})
-    m.cmd("WebDriver:CloseWindow")
     m.chrome()
+    # Close the helper page with the tab selected before it back in front;
+    # otherwise Firefox selects a neighbour, which may be a ghost that Kitsune
+    # then (rightly) pulls in, and the test would be testing its own clicks.
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("ghost.html?kind=test"));
+      if (w.__beforeHelper && !w.__beforeHelper.closing) w.gBrowser.selectedTab = w.__beforeHelper;
+      if (t) w.gBrowser.removeTab(t); await wait(500); return 1;""")
     return reply
 
 
