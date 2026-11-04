@@ -32,9 +32,14 @@ async function normalWindows() {
 // - Sidebery needs ~1.5 s to finish placing them before the window is given
 //   the reference window's tab order (see sortLikeReference). Sorting sooner
 //   puts tabs in the wrong panel.
+// - Essentials are created unpinned and pinned PIN_SETTLE_MS later (see
+//   createEssentials): Sidebery puts a new tab in its container's panel, and a
+//   pinned tab keeps its panel; pinned too soon, Sidebery gives it the active
+//   panel instead. Seen on a slower machine (GitHub's), not on a fast Mac.
 const NEW_WINDOW_DELAY_MS = 200;
 const CREATE_GAP_MS = 0;
 const SORT_SETTLE_MS = 1500;
+const PIN_SETTLE_MS = 800;
 
 // The focused window, tracked here so tab events need no round trip to ask.
 // Registered before the other scripts' listeners, so it is current when they run.

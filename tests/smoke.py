@@ -12,7 +12,8 @@ tabs in each space. Each group of checks runs on its own; a check that crashes
 is reported as failed. It checks that:
 
   - a new window gets every essential and synced tab, unloaded, with the same
-    essentials and folders per container, each container in one Sidebery space;
+    essentials and folders per container, each container in one Sidebery space,
+    also in three more new windows opened while another space is active;
   - every tab sits in its container's space in every window, also after an
     essential is closed (and brought back) or newly pinned, and after a tab is
     pulled in from another window;
@@ -54,7 +55,7 @@ H = """
   const {ExtensionStorageIDB} = ChromeUtils.importESModule("resource://gre/modules/ExtensionStorageIDB.sys.mjs");
   const storage = async (id, keys) => (await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID(id).extension))).get(keys);
   const wins = () => [...Services.wm.getEnumerator("navigator:browser")];
-  const main = () => wins().find(w => !w.__smoke), other = () => wins().find(w => w.__smoke);
+  const main = () => wins().find(w => !w.__smoke && !w.__extra), other = () => wins().find(w => w.__smoke);
   const es = "extension:%(ext)s:";
   const value = (w, t, name) => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, es + name) || "null"); } catch (e) { return null; } };
   const key = (w, t) => w.SessionStore.getCustomTabValue(t, es + "syncKey");  // JSON-encoded, as stored
@@ -144,6 +145,25 @@ def new_window(m):
     for which in ("main", "other"):
         wrong = m.js(H + f"return await misplaced({which}());")
         check(f"every tab in the {'main' if which == 'main' else 'new'} window is in its container's space", not wrong, str(wrong[:5]))
+
+
+def more_windows(m):
+    # Three more new windows, each opened while another space is active: an
+    # essential pinned before Sidebery placed it would land in that space.
+    wrong = m.js(H + """const out = [], m0 = main(), pinned = () => m0.gBrowser.tabs.filter(t => t.pinned).length;
+      for (const ctx of [1, 2, 3]) {
+        m0.gBrowser.selectedTab = m0.gBrowser.tabs.find(t => !t.pinned && !t.hidden && t.userContextId === ctx) || m0.gBrowser.selectedTab;
+        await wait(800);
+        const w = m0.OpenBrowserWindow(); w.__extra = true;
+        try {
+          for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);  // the window is still being built
+          for (let i = 0; i < 100 && w.gBrowser.tabs.filter(t => t.pinned).length < pinned(); i++) await wait(100);
+          await wait(4000);
+          out.push(await misplaced(w));
+        } finally { await close(w); }
+      }
+      return out;""")
+    check("essentials and tabs land in their own space in three more new windows", all(not x for x in wrong), str(wrong))
 
 
 def essentials(m):
@@ -333,7 +353,7 @@ def main():
     print(f"Testing {xpi or EXT_DIR} in a test Firefox", flush=True)
     t0 = time.time()
     with TestFirefox(xpi=xpi) as m:
-        for group in (external_links, new_window, essentials, tab_sync, archiving, shortcuts, look, live_folders, handover):
+        for group in (external_links, new_window, more_windows, essentials, tab_sync, archiving, shortcuts, look, live_folders, handover):
             try:
                 group(m)
             except Exception:

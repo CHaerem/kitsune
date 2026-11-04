@@ -55,19 +55,29 @@ async function initList() {
   return list;
 }
 
-// Create an essential copy as a placeholder page (see ghost.js): it shows the
+// Create essential copies as placeholder pages (see ghost.js): each shows the
 // real page's title and icon, unloads itself, and opens the real page when
-// you select it.
-async function createEssential(windowId, entry, index) {
-  const tab = await browser.tabs.create({
-    windowId, url: ghostUrl("essential", entry.key), active: false,
-    cookieStoreId: entry.cookieStoreId, index,
-  });
-  busy.add(tab.id);
+// you select it. They are created unpinned, so Sidebery puts each in its
+// container's space, and pinned together a moment later; a pinned tab keeps
+// its space (see PIN_SETTLE_MS).
+async function createEssentials(windowId, items) { // [{ entry, index }]
+  const tabs = [];
+  for (const { entry, index } of items) {
+    const tab = await browser.tabs.create({
+      windowId, url: ghostUrl("essential", entry.key), active: false,
+      cookieStoreId: entry.cookieStoreId, index,
+    });
+    busy.add(tab.id);
+    await tagTab(tab.id, entry.key);
+    tabs.push(tab);
+    await sleep(CREATE_GAP_MS);
+  }
+  if (!tabs.length) return;
+  await sleep(PIN_SETTLE_MS);
   try {
-    await Promise.all([tagTab(tab.id, entry.key), browser.tabs.update(tab.id, { pinned: true })]);
+    for (const tab of tabs) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
   } finally {
-    setTimeout(() => busy.delete(tab.id), 1500);
+    setTimeout(() => tabs.forEach(t => busy.delete(t.id)), 1500);
   }
 }
 
@@ -97,12 +107,13 @@ async function ensureWindow(windowId) {
     }
   }
   let index = 0;
+  const missing = [];
   for (const entry of list) {
     if (have.has(entry.key)) { index++; continue; }
     if (!isWeb(entry.url)) continue;
-    await createEssential(windowId, entry, index++);
-    await sleep(CREATE_GAP_MS);
+    missing.push({ entry, index: index++ });
   }
+  await createEssentials(windowId, missing);
 }
 
 async function ensureAllWindows() {

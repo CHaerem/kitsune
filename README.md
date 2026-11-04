@@ -125,10 +125,14 @@ It cannot for addons.mozilla.org, which Firefox shields from extensions.
   placing the new tabs; sorting sooner puts tabs in the wrong panel.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
+- A tab pinned before Sidebery has placed it in its container's space gets the
+  active space instead (seen on a slower machine). So a new window's essentials
+  are created unpinned, placed by Sidebery, and pinned together 0.8 s later
+  (`PIN_SETTLE_MS` in `common.js`); the smoke test opens three windows to check.
 
 ## Performance (Firefox 159, Sidebery 5.6, 33 essentials + 53 tabs)
 
-- New window: essentials after ~0.8 s, all tabs after ~1.3 s, sorted after
+- New window: essentials after ~1.6 s, all tabs after ~1.6 s, sorted after
   ~3 s. Placeholders load briefly and unload themselves; only folder copies
   stay loaded.
 - Selecting a ghost: the live tab is in place after ~50 ms.
