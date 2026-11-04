@@ -1,0 +1,14 @@
+[
+  {
+    "id": "work-prs",
+    "name": "Pull Requests",
+    "container": "firefox-container-3",
+    "search": "org:your-company"
+  },
+  {
+    "id": "own-prs",
+    "name": "Pull Requests",
+    "container": "firefox-container-1",
+    "search": "user:your-github-name"
+  }
+]

@@ -1,0 +1,49 @@
+{
+  "manifest_version": 2,
+  "name": "Kitsune",
+  "version": "1.6.0",
+  "description": "Firefox in the shape of Zen and Arc: essentials and tabs in every window, live folders of GitHub pull requests, archiving of unused tabs, and ⌘⇧C to copy the address.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{6844a953-9931-4334-9ff6-257c246485cb}",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    }
+  },
+  "permissions": [
+    "tabs",
+    "sessions",
+    "storage",
+    "cookies",
+    "nativeMessaging",
+    "alarms",
+    "clipboardWrite"
+  ],
+  "background": {
+    "scripts": [
+      "common.js",
+      "essentials.js",
+      "tabsync.js",
+      "livefolders.js",
+      "archive.js",
+      "shortcuts.js"
+    ],
+    "persistent": true
+  },
+  "commands": {
+    "copy-url": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+C"
+      },
+      "description": "Copy the address of the current tab"
+    }
+  },
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  }
+}

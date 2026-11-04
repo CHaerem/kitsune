@@ -1,0 +1,4 @@
+__pycache__/
+web-ext-artifacts/
+.amo-upload-uuid
+.DS_Store
