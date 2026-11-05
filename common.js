@@ -46,6 +46,7 @@ const PIN_SETTLE_MS = 800;
 // to its own space before pinning it.
 const SIDEBAR_WAIT_MS = 4000;
 const RULE_SETTLE_MS = 600;
+const PROBE_MS = 500;
 
 // The focused window, tracked here so tab events need no round trip to ask.
 // Registered before the other scripts' listeners, so it is current when they run.

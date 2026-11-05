@@ -76,7 +76,7 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
   }
   if (!tabs.length) return;
   try {
-    await settle();
+    await settle(tabs);
     await pinEssentialCopies(tabs);
   } finally {
     setTimeout(() => tabs.forEach(({ tab }) => busy.delete(tab.id)), 1500);
@@ -89,11 +89,18 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
 // unpinned tab's address changes, so each copy loads its placeholder once
 // more, gets a moment to be moved to its own space, and is pinned only then.
 async function pinEssentialCopies(tabs) {
-  for (const { tab, entry } of tabs) {
-    await browser.tabs.update(tab.id, { url: ghostUrl("essential", entry.key) + "&placed=1" }).catch(() => {});
-  }
+  await reloadPlaceholders(tabs);
   await sleep(RULE_SETTLE_MS);
   for (const { tab } of tabs) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
+}
+
+// Load each copy's placeholder again (a new address, so Sidebery sees a change).
+let placedCount = 0;
+async function reloadPlaceholders(tabs) {
+  placedCount++;
+  for (const { tab, entry } of tabs) {
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", entry.key) + "&placed=" + placedCount }).catch(() => {});
+  }
 }
 
 // Add any essentials a window is missing. Safe to run repeatedly.

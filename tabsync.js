@@ -164,10 +164,8 @@ async function withPinnedPlaceholder(windowId, fn) {
 // copy of every synced tab, in the reference window's order.
 //
 // In a new window the essentials wait to be pinned until Sidebery's sidebar
-// there has started (see pinEssentialCopies): the ghosts are created
-// meanwhile, and Sidebery hiding the tabs of the other spaces (its setting
-// "hide tabs of inactive panels") shows that it has. Without that sign it
-// waits SIDEBAR_WAIT_MS.
+// there has started (see pinEssentialCopies); the ghosts are created
+// meanwhile.
 async function fillWindow(windowId, { fresh = false } = {}) {
   let created = 0;
   const addReps = async () => {
@@ -184,9 +182,9 @@ async function fillWindow(windowId, { fresh = false } = {}) {
     }
   };
   if (fresh) {
-    await withPinnedPlaceholder(windowId, () => ensureWindow(windowId, async () => {
+    await withPinnedPlaceholder(windowId, () => ensureWindow(windowId, async essentials => {
       await addReps();
-      await sidebarStarted(windowId);
+      await sidebarStarted(windowId, essentials);
     }));
   } else {
     await ensureWindow(windowId);
@@ -198,13 +196,19 @@ async function fillWindow(windowId, { fresh = false } = {}) {
   }
 }
 
-// Resolves once Sidebery has hidden a tab in the window (it hides the tabs of
-// the spaces you are not in), or after SIDEBAR_WAIT_MS.
-async function sidebarStarted(windowId) {
+// Sidebery's sidebar has no signal other extensions can see, so the
+// essentials' placeholders are loaded again every PROBE_MS: once the sidebar
+// runs, it moves each to its container's space, and hides those of the spaces
+// you are not in (its setting "hide tabs of inactive panels"). A hidden tab in
+// the window is the sign. Without one (all essentials in the space you are
+// in, or that setting off) it gives up after SIDEBAR_WAIT_MS.
+async function sidebarStarted(windowId, essentials) {
   const t0 = Date.now();
+  let probed = t0;
   while (Date.now() - t0 < SIDEBAR_WAIT_MS) {
     const hidden = await browser.tabs.query({ windowId, hidden: true }).catch(() => []);
     if (hidden.length) return;
+    if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); await reloadPlaceholders(essentials); }
     await sleep(100);
   }
 }
