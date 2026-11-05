@@ -301,9 +301,12 @@ container).
 ### On GitHub
 
 `.github/workflows/smoke.yml` runs the same smoke test on GitHub, in a
-headless Firefox on a macOS runner with the newest Sidebery and the newest
-Firefox, and on the weekly run also Firefox Beta (about four weeks ahead, so a
-Firefox change that would break the setup shows up before it reaches you). It
+headless Firefox on a macOS runner with the newest Sidebery, both in the newest
+Firefox and in Firefox Developer Edition (the Beta, about four weeks ahead, so a
+Firefox change that would break the setup shows up before it reaches you).
+Developer Edition allows unsigned add-ons, so there Kitsune is installed for
+real and the test also quits and restarts Firefox to check the restored
+session; on your Mac that part runs with `--installed` or `--xpi`. It
 runs on pushes and pull requests here and every Monday, so a Firefox or
 Sidebery update that breaks something shows up without any change here; after
 changing the Firefox files in dotfiles, start it by hand (Actions → Smoke test

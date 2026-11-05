@@ -41,7 +41,11 @@ is reported as failed. It checks that:
   - a live folder (with a stand-in for the native host) is in every window,
     first in its space, with its pull requests unloaded; a closed pull request
     stays closed, one that leaves the search is removed everywhere, and a
-    renamed one takes its new title.
+    renamed one takes its new title;
+  - after Firefox is quit and started again, both windows come back with the
+    same essentials and tabs, one live tab each, folders with their tabs and
+    every tab in its space, and tab sync and new windows still work (only
+    where Kitsune can be installed for real: Developer Edition, or --xpi).
 """
 import glob
 import json
@@ -584,6 +588,66 @@ def reopened_window(m):
           and r["pinned"][0] == r["pinned"][1], str(r))
 
 
+def restart(m):
+    # Quitting and starting Firefox again restores both windows with their
+    # tabs' Kitsune values: the same essentials and tabs in each, one live tab
+    # each, folders with their tabs, every tab in its space, and tab sync and
+    # new windows work as before.
+    if not m.can_restart:
+        print("SKIP  restart (Kitsune is a temporary add-on here, which Firefox removes when it quits; "
+              "runs where unsigned add-ons are allowed, as in Developer Edition, or with --xpi)", flush=True)
+        return
+    snap = H + """
+      const out = [];
+      for (const w of wins()) {
+        const tabs = w.gBrowser.tabs;
+        out.push({essentials: tabs.filter(t => t.pinned).map(t => ek(w, t) || "untagged " + t.label),
+                  keys: tabs.filter(t => !t.pinned && key(w, t)).map(t => key(w, t)).sort(),
+                  live: tabs.filter(t => !t.pinned && role(w, t) === "live").map(t => key(w, t)),
+                  untagged: tabs.filter(t => !t.pinned && !key(w, t)).map(t => t.label + " " + url(t).slice(0, 60)),
+                  inFolders: tabs.filter(t => /fixture-in-folder/.test(t.label + url(t)) && !(t.openerTab && url(t.openerTab).includes("/sidebery/group.html"))).map(t => t.label),
+                  wrong: await misplaced(w)});
+      }
+      const order = w => JSON.stringify([w.keys, w.essentials, w.untagged]);
+      out.sort((a, b) => order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0);
+      const synced = Object.keys((await storage("%s", ["syncedTabs"])).syncedTabs).length;
+      return {windows: out, synced};""" % EXT_ID
+    m.js(H + """const w = main().OpenBrowserWindow(); for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100); await wait(9000); return 1;""")
+    before = m.js(snap)
+    t0 = time.time()
+    m.restart()
+    # Kitsune starts 5 s after Firefox (onStartup), then fills in what is missing.
+    m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(15000); return 1;""")
+    after = m.js(snap)
+    print(f"INFO  restarted in {round(time.time() - t0)} s: {len(before['windows'])} -> {len(after['windows'])} windows", flush=True)
+    bw, aw = before["windows"], after["windows"]
+    check("after a restart, both windows have the same essentials and tabs as before",
+          len(aw) == len(bw) == 2 and [w["essentials"] for w in aw] == [w["essentials"] for w in bw]
+          and [w["keys"] for w in aw] == [w["keys"] for w in bw] and after["synced"] == before["synced"],
+          f"before {[(len(w['essentials']), len(w['keys'])) for w in bw]} {before['synced']}, after {[(len(w['essentials']), len(w['keys'])) for w in aw]} {after['synced']}")
+    lives = sorted(k for w in aw for k in w["live"])
+    check("after a restart, every tab is live in one window only, and no other tab came or went",
+          len(lives) == len(set(lives)) and sorted(w["untagged"] for w in aw) == sorted(w["untagged"] for w in bw),
+          f"doubled {[k for k in lives if lives.count(k) > 1][:3]}, others before {[w['untagged'] for w in bw]}, after {[w['untagged'] for w in aw]}")
+    check("after a restart, folders keep their tabs and every tab is in its container's space",
+          all(not w["inFolders"] and not w["wrong"] for w in aw), str([(w["inFolders"][:3], w["wrong"][:3]) for w in aw]))
+    # Tab sync works as before: a new tab gets a ghost in the other window.
+    r = m.js(H + """
+      const [a] = wins(); const t = a.gBrowser.addTrustedTab("https://example.org/?smoke-after-restart", {userContextId: 1, inBackground: true});
+      await wait(5000); const k = key(a, t), got = find(k);
+      await removeWhere((w, x) => key(w, x) === k);
+      return got;""")
+    check("after a restart, a new tab gets a ghost in the other window", sorted(r) == [["ghost/unloaded"], ["live/loaded"]], str(r))
+    r = m.js(H + """
+      const [a] = wins(), pinned0 = a.gBrowser.tabs.filter(t => t.pinned).length, want = a.gBrowser.tabs.filter(t => !t.pinned && role(a, t)).length;
+      const w = a.OpenBrowserWindow(); for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);
+      await wait(8000);
+      const got = [w.gBrowser.tabs.filter(t => t.pinned).length, w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length];
+      await close(w);
+      return {want: [pinned0, want], got};""")
+    check("after a restart, a new window gets all essentials and tabs", r["want"] == r["got"], str(r))
+
+
 def main():
     xpi = None
     if "--xpi" in sys.argv:
@@ -597,7 +661,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, handover, reopened_window, restart):
             try:
                 group(m)
             except Exception:

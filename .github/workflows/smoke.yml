@@ -1,8 +1,10 @@
 # The smoke test on GitHub: the same tests/smoke.py as on your Mac, in a
 # headless Firefox on a macOS runner, with the newest Sidebery and both the
-# newest Firefox (what yours updates to) and Firefox Beta (about four weeks
-# ahead, so a Firefox change that would break something shows up before it
-# reaches you). It runs on pushes and pull requests here and every Monday, so
+# newest Firefox (what yours updates to) and Firefox Developer Edition (the
+# Beta, about four weeks ahead, so a Firefox change that would break something
+# shows up before it reaches you). Developer Edition also lets Kitsune be
+# installed unsigned for real, so only there does the test quit and restart
+# Firefox to check the restored session. It runs on pushes and pull requests here and every Monday, so
 # a Firefox or Sidebery update that breaks something shows up even when
 # nothing here changed; start it by hand (Actions → Smoke test → Run
 # workflow) after changing dotfiles. GitHub e-mails you when a run fails.
@@ -37,8 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Beta on the weekly (and manual) run, so pushes stay quick.
-        firefox: ${{ fromJSON(contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event_name) && '["latest", "latest-beta"]' || '["latest"]') }}
+        firefox: ["latest", "latest-devedition"]
     steps:
       - name: Check out Kitsune
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

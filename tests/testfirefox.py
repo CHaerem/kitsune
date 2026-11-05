@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 
 from marionette import FIREFOX, Marionette
 
@@ -56,6 +57,10 @@ TEST_PREFS = {
     "app.update.disabledForTesting": True,
     "datareporting.policy.dataSubmissionEnabled": False,
     "extensions.update.enabled": False,
+    # Lets Kitsune be installed for real (not as a temporary add-on, which
+    # Firefox removes when it quits) where Firefox allows unsigned add-ons:
+    # Developer Edition and Nightly. Release Firefox ignores it.
+    "xpinstall.signatures.required": False,
 }
 
 
@@ -71,8 +76,25 @@ def sidebery_xpi():
 
 class TestFirefox:
     def __init__(self, xpi=None):
-        self.xpi = xpi  # a signed Kitsune .xpi; default: this folder, as a temporary add-on
+        self.xpi = xpi  # a signed Kitsune .xpi; default: this folder (installed for real where Firefox allows it)
         self.dir = self.proc = self.m = None
+
+    def restart(self):
+        """Quit the test Firefox and start it again with the same profile, so
+        the session is restored. Only when Kitsune is installed for real
+        (m.can_restart): a temporary add-on is gone after a restart. The same
+        Marionette object is kept, connected to the new Firefox."""
+        self.m.quit()
+        try:
+            self.proc.wait(30)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(10)
+        m = self.m
+        self._start()
+        m.__dict__.update(self.m.__dict__)
+        self.m = m
+        self.m.js(USE_TEST_MANAGED_STORAGE, f"{self.dir}/managed")
 
     def __enter__(self):
         try:
@@ -139,11 +161,28 @@ class TestFirefox:
         if seed["restarts"] or seed["misplaced"]:
             # Shown so a setup that often needs it is noticed; the checks run either way.
             print(f"(setup: Sidebery started again {seed['restarts']}x for tabs in the wrong space; {seed['misplaced']} still are)", flush=True)
+        m.can_restart = True
         if self.xpi:
             m.cmd("Addon:Install", {"path": os.path.abspath(self.xpi), "temporary": False})
         else:
-            m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
+            try:
+                m.cmd("Addon:Install", {"path": self._unsigned_xpi(), "temporary": False})
+            except RuntimeError:  # release Firefox: signed add-ons only
+                m.can_restart = False
+                m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
+        m.restart = self.restart
         time.sleep(8)  # Kitsune starts: essentials, tab sync, live folders
+
+    def _unsigned_xpi(self):
+        """This folder as an .xpi, without what is not part of the extension."""
+        path = f"{self.dir}/kitsune.xpi"
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for root, dirs, files in os.walk(EXT_DIR):
+                dirs[:] = [d for d in dirs if root != EXT_DIR or d not in ("tests", "tools", "native", ".git", ".github")]
+                for f in files:
+                    full = os.path.join(root, f)
+                    z.write(full, os.path.relpath(full, EXT_DIR))
+        return path
 
 
 # Firefox reads managed storage files and native hosts only from your own
