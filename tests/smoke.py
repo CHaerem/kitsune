@@ -634,7 +634,7 @@ def restart(m):
     print(f"INFO  restarted in {round(time.time() - t0)} s: {len(before['windows'])} -> {len(after['windows'])} windows", flush=True)
     bw, aw = before["windows"], after["windows"]
     check("after a restart, both windows have the same essentials and tabs as before",
-          len(aw) == len(bw) == 2 and [w["essentials"] for w in aw] == [w["essentials"] for w in bw]
+          len(aw) == len(bw) == 2 and all(w["essentials"] and w["keys"] for w in bw) and [w["essentials"] for w in aw] == [w["essentials"] for w in bw]
           and [w["keys"] for w in aw] == [w["keys"] for w in bw] and after["synced"] == before["synced"],
           f"before {[(len(w['essentials']), len(w['keys'])) for w in bw]} {before['synced']}, after {[(len(w['essentials']), len(w['keys'])) for w in aw]} {after['synced']}")
     lives = sorted(k for w in aw for k in w["live"])
