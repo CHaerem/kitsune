@@ -167,12 +167,18 @@ async function onPinned(tab) {
 }
 
 // Essential removed (the tab was unpinned): remove the copies in other windows.
+// An unloaded copy you unpin is still the placeholder page, which has nothing
+// to show once the essential is gone, so it opens the real page and becomes
+// an ordinary tab.
 async function onUnpinned(tab) {
   const key = await keyOf(tab);
   if (!key) return;
   keyByTab.delete(tab.id);
   await browser.sessions.removeTabValue(tab.id, TAB_KEY);
-  setList((await getList()).filter(e => e.key !== key));
+  const list = await getList();
+  const entry = list.find(e => e.key === key);
+  setList(list.filter(e => e.key !== key));
+  if (entry && isGhostUrl(tab.url)) await browser.tabs.update(tab.id, { url: entry.url }).catch(() => {});
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);

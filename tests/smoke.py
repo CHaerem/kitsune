@@ -22,8 +22,8 @@ is reported as failed. It checks that:
     closes it everywhere; closing a window hands its tabs over, and reopening
     it doubles nothing;
   - pinning a tab makes it an essential everywhere, also when the tab is a
-    ghost; unpinning a copy removes it everywhere; an essential copy opens the
-    real page in its container;
+    ghost; unpinning a copy removes it everywhere, and the copy you unpinned
+    opens its page; an essential copy opens the real page in its container;
   - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
   - the extension starts again after being disabled and enabled;
@@ -215,12 +215,13 @@ def essentials(m):
       await wait(2500); main().gBrowser.pinTab(t); await wait(5000);
       const k = ek(main(), t), copy = other().gBrowser.tabs.find(x => x.pinned && ek(other(), x) === k);
       const r = {key: !!k, copy: !!copy, spaces: [sbPanel(main(), t), copy && sbPanel(other(), copy)], want: pf["firefox-container-1"]};
-      if (copy) { other().gBrowser.unpinTab(copy); await wait(4000); }
+      if (copy) { other().gBrowser.unpinTab(copy); await wait(4000); r.unpinnedOpens = url(copy); }
       r.leftPinned = wins().map(w => w.gBrowser.tabs.filter(x => x.pinned && ek(w, x) === k).length);
       await removeWhere((w, x) => url(x).includes("smoke-pin"));
       return r;""")
     check("a pinned tab becomes an essential in every window, in its space", r["key"] and r["copy"] and r["spaces"] == [r["want"]] * 2, str(r))
     check("unpinning a copy removes the essential everywhere", r["leftPinned"] == [0, 0], str(r))
+    check("an unloaded copy you unpin opens its page as an ordinary tab", r.get("unpinnedOpens") == "https://example.org/?smoke-pin", str(r))
     r = m.js(H + """
       const w = other(); w.focus(); await wait(500);
       const e = w.gBrowser.tabs.find(t => t.pinned && url(t).includes("ghost.html") && !t.linkedPanel);
@@ -547,7 +548,7 @@ def reopened_window(m):
       const doubled = Object.entries(by).filter(([, c]) => (!c.copy && c.live !== 1) || c.perWindow.some(n => n !== 1)).map(([k, c]) => [k, c]);
       const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
       const dead = w.gBrowser.tabs.filter(t => url(t).includes("ghost.html") && !key(w, t) && !t.pinned)
-        .map(t => { const q = new URLSearchParams(url(t).split("?")[1]); return [t.label, q.get("kind"), all[q.get("key")] ? "synced" : "gone"]; });
+        .map(t => { const q = new URLSearchParams(url(t).split("?")[1]); return [t.label, q.get("kind"), q.get("kind") === "essential" ? "" : all[q.get("key")] ? "synced" : "gone"]; });
       const pinned = wins().map(x => x.gBrowser.tabs.filter(t => t.pinned).length);
       await close(w);
       return {before, after, doubled: doubled.slice(0, 5), dead, pinned};""" % (EXT_ID, EXT_ID))
