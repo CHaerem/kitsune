@@ -73,13 +73,19 @@ part of the signed extension.
 Firefox cannot give an unloaded tab a title or icon. Ghosts and essential
 copies are therefore created as a tiny local page (`ghost.html`) that sets the
 real page's title and icon and then asks to be unloaded; an unloaded tab keeps
-both, so placeholders cost no memory once settled. When shown, an essential
+both, so placeholders cost no memory once settled. It is unloaded when Firefox
+reports the icon as shown, not after a fixed pause. The icon is the one saved
+for the page, else the site's `/favicon.ico` if that loads. When shown, an essential
 copy goes straight to the real page; a ghost has the live tab pulled in, and
 only loads the real page itself if no live tab exists. When a live tab's title
 or icon changes, its ghosts reload the placeholder to show it.
 
 Tabs that were never loaded have no title or icon to copy. For the initial
-migration from Zen these were filled in from Zen's session data.
+migration from Zen these were filled in from Zen's session data. An essential
+that still has no icon takes the icon of the first tab on its site that you
+open, and its copies are redrawn. This matters for sites behind a sign-in,
+whose `/favicon.ico` leads to the sign-in page. Firefox's own icon cache
+(`page-icon:`) cannot be loaded from an extension's process.
 
 ## Short names for essentials
 
@@ -110,13 +116,39 @@ Links opened from outside Firefox (Slack, Mail, …) open in the active space's
 container; Sidebery does that (its setting "reopen externally opened tabs").
 It cannot for addons.mozilla.org, which Firefox shields from extensions.
 
+Sidebery's container rules ("reopen tabs with this URL in this container")
+match a rule's text anywhere in every address a tab loads, including sign-in
+redirects. `youtube.com` also matches `accounts.youtube.com`, which every
+Google sign-in passes through, so a Google sign-in in another space is moved
+to that container: the essential is closed (and comes back unloaded) and the
+sign-in fails there. `teams.microsoft.com` likewise matches a Microsoft
+sign-in that returns to Teams. Anchor such rules to the start of the address,
+as a regular expression: `/^https:\/\/(www\.|m\.)?youtube\.com\//`.
+
+## Scrolling in the sidebar (Sidebery settings)
+
+Horizontal scrolling switches space, vertical scrolling scrolls the tabs. A
+trackpad's vertical swipe also moves a few pixels sideways, so Sidebery must
+ignore small sideways movement:
+
+| Sidebery setting | Value | Why |
+|---|---|---|
+| Use horizontal scroll to (`hScrollAction`) | switch panels | |
+| Limit to one panel switch per scroll (`onePanelSwitchPerScroll`) | on | one space per swipe |
+| Set threshold for switching between panels and tabs by scrolling (`wheelThreshold`) | on | without it, any sideways pixel switches space |
+| Horizontal scrolling (px) (`wheelThresholdX`) / Horizontal scroll accumulation | 10 / off | one event must move 10 px sideways; a drifting vertical swipe never does |
+| Vertical scrolling (px) (`wheelThresholdY`) / Vertical scroll accumulation | 0 / off | Sidebery blocks vertical scroll events below this threshold |
+| Switch panels using vertical scroll over navigation bar (`navSwitchPanelsWheel`) | off | scrolling near the bottom would switch space |
+
+The test fixture (`tests/fixtures/sidebery.json`) has these values.
+
 ## Known limitations
 
 - An essential remembers the URL the tab had when it was pinned. Pin a page
   when it shows the app itself, not while it is redirecting to a sign-in or
   product page.
-- Pages without a favicon (and sites that block `/favicon.ico`) show the
-  default icon.
+- An essential whose site you have not opened since it became one, and whose
+  `/favicon.ico` does not load, shows the default icon until you do.
 - Folders, including new live folders, start expanded in a new window (Sidebery does not let other
   extensions fold them).
 - Sidebery requires each panel's tabs to be one contiguous run in panel order;

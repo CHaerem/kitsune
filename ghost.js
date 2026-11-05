@@ -19,15 +19,35 @@ function shown(info) {
   browser.runtime.sendMessage({ type: "ghostShown" }).then(r => { if (r?.load) location.replace(info.url); });
 }
 
-browser.runtime.sendMessage({ type: "ghostInfo", kind, key }).then(info => {
+// The first icon that loads: the one saved for the page, else the site's
+// /favicon.ico. (Firefox's own icon cache, page-icon:, cannot be loaded from
+// an extension's process.)
+async function findIcon(info) {
+  const candidates = [info.icon, new URL("/favicon.ico", info.url).href];
+  for (const src of candidates.filter(Boolean)) {
+    const loads = await new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = src;
+    });
+    if (loads) return src;
+  }
+  return null;
+}
+
+browser.runtime.sendMessage({ type: "ghostInfo", kind, key }).then(async info => {
   if (!info) return;
   document.title = info.title || info.url;
-  const icon = document.createElement("link");
-  icon.rel = "icon";
-  icon.href = info.icon || new URL("/favicon.ico", info.url).href;
-  document.head.append(icon);
   if (document.visibilityState === "visible") { shown(info); return; }
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") shown(info); });
-  // Give Firefox a moment to pick up the icon, then ask to be unloaded.
-  setTimeout(() => browser.runtime.sendMessage({ type: "ghostReady" }), 400);
+  const icon = await findIcon(info);
+  if (icon) {
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.href = icon;
+    document.head.append(link);
+  }
+  // Unloaded by the background script once Firefox shows the icon.
+  browser.runtime.sendMessage({ type: "ghostReady", icon: !!icon });
 });

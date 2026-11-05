@@ -397,7 +397,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   const tab = sender.tab;
   if (!tab || sender.id !== browser.runtime.id) return;
   if (msg.type === "ghostInfo") return ghostInfo(msg.kind, msg.key);
-  if (msg.type === "ghostReady") { if (!tab.active) browser.tabs.discard(tab.id).catch(() => {}); return; }
+  if (msg.type === "ghostReady") { unloadWhenIconShown(tab.id, msg.icon); return; }
   // A ghost is being shown. It loads the real page itself only when there is
   // no live tab to pull in (the pull runs from onActivated, in the queue).
   if (msg.type === "ghostShown") {
@@ -413,6 +413,21 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   }
 });
 
+// A placeholder is unloaded once Firefox shows its icon: an unloaded tab keeps
+// the icon it has, so unloaded sooner it would have none.
+const awaitingIcon = new Set();
+function unloadWhenIconShown(tabId, hasIcon) {
+  awaitingIcon.add(tabId);
+  browser.tabs.get(tabId).then(t => { if (!hasIcon || t.favIconUrl) unloadGhost(tabId); }, () => awaitingIcon.delete(tabId));
+}
+function unloadGhost(tabId) {
+  if (!awaitingIcon.delete(tabId)) return;
+  browser.tabs.get(tabId).then(t => { if (!t.active && isGhostUrl(t.url)) return browser.tabs.discard(tabId); }).catch(() => {});
+}
+browser.tabs.onUpdated.addListener(tabId => {
+  if (awaitingIcon.has(tabId)) unloadGhost(tabId);
+}, { properties: ["favIconUrl"] });
+
 async function ghostInfo(kind, key) {
   const entry = kind === "essential"
     ? (await getList()).find(e => e.key === key)
@@ -422,6 +437,7 @@ async function ghostInfo(kind, key) {
 
 browser.tabs.onRemoved.addListener((tabId, info) => {
   clearTimeout(pending.get(tabId)); pending.delete(tabId);
+  awaitingIcon.delete(tabId);
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   forget(tabId);
   if (!started || !key || syncBusy.has(tabId)) { syncBusy.delete(tabId); return; }

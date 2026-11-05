@@ -162,17 +162,37 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
 // Only from its own site: an essential that redirects to a sign-in page
 // (another host) would otherwise be named and drawn as that sign-in page.
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (!isWeb(tab.url) || !(change.title || change.favIconUrl)) return;
   const key = keyByTab.get(tabId);
-  if (!key || !tab.pinned || !isWeb(tab.url) || !(change.title || change.favIconUrl)) return;
-  serial(async () => {
-    const list = await getList();
-    const entry = list.find(e => e.key === key);
-    if (!entry || !sameSite(tab.url, entry.url)) return;
-    if (tab.title) entry.title = tab.title;
-    if (tab.favIconUrl) entry.icon = tab.favIconUrl;
-    setList([...list]);
-  });
+  if (key && tab.pinned) serial(() => updateFromCopy(key, tab));
+  else if (tab.favIconUrl) serial(() => fillMissingIcons(tab));
 }, { properties: ["title", "favIconUrl"] });
+
+async function updateFromCopy(key, tab) {
+  const list = await getList();
+  const entry = list.find(e => e.key === key);
+  if (!entry || !sameSite(tab.url, entry.url)) return;
+  if (tab.title) entry.title = tab.title;
+  if (tab.favIconUrl) entry.icon = tab.favIconUrl;
+  setList([...list]);
+}
+
+// An essential with no icon saved yet (not opened since it became one) takes
+// the icon of any tab on its site, and its unloaded copies are redrawn.
+async function fillMissingIcons(tab) {
+  const list = await getList();
+  const missing = list.filter(e => !e.icon && sameSite(tab.url, e.url));
+  if (!missing.length) return;
+  missing.forEach(e => { e.icon = tab.favIconUrl; });
+  setList([...list]);
+  const keys = new Set(missing.map(e => e.key));
+  const copies = await browser.tabs.query({ pinned: true, discarded: true });
+  const copyKeys = await Promise.all(copies.map(keyOf));
+  for (const [i, t] of copies.entries()) {
+    // Reloading only loads the placeholder page, which unloads itself again.
+    if (keys.has(copyKeys[i]) && isGhostUrl(t.url)) await browser.tabs.update(t.id, { url: ghostUrl("essential", copyKeys[i]) }).catch(() => {});
+  }
+}
 
 browser.tabs.onRemoved.addListener((tabId, info) => {
   if (busy.has(tabId)) { busy.delete(tabId); keyByTab.delete(tabId); return; }
