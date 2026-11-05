@@ -83,10 +83,14 @@ async function createLiveItem(folder, groupKey, item) {
   }
 }
 
-async function refreshLiveFolder(folder) {
-  const res = await browser.runtime.sendNativeMessage(NATIVE_HOST, { folder: folder.id })
-    .catch(err => ({ error: String(err) }));
-  if (!res || res.error) { console.warn("Kitsune: live folder", folder.id, res?.error); return; }
+// The search, outside the queue: it can take up to the host's 30 s timeout,
+// and tab sync (selecting a ghost, closing a tab) must not wait for it.
+function searchLiveFolder(folder) {
+  return browser.runtime.sendNativeMessage(NATIVE_HOST, { folder: folder.id }).catch(err => ({ error: String(err) }));
+}
+
+async function refreshLiveFolder(folder, res) {
+  if (!res || res.error || !Array.isArray(res.items)) { console.warn("Kitsune: live folder", folder.id, res?.error); return; }
   const state = await folderState(folder.id);
   const groupKey = await ensureFolderGroup(folder, state);
   if (!groupKey) return;
@@ -119,8 +123,11 @@ async function liveFolders() {
   return Array.isArray(res?.folders) ? res.folders.map(f => ({ id: f.id, name: f.name, cookieStoreId: f.container })) : [];
 }
 
-function refreshAllLiveFolders() {
-  return serial(async () => { for (const f of await liveFolders()) await refreshLiveFolder(f); });
+async function refreshAllLiveFolders() {
+  for (const f of await liveFolders()) {
+    const res = await searchLiveFolder(f);
+    await serial(() => refreshLiveFolder(f, res)).catch(() => {}); // logged by serial()
+  }
 }
 
 browser.alarms.create("liveFolders", { periodInMinutes: LIVE_REFRESH_MINUTES });
