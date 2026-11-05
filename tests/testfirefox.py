@@ -135,7 +135,10 @@ class TestFirefox:
         time.sleep(4)
         fixture = json.load(open(f"{FIXTURES}/sidebery.json"))
         m.js(SETUP_SIDEBERY, SIDEBERY_ID, fixture, SIDEBERY_PERMISSIONS, SIDEBERY_SHORTCUTS)
-        m.js(SEED_TABS, SIDEBERY_ID)
+        seed = m.js(SEED_TABS, SIDEBERY_ID)
+        if seed["restarts"] or seed["misplaced"]:
+            # Shown so a setup that often needs it is noticed; the checks run either way.
+            print(f"(setup: Sidebery started again {seed['restarts']}x for tabs in the wrong space; {seed['misplaced']} still are)", flush=True)
         if self.xpi:
             m.cmd("Addon:Install", {"path": os.path.abspath(self.xpi), "temporary": False})
         else:
@@ -221,10 +224,26 @@ SEED_TABS = """
       c.openerTab = group;
     }
   }
+  // Sidebery reads the tree when it starts. Now and then (seen on GitHub) it
+  // starts with a whole space's tabs in the space before it; that is the
+  // test's own setup going wrong, not Kitsune, so it is started again.
+  const {ExtensionStorageIDB} = ChromeUtils.importESModule("resource://gre/modules/ExtensionStorageIDB.sys.mjs");
+  const misplaced = async () => {
+    const db = await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID(SB).extension));
+    const panelFor = {};
+    for (const p of Object.values((await db.get(["sidebar"])).sidebar.panels)) if (p.type === 2 && p.newTabCtx && p.newTabCtx !== "none") panelFor[p.newTabCtx] = p.id;
+    return gB.tabs.filter(t => {
+      const want = panelFor[t.userContextId ? "firefox-container-" + t.userContextId : "firefox-default"];
+      const got = JSON.parse(w.SessionStore.getCustomTabValue(t, key) || "{}").panelId;
+      return want && got && got !== want;
+    }).length;
+  };
   await sidebery.enable(); await wait(4000);
+  let restarts = 0;
+  for (; restarts < 3 && await misplaced(); restarts++) { await sidebery.disable(); await wait(1000); await sidebery.enable(); await wait(4000); }
   await w.SidebarController.show("_3c078156-979c-498b-8990-85f7987dd929_-sidebar-action");
   // Close the start tab, so every tab is one of the test tabs.
   for (const t of [...gB.tabs]) if (!t.pinned && !/example\\.org|group\\.html/.test(t.linkedBrowser.currentURI.spec)) gB.removeTab(t);
   await wait(1500);
-  return gB.tabs.length;
+  return {restarts, misplaced: await misplaced()};
 """
