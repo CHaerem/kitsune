@@ -257,6 +257,10 @@ async function reconcileAll() {
 async function register(tabId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || syncKeyByTab.has(tab.id) || !syncable(tab)) return;
+  // Only tabs in ordinary windows: a sign-in popup (window.open) is not a tab
+  // you keep, and pulling its tab into another window would break the sign-in.
+  const win = await browser.windows.get(tab.windowId).catch(() => null);
+  if (!win || win.type !== "normal" || win.incognito) return;
   const all = await getSynced();
   const key = crypto.randomUUID();
   const parentKey = tab.openerTabId ? syncKeyByTab.get(tab.openerTabId) || null : null;
@@ -388,7 +392,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
     // Pinned tabs are essentials; they leave tab sync.
     serial(async () => {
       const all = await getSynced(); delete all[key]; saveSynced(all);
-      forget(tabId);
+      await clearRole(tabId);
       const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
       if (others.length) await browser.tabs.remove(others.map(t => t.id));

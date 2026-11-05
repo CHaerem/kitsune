@@ -142,13 +142,27 @@ async function ensureAllWindows() {
   for (const w of await normalWindows()) await ensureWindow(w.id);
 }
 
-// New essential (the tab was pinned).
+// New essential (the tab was pinned). A placeholder that is pinned (a ghost,
+// or a live folder tab never opened) stands for its synced tab's page; tab
+// sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
-  if (!isWeb(tab.url)) return;
+  let { url, title, favIconUrl: icon } = tab;
+  if (isGhostUrl(url)) {
+    const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
+    if (!entry || !isWeb(entry.url)) return;
+    ({ url, title, icon } = entry);
+  }
+  if (!isWeb(url)) return;
   const list = await getList();
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
-  setList([...list, { key, url: tab.url, cookieStoreId: tab.cookieStoreId, title: tab.title, icon: tab.favIconUrl }]);
+  setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
+  // The pinned placeholder becomes this essential's copy, still unloaded.
+  if (isGhostUrl(tab.url)) {
+    busy.add(tab.id);
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", key) }).catch(() => {});
+    setTimeout(() => busy.delete(tab.id), 1500);
+  }
   for (const w of await normalWindows()) if (w.id !== tab.windowId) await ensureWindow(w.id);
 }
 

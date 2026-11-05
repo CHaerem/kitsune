@@ -19,8 +19,10 @@ is reported as failed. It checks that:
     pulled in from another window;
   - selecting a ghost pulls the live tab in; closing a tab closes it
     everywhere; closing a window hands its tabs over;
-  - pinning a tab makes it an essential everywhere; unpinning a copy removes
-    it everywhere; an essential copy opens the real page in its container;
+  - pinning a tab makes it an essential everywhere, also when the tab is a
+    ghost; unpinning a copy removes it everywhere; an essential copy opens the
+    real page in its container;
+  - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
   - the extension starts again after being disabled and enabled;
   - a tab opened without a container, as links from other apps are, lands in
@@ -288,6 +290,50 @@ def tab_sync(m):
     check("the extension starts again after being disabled and enabled", r == [["live/loaded"], ["ghost/unloaded"]], str(r))
 
 
+def pinned_ghost(m):
+    r = m.js(H + """
+      const t = main().gBrowser.addTrustedTab("https://example.org/?smoke-pin-ghost", {userContextId: 1, inBackground: true});
+      await wait(4500); const k = key(main(), t), w = other();
+      const ghost = w.gBrowser.tabs.find(x => key(w, x) === k);
+      if (!ghost) return null;
+      w.gBrowser.pinTab(ghost); await wait(6000);
+      const saved = (await storage("%s", ["essentials"])).essentials.filter(e => e.url === "https://example.org/?smoke-pin-ghost");
+      const copies = wins().map(x => x.gBrowser.tabs.filter(y => y.pinned && saved[0] && ek(x, y) === saved[0].key).length);
+      const r = {saved: saved.length, copies, synced: find(k), unloaded: !ghost.linkedPanel};
+      for (const x of wins()) for (const y of [...x.gBrowser.tabs]) if (y.pinned && saved[0] && ek(x, y) === saved[0].key) { x.gBrowser.unpinTab(y); break; }
+      await wait(4000);
+      await removeWhere((x, y) => url(y).includes("smoke-pin-ghost") || (saved[0] && ek(x, y) === saved[0].key));
+      return r;""" % EXT_ID)
+    check("pinning a ghost makes its page an essential in every window, still unloaded",
+          r and r["saved"] == 1 and r["copies"] == [1, 1] and r["synced"] == [[], []] and r["unloaded"], str(r))
+
+
+def popups(m):
+    # A sign-in popup (window.open with "popup") must not be synced: no ghosts
+    # of it elsewhere, and nothing to pull out of the popup.
+    m.js(H + """Services.prefs.setBoolPref("dom.disable_open_during_load", false);
+      const w = main(); w.focus(); w.__beforeHelper = w.gBrowser.selectedTab;
+      w.gBrowser.selectedTab = w.gBrowser.addTrustedTab("https://example.org/?smoke-opener", {userContextId: 3}); await wait(3000); return 1;""")
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "smoke-opener" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    m.cmd("WebDriver:ExecuteScript", {"script": 'window.open("https://example.org/?smoke-popup", "_blank", "popup,width=500,height=400"); return 1;'})
+    m.chrome()
+    r = m.js(H + """await wait(5000);
+      const all = [...Services.wm.getEnumerator("navigator:browser")];
+      const popup = all.find(w => w.gBrowser?.tabs.some(t => url(t).includes("smoke-popup")) && !w.toolbar.visible);
+      const elsewhere = wins().filter(w => w !== popup).flatMap(w => w.gBrowser.tabs.filter(t => key(w, t) && (url(t).includes("smoke-popup") || t.label.includes("smoke-popup"))));
+      const r = {popup: !!popup, synced: popup ? popup.gBrowser.tabs.filter(t => key(popup, t)).length : null, ghosts: elsewhere.length};
+      if (popup) { popup.close(); await wait(1500); }
+      Services.prefs.clearUserPref("dom.disable_open_during_load");
+      const w = main(); if (w.__beforeHelper && !w.__beforeHelper.closing) w.gBrowser.selectedTab = w.__beforeHelper;
+      await removeWhere((w, t) => url(t).includes("smoke-opener") || url(t).includes("smoke-popup"));
+      return r;""")
+    check("a popup window (as for signing in) is left out of tab sync", r["popup"] and r["synced"] == 0 and r["ghosts"] == 0, str(r))
+
+
 def external_links(m):
     for digit, ctx in (("2", 3), ("3", 1), ("1", 2)):
         m.js(H + "main().focus(); await wait(300); return 1;")
@@ -473,7 +519,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, archiving, shortcuts, look, live_folders, handover):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, pinned_ghost, popups, archiving, shortcuts, look, live_folders, handover):
             try:
                 group(m)
             except Exception:
