@@ -18,9 +18,9 @@ is reported as failed. It checks that:
     essential is closed (and brought back) or newly pinned, and after a tab is
     pulled in from another window;
   - selecting a ghost pulls the live tab in, and leaves no placeholder in
-    Recently Closed; closing a tab closes it
-    everywhere; closing a window hands its tabs over, and reopening it doubles
-    nothing;
+    Recently Closed; a ghost takes its live tab's new title; closing a tab
+    closes it everywhere; closing a window hands its tabs over, and reopening
+    it doubles nothing;
   - pinning a tab makes it an essential everywhere, also when the tab is a
     ghost; unpinning a copy removes it everywhere; an essential copy opens the
     real page in its container;
@@ -295,6 +295,25 @@ def tab_sync(m):
     check("the extension starts again after being disabled and enabled", r == [["live/loaded"], ["ghost/unloaded"]], str(r))
 
 
+def ghost_title(m):
+    # A live tab whose title changes: its ghost in the other window shows the
+    # new title a few seconds later.
+    m.js(H + """main().gBrowser.addTrustedTab("https://example.org/?smoke-title", {userContextId: 3, inBackground: true}); await wait(4500); return 1;""")
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "smoke-title" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    m.cmd("WebDriver:ExecuteScript", {"script": 'document.title = "Smoke title 1"; return 1;'})
+    m.chrome()
+    r = m.js(H + """await wait(6000);
+      const t = main().gBrowser.tabs.find(t => url(t).includes("smoke-title")), k = t && key(main(), t), w = other();
+      const ghost = k && w.gBrowser.tabs.find(x => key(w, x) === k);
+      const r = {live: t?.label, ghost: ghost?.label, unloaded: ghost ? !ghost.linkedPanel : null};
+      await removeWhere((w, t) => url(t).includes("smoke-title")); return r;""")
+    check("a ghost shows its live tab's new title, still unloaded", r["live"] == "Smoke title 1" and r["ghost"] == "Smoke title 1" and r["unloaded"], str(r))
+
+
 def pinned_ghost(m):
     r = m.js(H + """
       const t = main().gBrowser.addTrustedTab("https://example.org/?smoke-pin-ghost", {userContextId: 1, inBackground: true});
@@ -547,7 +566,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, pinned_ghost, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
             try:
                 group(m)
             except Exception:

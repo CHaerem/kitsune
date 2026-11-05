@@ -283,6 +283,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   const all = await getSynced();
   if (dismiss) await noteLiveFolderDismissed(all[key]);
   delete all[key];
+  lastRefresh.delete(key);
   saveSynced(all);
   const reps = repsOf(key, await browser.tabs.query({}));
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
@@ -407,15 +408,22 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
 
 // The live tab's title or icon changed: reload its ghosts so they show it.
 // Reloading a ghost only loads the local placeholder page, which unloads itself.
-const refreshTimers = new Map();
+// The first change is shown after REFRESH_DELAY_MS; a page whose title keeps
+// changing (a timer, an unread count) refreshes its ghosts at most once every
+// REFRESH_GAP_MS, with the newest title, so the ghosts neither churn nor go
+// stale while it changes.
+const REFRESH_DELAY_MS = 3000, REFRESH_GAP_MS = 60000;
+const refreshTimers = new Map(), lastRefresh = new Map();
 function refreshGhostsSoon(key) {
-  clearTimeout(refreshTimers.get(key));
+  if (refreshTimers.has(key)) return; // the pending refresh will show the newest title
+  const wait = Math.max(REFRESH_DELAY_MS, (lastRefresh.get(key) || 0) + REFRESH_GAP_MS - Date.now());
   refreshTimers.set(key, setTimeout(() => serial(async () => {
     refreshTimers.delete(key);
+    lastRefresh.set(key, Date.now());
     for (const t of repsOf(key, await browser.tabs.query({ discarded: true }))) {
       if (syncRoleByTab.get(t.id) === "ghost") await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
     }
-  }), 3000));
+  }), wait));
 }
 
 // --- Placeholder pages (ghost.js) ----------------------------------------
