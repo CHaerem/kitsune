@@ -195,21 +195,40 @@ permissions, no network access from the extension, no data collection.
   own Firefox, which it restarts).
 - `tests/` – the smoke test, the test Firefox and its fixtures.
 - `.github/workflows/smoke.yml`, `tools/setup-ci-keys.sh` – the smoke test on GitHub.
+- `.github/workflows/release.yml`, `tools/release.py`, `tools/setup-amo-key.sh` –
+  signing and releases (see below).
 
-## Build and sign
+## Releases and updates
 
-Firefox release only installs signed extensions. Sign it as *unlisted* (not
-published on addons.mozilla.org) with an API key from
-<https://addons.mozilla.org/developers/addon/api/key/>:
+Every push to `main` that changes the extension ends up in your Firefox on
+its own:
 
-```bash
-./sign.sh
-```
+1. The smoke test runs on GitHub (`.github/workflows/smoke.yml`). A failed
+   first attempt is run once more, because of the known pin race.
+2. When it passes, `.github/workflows/release.yml` runs `tools/release.py`:
+   - it builds the `.xpi` with version `major.minor.<number of commits>`, e.g.
+     1.6.7, so nobody has to bump it;
+   - addons.mozilla.org signs it as *unlisted* (not in its catalogue), because
+     Firefox only installs signed extensions;
+   - it puts the `.xpi` and `updates.json` on a GitHub Release.
+3. Firefox reads `updates.json` through `update_url` in `manifest.json` and
+   installs the new version by itself. It checks once a day; *Check for
+   updates* in `about:addons` checks at once.
 
-The first run asks for the key and stores it in the macOS Keychain (service
-`amo-web-ext`). Install the resulting `.xpi` from `../kitsune-dist`
-by dragging it into Firefox.
-Bump `version` in `manifest.json` before signing a new release.
+Nothing is released when only the README, tests or tools changed. Change
+`major.minor` in `manifest.json` for a bigger change. `tools/release.py
+--dry-run DIR` builds the `.xpi` and `updates.json` locally without signing.
+
+Set up once:
+
+- The AMO API key: create it at
+  <https://addons.mozilla.org/developers/addon/api/key/> and run
+  `tools/setup-amo-key.sh`, which stores it as the secrets `AMO_JWT_ISSUER`
+  and `AMO_JWT_SECRET`. Only the release workflow, which runs code from `main`,
+  can read them.
+- Firefox: install the first release by hand (open the `.xpi` from the newest
+  [release](https://github.com/CHaerem/kitsune/releases)). Versions before
+  1.6 have no `update_url`, so they cannot find updates.
 
 ## Testing
 

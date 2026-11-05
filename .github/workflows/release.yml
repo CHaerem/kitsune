@@ -1,0 +1,60 @@
+# Release: when the smoke test has passed for a push to main, tools/release.py
+# signs the extension on addons.mozilla.org and puts it on a GitHub Release.
+# Firefox finds it through update_url in manifest.json and updates itself,
+# usually within a day (or at once with "Check for updates" in about:addons).
+# Nothing happens if nothing in the extension changed.
+#
+# A smoke test that fails on its first attempt is run once more: on GitHub's
+# slower machines a new window's essentials can land in the wrong space (a
+# Sidebery bug, fixed by mbnuqw/sidebery#2497). The second attempt is a full,
+# independent run; if it fails too, nothing is released and GitHub e-mails you.
+#
+# The AMO API key is in the secrets AMO_JWT_ISSUER and AMO_JWT_SECRET, set up
+# once with tools/setup-amo-key.sh. This workflow only runs code from main
+# (workflow_run always does), so pull requests never see the key.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [Smoke test]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  retry-smoke:
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Run the failed smoke test once more
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
+
+  release:
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0  # all commits (the version) and tags (the last release)
+          persist-credentials: false
+      - name: Sign and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: python3 -I tools/release.py
