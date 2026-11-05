@@ -545,10 +545,12 @@ def reopened_window(m):
       await wait(9000);
       const by = count(), after = await synced();
       const doubled = Object.entries(by).filter(([, c]) => (!c.copy && c.live !== 1) || c.perWindow.some(n => n !== 1)).map(([k, c]) => [k, c]);
-      const dead = w.gBrowser.tabs.filter(t => url(t).includes("ghost.html") && !key(w, t) && !t.pinned).length;
+      const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
+      const dead = w.gBrowser.tabs.filter(t => url(t).includes("ghost.html") && !key(w, t) && !t.pinned)
+        .map(t => { const q = new URLSearchParams(url(t).split("?")[1]); return [t.label, q.get("kind"), all[q.get("key")] ? "synced" : "gone"]; });
       const pinned = wins().map(x => x.gBrowser.tabs.filter(t => t.pinned).length);
       await close(w);
-      return {before, after, doubled: doubled.slice(0, 5), dead, pinned};""" % EXT_ID)
+      return {before, after, doubled: doubled.slice(0, 5), dead, pinned};""" % (EXT_ID, EXT_ID))
     check("a reopened window takes its tabs back, with nothing doubled", r["before"] == r["after"] and not r["doubled"] and not r["dead"]
           and r["pinned"][0] == r["pinned"][1], str(r))
 
