@@ -127,17 +127,16 @@ as a regular expression: `/^https:\/\/(www\.|m\.)?youtube\.com\//`.
 
 ## Scrolling in the sidebar (Sidebery settings)
 
-Horizontal scrolling switches space, vertical scrolling scrolls the tabs. A
-trackpad's vertical swipe also moves a few pixels sideways, so Sidebery must
-ignore small sideways movement:
+Scrolling only scrolls the tabs; spaces are switched with the buttons at the
+bottom or ⌃1/2/3. Switching spaces by scrolling sideways was tried and left
+out: a trackpad's vertical swipe also moves a little sideways, and the wheel
+threshold that keeps such a swipe from switching space also makes Sidebery
+block small vertical scroll events.
 
 | Sidebery setting | Value | Why |
 |---|---|---|
-| Use horizontal scroll to (`hScrollAction`) | switch panels | |
-| Limit to one panel switch per scroll (`onePanelSwitchPerScroll`) | on | one space per swipe |
-| Set threshold for switching between panels and tabs by scrolling (`wheelThreshold`) | on | without it, any sideways pixel switches space |
-| Horizontal scrolling (px) (`wheelThresholdX`) / Horizontal scroll accumulation | 10 / off | one event must move 10 px sideways; a drifting vertical swipe never does |
-| Vertical scrolling (px) (`wheelThresholdY`) / Vertical scroll accumulation | 0 / off | Sidebery blocks vertical scroll events below this threshold |
+| Use horizontal scroll to (`hScrollAction`) | do nothing | |
+| Set threshold for switching between panels and tabs by scrolling (`wheelThreshold`) | off | with it on, Sidebery blocks vertical scroll events below the vertical threshold |
 | Switch panels using vertical scroll over navigation bar (`navSwitchPanelsWheel`) | off | scrolling near the bottom would switch space |
 
 The test fixture (`tests/fixtures/sidebery.json`) has these values.
