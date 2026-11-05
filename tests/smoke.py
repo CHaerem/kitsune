@@ -243,6 +243,26 @@ def essentials(m):
     check("unloaded essentials show their name", r["copies"] > 0 and not r["wrong"], str(r))
 
 
+def folders(m):
+    r = m.js(H + """
+      const w = main(), SB = "extension:%s:data";
+      const sbParent = t => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, SB) || "{}").parentId; } catch (e) { return undefined; } };
+      const run = () => w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === 1);
+      const group = run().find(t => url(t).includes("/sidebery/group.html"));
+      const plain = run().filter(t => !url(t).includes("/sidebery/group.html") && t.openerTab !== group).pop();
+      if (!group || !plain) return null;
+      const children = run().filter(t => t.openerTab === group);
+      w.gBrowser.moveTabBefore(plain, group);  // an ordinary tab above the folder
+      await wait(4000);
+      const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const now = run(), gid = ExtensionParent.apiManager.global.tabTracker.getId(group);
+      return {first: now.slice(0, 1 + children.length).map(t => t === group ? "folder" : children.includes(t) ? "in folder" : url(t)),
+              children: children.length, treeKept: children.every(c => sbParent(c) === gid),
+              misplaced: [...await misplaced(w), ...await misplaced(other())]};""" % SIDEBERY_ID)
+    check("folders stay first in their space, with their tabs, when a tab is moved above them",
+          r and r["first"] == ["folder"] + ["in folder"] * r["children"] and r["children"] > 0 and r["treeKept"] and not r["misplaced"], str(r))
+
+
 def tab_sync(m):
     r = m.js(H + """
       const t = main().gBrowser.addTrustedTab("https://example.org/?smoke-sync", {userContextId: 3, inBackground: true});
@@ -399,7 +419,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, tab_sync, archiving, shortcuts, look, live_folders, handover):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, archiving, shortcuts, look, live_folders, handover):
             try:
                 group(m)
             except Exception:

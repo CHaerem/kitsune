@@ -505,6 +505,7 @@ async function start(delayMs) {
     await loadRoles();
     await initSynced();
     await reconcileAll(); // also adds missing essentials, via fillWindow
+    await foldersFirstAll(); // folders.js
   });
   started = true;
 }

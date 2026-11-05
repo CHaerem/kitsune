@@ -29,6 +29,7 @@
       "common.js",
       "essentials.js",
       "tabsync.js",
+      "folders.js",
       "livefolders.js",
       "archive.js",
       "shortcuts.js"

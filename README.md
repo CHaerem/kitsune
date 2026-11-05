@@ -23,17 +23,22 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    leaves a ghost behind, so each page is only ever loaded once. Opening a tab
    adds it everywhere; closing it closes it everywhere; closing a window hands
    its tabs over to another window.
-3. **Live folders** (`livefolders.js`): Sidebery folders filled from a GitHub
+3. **Folders first** (`folders.js`): in each space, Sidebery's folders, with
+   the tabs in them, come before the ordinary tabs, like the pinned part of a
+   space in Zen and Arc. Sidebery has no setting for it, and reordering with
+   CSS would only change the picture, so Kitsune keeps the real tab order:
+   when a space does not start with its folders, they are moved up in one go.
+4. **Live folders** (`livefolders.js`): Sidebery folders filled from a GitHub
    pull request search, such as open pull requests in your company's
    organisation or your own repositories where you are author, assignee or
    asked for review. Refreshed every 15 minutes and at startup: new pull
    requests get an unloaded tab, merged or closed ones are removed. A pull
    request tab you close stays closed until it leaves the search.
-4. **⌘⇧C copies the address** of the current tab, as in Arc and Zen
+5. **⌘⇧C copies the address** of the current tab, as in Arc and Zen
    (`shortcuts.js`). Firefox gives ⌘⇧C to the developer tools' element
    picker, which wins over extensions; free it in `about:keyboard` (the
    dotfiles do this in `customKeys.json`).
-5. **Archiving**, as in Arc (`archive.js`): a tab not selected in any window
+6. **Archiving**, as in Arc (`archive.js`): a tab not selected in any window
    for 12 hours is closed everywhere, and stays under History → Recently
    Closed Tabs (⌘⇧T). Essentials, folders and the tabs in them, selected tabs
    and tabs playing sound are kept. The time never counts from before
@@ -205,6 +210,7 @@ permissions, no network access from the extension, no data collection.
 - `tabsync.js` – live/ghost tab sync. Roles and keys are stored per tab with
   `sessions.setTabValue`, so they survive a restart. Tree structure is read
   from `openerTabId`, which Sidebery keeps equal to the parent in its tree.
+- `folders.js` – folders first in each space (see above).
 - `livefolders.js` – live folders of GitHub pull requests (see above).
 - `ghost.html` / `ghost.js` – placeholder page for ghosts, essential copies and never-loaded live tabs.
 - `archive.js` – archiving of unused tabs.
