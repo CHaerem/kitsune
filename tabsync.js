@@ -162,24 +162,50 @@ async function withPinnedPlaceholder(windowId, fn) {
 
 // Give a window everything it is missing: essentials first, then a ghost or
 // copy of every synced tab, in the reference window's order.
+//
+// In a new window the essentials wait to be pinned until Sidebery's sidebar
+// there has started (see pinEssentialCopies): the ghosts are created
+// meanwhile, and Sidebery hiding the tabs of the other spaces (its setting
+// "hide tabs of inactive panels") shows that it has. Without that sign it
+// waits SIDEBAR_WAIT_MS.
 async function fillWindow(windowId, { fresh = false } = {}) {
-  if (fresh) await withPinnedPlaceholder(windowId, () => ensureWindow(windowId));
-  else await ensureWindow(windowId);
-  const all = await getSynced();
-  const tabs = await browser.tabs.query({});
-  const reps = repMap(tabs.filter(t => t.windowId === windowId));
   let created = 0;
-  for (const key of keysInReferenceOrder(all, tabs, windowId)) {
-    if (reps.has(key)) continue;
-    const entry = all[key];
-    const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined);
-    reps.set(key, tab.id);
-    created++;
-    await sleep(CREATE_GAP_MS);
+  const addReps = async () => {
+    const all = await getSynced();
+    const tabs = await browser.tabs.query({});
+    const reps = repMap(tabs.filter(t => t.windowId === windowId));
+    for (const key of keysInReferenceOrder(all, tabs, windowId)) {
+      if (reps.has(key)) continue;
+      const entry = all[key];
+      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined);
+      reps.set(key, tab.id);
+      created++;
+      await sleep(CREATE_GAP_MS);
+    }
+  };
+  if (fresh) {
+    await withPinnedPlaceholder(windowId, () => ensureWindow(windowId, async () => {
+      await addReps();
+      await sidebarStarted(windowId);
+    }));
+  } else {
+    await ensureWindow(windowId);
   }
+  await addReps(); // everything, if no essentials were missing; else whatever came meanwhile
   if (created > 1) {
     await sleep(SORT_SETTLE_MS); // let Sidebery finish placing the new tabs first
     await sortLikeReference(windowId);
+  }
+}
+
+// Resolves once Sidebery has hidden a tab in the window (it hides the tabs of
+// the spaces you are not in), or after SIDEBAR_WAIT_MS.
+async function sidebarStarted(windowId) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < SIDEBAR_WAIT_MS) {
+    const hidden = await browser.tabs.query({ windowId, hidden: true }).catch(() => []);
+    if (hidden.length) return;
+    await sleep(100);
   }
 }
 

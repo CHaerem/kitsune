@@ -40,6 +40,12 @@ const NEW_WINDOW_DELAY_MS = 200;
 const CREATE_GAP_MS = 0;
 const SORT_SETTLE_MS = 1500;
 const PIN_SETTLE_MS = 800;
+// In a new window, essentials are pinned only after Sidebery's sidebar there
+// has started (see fillWindow and pinEssentialCopies): it waits at most
+// SIDEBAR_WAIT_MS for that, and RULE_SETTLE_MS for Sidebery to move each copy
+// to its own space before pinning it.
+const SIDEBAR_WAIT_MS = 4000;
+const RULE_SETTLE_MS = 600;
 
 // The focused window, tracked here so tab events need no round trip to ask.
 // Registered before the other scripts' listeners, so it is current when they run.
