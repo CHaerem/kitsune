@@ -204,14 +204,23 @@ async function fillWindow(windowId, { fresh = false } = {}) {
 // in, or that setting off) it gives up after SIDEBAR_WAIT_MS.
 async function sidebarStarted(windowId, essentials) {
   const t0 = Date.now();
-  let probed = t0;
+  let probed = t0, probes = 0;
   while (Date.now() - t0 < SIDEBAR_WAIT_MS) {
     const hidden = await browser.tabs.query({ windowId, hidden: true }).catch(() => []);
-    if (hidden.length) return;
-    if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); await reloadPlaceholders(essentials); }
+    if (hidden.length) { noteSidebarWait({ ms: Date.now() - t0, probes, sign: true }); return; }
+    if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); probes++; await reloadPlaceholders(essentials); }
     await sleep(100);
   }
+  noteSidebarWait({ ms: Date.now() - t0, probes, sign: false });
 }
+
+// The last few waits, for the smoke test's timing report.
+const sidebarWaits = [];
+const noteSidebarWait = w => { sidebarWaits.push(w); if (sidebarWaits.length > 20) sidebarWaits.shift(); };
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== "sidebarWaits" || sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(""))) return;
+  return Promise.resolve(sidebarWaits);
+});
 
 // Make sure every synced tab has exactly one live tab and every window exactly
 // one representation of it, then fill in what is missing. Safe to run repeatedly.
