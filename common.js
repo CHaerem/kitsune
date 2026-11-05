@@ -45,6 +45,76 @@ async function forgetClosedNow() {
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
 
+// Sidebery's tree, and how to change tab order without breaking it.
+//
+// Sidebery rebuilds its whole tree after every single tab move it did not make
+// itself. A tab whose parent is further up, with other tabs in between, takes
+// all those tabs into the parent (Sidebery's updateTabsTree, 5.6). So a folder
+// that is apart from its tabs for even one move swallows every tab between
+// them, also tabs from other spaces; and a tab moved above its parent loses
+// it. Tabs are therefore only ever put in an order where each tab comes right
+// after its parent or the tab before it in the same folder (treeOrder), and
+// moved one at a time, never a tab that has tabs in it (placeInOrder).
+
+const NO_CONTAINER = "firefox-default";
+
+// The order of `items` ({ id, parent, space, folder }, given in their current
+// order) that Sidebery can show as it is: each space one run, the spaces in
+// the order they mostly have now, folders first in each space (as in Zen and
+// Arc), and every tab right after its parent, its folder's tabs in their
+// current order. A tab without a container belongs to the space it sits in.
+function treeOrder(items) {
+  const byId = new Map(items.map(x => [x.id, x]));
+  const kids = new Map(), roots = [];
+  for (const x of items) {
+    const p = byId.get(x.parent);
+    if (p && p !== x) (kids.get(p.id) ?? kids.set(p.id, []).get(p.id)).push(x);
+    else roots.push(x);
+  }
+  const run = new Map();
+  let last = null;
+  for (const r of roots) { if (r.space !== NO_CONTAINER) last = r.space; run.set(r, r.space !== NO_CONTAINER ? r.space : last); }
+  let next = null;
+  for (const r of [...roots].reverse()) { if (run.get(r) !== null) next = run.get(r); else run.set(r, next); }
+  const where = new Map();
+  roots.forEach((r, i) => (where.get(run.get(r)) ?? where.set(run.get(r), []).get(run.get(r))).push(i));
+  const median = list => list[list.length >> 1];
+  const spaces = [...where.keys()].sort((a, b) => median(where.get(a)) - median(where.get(b)));
+  const out = [], seen = new Set();
+  const visit = x => {
+    if (seen.has(x.id)) return;
+    seen.add(x.id);
+    out.push(x.id);
+    for (const c of kids.get(x.id) || []) visit(c);
+  };
+  for (const s of spaces) {
+    const here = roots.filter(r => run.get(r) === s);
+    for (const r of [...here.filter(r => r.folder), ...here.filter(r => !r.folder)]) visit(r);
+  }
+  for (const x of items) visit(x); // left over: tabs whose parents point at each other
+  return out;
+}
+
+// Move a window's tabs towards `ids` order (tab IDs), one tab at a time, each
+// right after the tab that should come before it. A tab with tabs in it is
+// left where it is; its tabs then follow it there. `mark(id)` is called before
+// each move, so listeners can ignore our own moves.
+async function placeInOrder(windowId, ids, mark) {
+  let tabs = await browser.tabs.query({ windowId });
+  const firstUnpinned = tabs.filter(t => t.pinned).length;
+  ids = ids.filter(id => tabs.some(t => t.id === id && !t.pinned));
+  for (let i = 0; i < ids.length; i++) {
+    const byId = new Map(tabs.map(t => [t.id, t]));
+    const tab = byId.get(ids[i]), prev = i ? byId.get(ids[i - 1]) : null;
+    if (!tab || tabs.some(t => treeParent(t, byId) === tab)) continue;
+    const index = !prev ? firstUnpinned : tab.index < prev.index ? prev.index : prev.index + 1;
+    if (tab.index === index) continue;
+    mark(tab.id);
+    await browser.tabs.move(tab.id, { windowId, index }).catch(() => {});
+    tabs = await browser.tabs.query({ windowId });
+  }
+}
+
 async function normalWindows() {
   return (await browser.windows.getAll({ windowTypes: ["normal"] })).filter(w => !w.incognito);
 }
@@ -52,9 +122,9 @@ async function normalWindows() {
 // Timing for filling a new window, measured with Sidebery 5.6 on Firefox 159:
 // - the window is filled shortly after it opens (tabs appear within ~0.7 s);
 // - tabs can be created back to back;
-// - Sidebery needs ~1.5 s to finish placing them before the window is given
-//   the reference window's tab order (see sortLikeReference). Sorting sooner
-//   puts tabs in the wrong panel.
+// - Sidebery needs ~1.5 s to finish placing them before any tab it put
+//   elsewhere is moved into place (see sortWindow). Sorting sooner puts tabs
+//   in the wrong panel.
 // - Essentials added to an existing window are created unpinned and pinned
 //   PIN_SETTLE_MS later (see createEssentials): Sidebery puts a new tab in its
 //   container's panel, and a pinned tab keeps its panel; pinned too soon,

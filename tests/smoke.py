@@ -4,6 +4,12 @@
     tests/smoke.py              # this folder, as a temporary add-on
     tests/smoke.py --installed  # the signed version installed in your Firefox
     tests/smoke.py --xpi FILE   # a given signed .xpi
+    tests/smoke.py --only trees,folders  # only these groups (the def names below)
+    tests/smoke.py --serial     # all groups in one test Firefox (as on GitHub)
+
+By default the groups run in three test Firefoxes at once (SHARDS). The
+logic that needs no Firefox has unit tests instead, in under a second:
+`node --test` (in this repo).
 
 It runs in an invisible test Firefox with a throwaway profile (see
 testfirefox.py), so it never touches your own Firefox: no restart, no window,
@@ -14,6 +20,8 @@ is reported as failed. It checks that:
   - a new window gets every essential and synced tab, unloaded, with the same
     essentials and folders per container, each container in one Sidebery space,
     also in three more new windows opened while another space is active;
+  - a new window gets every folder with its own tabs, also after a tab was
+    dragged into another space's folder in the window it is copied from;
   - every tab sits in its container's space in every window, also after an
     essential is closed (and brought back) or newly pinned, and after a tab is
     pulled in from another window;
@@ -56,12 +64,14 @@ is reported as failed. It checks that:
 import glob
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from testfirefox import EXT_DIR, EXT_ID, SIDEBERY_ID, TestFirefox  # noqa: E402
+from testfirefox import EXT_DIR, EXT_ID, PORT, SIDEBERY_ID, TestFirefox  # noqa: E402
 
 CMD, SHIFT, CTRL, ESC = "", "", "", ""
 
@@ -113,7 +123,15 @@ def as_version(v):
     return tuple(int(p) for p in v.split(".") if p.isdigit())
 
 
+setup_only = False  # True while a group runs only to set up others (see run_groups)
+
+
 def check(name, ok, detail="", sidebery_bug=None):
+    if setup_only:  # reported only when it fails, by the run that owns the group
+        if not ok:
+            results.append(False)
+            print(f"FAIL  {name}  (setup for the checks below{'; ' + detail if detail else ''})", flush=True)
+        return
     if not ok and sidebery_bug and sidebery_version:
         upto, link = KNOWN_SIDEBERY_BUGS[sidebery_bug]
         if as_version(sidebery_version) <= as_version(upto):
@@ -340,6 +358,45 @@ def folders(m):
           r and r["first"] == ["folder"] + ["in folder"] * r["children"] and r["children"] > 0 and r["treeKept"] and not r["misplaced"], str(r))
 
 
+def trees(m):
+    # A tab dragged into another space's folder (Sidebery then changes its
+    # space and folder) must not spread to a new window: there, tabs used to
+    # be moved into the dragged order one by one, and Sidebery put every tab
+    # between a folder and one of its tabs into that folder (all of them, in
+    # every space). The new window must get Kitsune's own record of the tree
+    # (each tab's folder), tab by tab, whatever the other windows look like.
+    r = m.js(H + """
+      const SB = "extension:%s:data", m0 = main();
+      const sbData = (w, t) => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, SB) || "{}"); } catch (e) { return {}; } };
+      const tree = w => {
+        const tabs = w.gBrowser.tabs.filter(t => !t.pinned && value(w, t, "syncKey")), byId = new Map(tabs.map(t => [sbData(w, t).id, t]));
+        return Object.fromEntries(tabs.map(t => { const p = byId.get(sbData(w, t).parentId); return [value(w, t, "syncKey"), p ? value(w, p, "syncKey") : null]; }));
+      };
+      const name = {}; for (const t of m0.gBrowser.tabs) name[value(m0, t, "syncKey")] = (url(t).match(/fixture-[a-z-]+[0-9-]+|#[^~]+/) || [t.label])[0];
+      const gB = m0.gBrowser, byUrl = s => gB.tabs.find(t => url(t).includes(s));
+      const dragged = byUrl("fixture-in-folder-1-1"), home = byUrl("fixture-in-folder-1-2");
+      gB.moveTabTo(dragged, {tabIndex: gB.tabs.indexOf(byUrl("fixture-in-folder-3-1")) + 1});
+      await wait(3000);
+      const synced = (await storage("%s", ["syncedTabs"])).syncedTabs || {};
+      const before = Object.fromEntries(Object.keys(tree(m0)).filter(k => synced[k]).map(k => [k, synced[k].parentKey || null]));
+      const w = m0.OpenBrowserWindow(); w.__extra = true;
+      let wrong;
+      try {
+        for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);
+        for (let i = 0; i < 100 && Object.keys(tree(w)).length < Object.keys(before).length; i++) await wait(100);
+        // Until the tree has stayed the same for 2 s (at most 12 s): Kitsune sorts 1.5 s after filling.
+        let now = tree(w), same = 0;
+        for (let i = 0; i < 24 && same < 4; i++) { await wait(500); const t = tree(w); same = JSON.stringify(t) === JSON.stringify(now) ? same + 1 : 0; now = t; }
+        const folder = k => name[k] || k || "no folder";
+        wrong = Object.keys(before).filter(k => now[k] !== before[k]).map(k => name[k] + " in " + folder(now[k]) + ", not " + folder(before[k]));
+      } finally { await close(w); }
+      gB.moveTabBefore(dragged, home);  // put it back for the checks after this one
+      await wait(4000);
+      return {tabs: Object.keys(before).length, wrong};""" % (SIDEBERY_ID, EXT_ID))
+    check("a tab dragged into another space's folder leaves new windows' folders alone",
+          r["tabs"] > 0 and not r["wrong"], f"{len(r['wrong'])} of {r['tabs']} tabs in the wrong folder: {r['wrong'][:6]}")
+
+
 def tab_sync(m):
     r = m.js(H + """
       const t = main().gBrowser.addTrustedTab("https://example.org/?smoke-sync", {userContextId: 3, inBackground: true});
@@ -411,8 +468,10 @@ def tab_moves(m):
       // and the synced tab right after it.
       const place = w => { const ts = [...w.gBrowser.tabs], x = ts.find(y => key(w, y) === k);
         if (!x) return null; const next = ts.slice(ts.indexOf(x) + 1).find(y => key(w, y));
-        const p = sbParent(w, x); return {inFolder: p === id(folderOf(w)), root: p === -1, next: next ? key(w, next) : null,
-          opener: x.openerTab ? ts.indexOf(x.openerTab) : null, at: ts.indexOf(x), folderAt: ts.indexOf(folderOf(w))}; };
+        const p = sbParent(w, x), name = y => y === x ? "*moved*" : (url(y).match(/fixture-[a-z-]+[0-9-]+|#Fixture[^~]+|smoke-[a-z-]+/) || [y.label.slice(0, 12)])[0];
+        return {inFolder: p === id(folderOf(w)), root: p === -1, next: next ? key(w, next) : null,
+          opener: x.openerTab ? ts.indexOf(x.openerTab) : null, at: ts.indexOf(x), folderAt: ts.indexOf(folderOf(w)),
+          space: ts.filter(y => !y.pinned && y.userContextId === 2).map(y => (sbParent(w, y) > 0 ? "  " : "") + name(y))}; };
       const stored = async () => (await storage("%s", ["syncedTabs"])).syncedTabs?.[JSON.parse(k)]?.parentKey ?? null;
       const folderKey = JSON.parse(key(a, folderOf(a)));
       const first = a.gBrowser.tabs[a.gBrowser.tabs.indexOf(folderOf(a)) + 1];
@@ -852,20 +911,34 @@ PINS_APART = """
 apart_after = []
 
 
-def main():
-    xpi = None
-    if "--xpi" in sys.argv:
-        xpi = sys.argv[sys.argv.index("--xpi") + 1]
-    elif "--installed" in sys.argv:
-        xpi = glob.glob(os.path.expanduser(f"~/Library/Application Support/Firefox/Profiles/*.default-release/extensions/{EXT_ID}.xpi"))[0]
-    print(f"Testing {xpi or EXT_DIR} in a test Firefox", flush=True)
-    t0 = time.time()
-    with TestFirefox(xpi=xpi) as m:
-        global sidebery_version
+GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, ghost_title, pinned_ghost,
+          orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, trees, handover, reopened_window, restart)
+# What a group needs run before it (as setup, reported only if it fails) when
+# it runs without it: the second window new_window opens, and the window
+# handover closes, which reopened_window reopens.
+NEEDS = {g: [new_window] for g in (essentials, folders, tab_sync, folder_pull, tab_moves, ghost_title, pinned_ghost,
+                                   archiving, live_folders, many_tabs, handover)}
+NEEDS[reopened_window] = [new_window, handover]
+# By default the groups run in these parallel runs, each in its own test
+# Firefox, about equally long (the whole test in about a third of the time).
+SHARDS = (  # measured: about 120, 145 and 140 s on a Mac
+    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title),
+    (essentials, folders, tab_sync, folder_pull, tab_moves, trees, pinned_ghost),
+    (archiving, live_folders, many_tabs, handover, reopened_window, restart),
+)
+
+def run_groups(groups, xpi, port):
+    """Run some groups in one test Firefox, in GROUPS order."""
+    global sidebery_version, setup_only
+    with TestFirefox(xpi=xpi, port=port) as m:
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
+        needed = {n for g in groups for n in NEEDS.get(g, [])} - set(groups)
+        setup = [g for g in GROUPS if g in needed]
+        for group in setup + [g for g in GROUPS if g in groups]:
+            setup_only = group in setup
+            t0 = time.time()
             try:
                 group(m)
             except Exception:
@@ -877,10 +950,60 @@ def main():
             if apart:
                 apart_after.append((group.__name__, apart))
                 print(f"INFO  essentials apart from their space after {group.__name__}: {apart}", flush=True)
+            if not setup_only:
+                print(f"TIME  {group.__name__} {round(time.time() - t0)} s", flush=True)
+        setup_only = False
     check("every window's essentials stay together by space", not apart_after, str(apart_after[:2]))
-    print(f"\n{sum(results)}/{len(results)} passed in {round(time.time() - t0)} s"
-          + (f" ({len(known)} known Sidebery bug)" if known else ""))
-    sys.exit(0 if all(results) else 1)
+
+
+def run_parallel(argv):
+    """Run SHARDS at the same time, each as `smoke.py --only ... --port ...`, and add up."""
+    procs = [subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "--only", ",".join(g.__name__ for g in shard),
+                               "--port", str(PORT + 1 + i), *argv], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for i, shard in enumerate(SHARDS)]
+    passed = total = known_bugs = 0
+    for p in procs:
+        out = p.communicate()[0]
+        for line in out.splitlines():
+            if line.startswith(("PASS", "FAIL", "KNOWN", "SKIP", "INFO", "TIME")):
+                print(line, flush=True)
+            elif m := re.match(r"(\d+)/(\d+) passed.*?(?:\((\d+) known)?", line):
+                passed, total, known_bugs = passed + int(m[1]), total + int(m[2]), known_bugs + int(m[3] or 0)
+        if p.returncode and not re.search(r"^\d+/\d+ passed", out, re.M):
+            print(f"FAIL  a parallel run crashed:\n{out[-1500:]}", flush=True)
+            total += 1
+    return passed, total, known_bugs
+
+
+def main():
+    args = sys.argv[1:]
+    xpi, passthrough = None, []
+    if "--xpi" in args:
+        xpi = args[args.index("--xpi") + 1]
+        passthrough = ["--xpi", xpi]
+    elif "--installed" in args:
+        xpi = glob.glob(os.path.expanduser(f"~/Library/Application Support/Firefox/Profiles/*.default-release/extensions/{EXT_ID}.xpi"))[0]
+        passthrough = ["--installed"]
+    port = int(args[args.index("--port") + 1]) if "--port" in args else PORT
+    t0 = time.time()
+    if "--only" in args:
+        names = args[args.index("--only") + 1].split(",")
+        unknown = [n for n in names if n not in {g.__name__ for g in GROUPS}]
+        if unknown:
+            raise SystemExit(f"Unknown group(s) {unknown}; groups: {', '.join(g.__name__ for g in GROUPS)}")
+        print(f"Testing {xpi or EXT_DIR} in a test Firefox: {', '.join(names)}", flush=True)
+        run_groups({g for g in GROUPS if g.__name__ in names}, xpi, port)
+        passed, total, known_bugs = sum(results), len(results), len(known)
+    elif "--serial" in args:
+        print(f"Testing {xpi or EXT_DIR} in a test Firefox", flush=True)
+        run_groups(set(GROUPS), xpi, port)
+        passed, total, known_bugs = sum(results), len(results), len(known)
+    else:
+        print(f"Testing {xpi or EXT_DIR} in {len(SHARDS)} test Firefoxes at once", flush=True)
+        passed, total, known_bugs = run_parallel(passthrough)
+    print(f"\n{passed}/{total} passed in {round(time.time() - t0)} s"
+          + (f" ({known_bugs} known Sidebery bug)" if known_bugs else ""))
+    sys.exit(0 if passed == total else 1)
 
 
 main()

@@ -281,17 +281,31 @@ Set up once:
 
 ## Testing
 
+From fastest to most complete:
+
 ```bash
-tests/smoke.py              # this folder, as a temporary add-on
-tests/smoke.py --installed  # the signed version installed in your Firefox
-tests/smoke.py --xpi FILE   # a given signed .xpi
+node --test                          # unit tests, under a second
+tests/smoke.py --only trees,folders  # some smoke test groups, about a minute
+tests/smoke.py                       # the whole smoke test, about three minutes
+tests/smoke.py --installed           # the signed version installed in your Firefox
+tests/smoke.py --xpi FILE            # a given signed .xpi
+tests/smoke.py --serial              # in one test Firefox, as on GitHub (about nine minutes)
 ```
+
+The unit tests (`tests/unit.test.mjs`) cover the logic that needs no Firefox:
+the order a window's tabs are put in, and moving tabs without breaking
+Sidebery's tree, against a small model of how Sidebery rebuilds its tree after
+a move. Change that logic test-first there.
+
+The group names for `--only` are the check functions in `tests/smoke.py`
+(`new_window`, `essentials`, `folders`, `trees`, …); a group that needs the
+second window gets it first. Without `--only`, the groups run in three test
+Firefoxes at once (`SHARDS`).
 
 The smoke test runs in an invisible test Firefox with a throwaway profile
 (`tests/testfirefox.py`), so it never touches your own Firefox: no restart, no
-window, no clipboard, its own Marionette port. It takes about three minutes,
-and the profile is deleted afterwards. The profile is built the same way every
-time, from:
+window, no clipboard, its own Marionette port (one per test Firefox). The
+profile is deleted afterwards. It is built the same way every time, from:
 
 - dotfiles (`~/src/private/dotfiles/home/firefox`, or `KITSUNE_DOTFILES`):
   `user.js`, `userChrome.css`, `customKeys.json` and Sidebery's CSS, so it

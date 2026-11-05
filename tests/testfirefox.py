@@ -100,8 +100,9 @@ def downloaded_sidebery():
 
 
 class TestFirefox:
-    def __init__(self, xpi=None):
+    def __init__(self, xpi=None, port=PORT):
         self.xpi = xpi  # a signed Kitsune .xpi; default: this folder (installed for real where Firefox allows it)
+        self.port = port  # each test Firefox running at the same time needs its own
         self.dir = self.proc = self.m = None
 
     def restart(self):
@@ -146,7 +147,7 @@ class TestFirefox:
         self.dir = tempfile.mkdtemp(prefix="kitsune-test-")
         os.makedirs(f"{self.dir}/chrome")
         prefs = open(f"{DOTFILES}/user.js").read() + "\n// Test profile\n"
-        prefs += "".join(f"user_pref({json.dumps(k)}, {json.dumps(v)});\n" for k, v in TEST_PREFS.items())
+        prefs += "".join(f"user_pref({json.dumps(k)}, {json.dumps(v)});\n" for k, v in {**TEST_PREFS, "marionette.port": self.port}.items())
         open(f"{self.dir}/user.js", "w").write(prefs)
         shutil.copy(f"{DOTFILES}/userChrome.css", f"{self.dir}/chrome/userChrome.css")
         shutil.copy(f"{DOTFILES}/customKeys.json", f"{self.dir}/customKeys.json")
@@ -170,7 +171,7 @@ class TestFirefox:
         env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "KITSUNE_FAKE_PRS": self.fake_prs}
         self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        self.m = Marionette(port=PORT, wait=60)
+        self.m = Marionette(port=self.port, wait=60)
         self.m.fake_prs = self.fake_prs
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 

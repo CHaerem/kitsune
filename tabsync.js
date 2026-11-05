@@ -149,26 +149,29 @@ function bySpace(items, spaceOf) {
   return [...groups.values()].flat();
 }
 
+// The order a window is filled in: the reference window's order, put in tree
+// order (see treeOrder in common.js) from Kitsune's own record of each tab's
+// folder. The reference window's own tree is not trusted: one tab dragged
+// into another space's folder there would otherwise be copied into every new
+// window, and with it a folder taking in every tab after it.
+function fillOrder(all, tabs, windowId) {
+  return treeOrder(keysInReferenceOrder(all, tabs, windowId).map(k => ({
+    id: k, parent: all[k].parentKey, space: all[k].cookieStoreId, folder: all[k].group,
+  })));
+}
+
 // Sidebery assigns tabs to panels by walking the window's tab strip in panel
-// order, so each panel's tabs must be one contiguous run, in the same panel
-// order in every window. Tabs added to a fresh window can end up out of
-// order, so after filling a window we give it the reference window's order.
-async function sortLikeReference(windowId) {
+// order, so each panel's tabs must be one contiguous run. After filling a
+// window, a tab Sidebery put somewhere else (in the active space, say) is
+// moved into place, without moving any tab that has tabs in it.
+async function sortWindow(windowId) {
+  const all = await getSynced();
   const tabs = await browser.tabs.query({});
-  const ref = referenceWindow(tabs, windowId);
-  if (ref === undefined) return;
-  const refTabs = bySpace(tabs.filter(t => t.windowId === ref && !t.pinned && syncKeyByTab.has(t.id))
-    .sort((a, b) => a.index - b.index), t => t.cookieStoreId);
-  const refOrder = refTabs.map(t => syncKeyByTab.get(t.id));
-  const here = tabs.filter(t => t.windowId === windowId && !t.pinned && syncKeyByTab.has(t.id));
-  const byKey = new Map(here.map(t => [syncKeyByTab.get(t.id), t]));
-  const ordered = refOrder.map(k => byKey.get(k)).filter(Boolean);
-  const current = [...here].sort((a, b) => a.index - b.index);
-  if (current.map(t => t.id).join() === ordered.map(t => t.id).join()) return;
-  const firstUnpinned = tabs.filter(t => t.windowId === windowId && t.pinned).length;
-  ordered.forEach(t => syncBusy.add(t.id));
-  await browser.tabs.move(ordered.map(t => t.id), { windowId, index: firstUnpinned });
-  setTimeout(() => ordered.forEach(t => syncBusy.delete(t.id)), SETTLE_MS);
+  const reps = repMap(tabs.filter(t => t.windowId === windowId && !t.pinned));
+  const ids = fillOrder(all, tabs, windowId).map(k => reps.get(k)).filter(id => id !== undefined);
+  const moved = [];
+  await placeInOrder(windowId, ids, id => { syncBusy.add(id); moved.push(id); });
+  setTimeout(() => moved.forEach(id => syncBusy.delete(id)), SETTLE_MS);
 }
 
 // Sidebery puts the first pinned tab of a new window in the active panel,
@@ -181,7 +184,9 @@ async function withPinnedPlaceholder(windowId, fn) {
 }
 
 // Give a window everything it is missing: essentials first, then a ghost or
-// copy of every synced tab, in the reference window's order.
+// copy of every synced tab, in tree order (see fillOrder). Each is created at
+// the end, after its folder or the tab before it, which is where Sidebery puts
+// it anyway, so Sidebery moves nothing.
 //
 // In a new window the essentials wait to be pinned until Sidebery's sidebar
 // there has started (see pinEssentialCopies); the ghosts are created
@@ -192,7 +197,7 @@ async function fillWindow(windowId, { fresh = false } = {}) {
     const all = await getSynced();
     const tabs = await browser.tabs.query({});
     const reps = repMap(tabs.filter(t => t.windowId === windowId));
-    for (const key of keysInReferenceOrder(all, tabs, windowId)) {
+    for (const key of fillOrder(all, tabs, windowId)) {
       if (reps.has(key)) continue;
       const entry = all[key];
       const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined);
@@ -212,7 +217,7 @@ async function fillWindow(windowId, { fresh = false } = {}) {
   await addReps(); // everything, if no essentials were missing; else whatever came meanwhile
   if (created > 1) {
     await sleep(SORT_SETTLE_MS); // let Sidebery finish placing the new tabs first
-    await sortLikeReference(windowId);
+    await sortWindow(windowId);
   }
 }
 
@@ -453,6 +458,9 @@ async function applyMoves(windowId, ids) {
 // Move a tab after the nearest of `before` (keys) its window has, else before
 // the nearest of `after`, but only where Sidebery keeps it in its space: it
 // gives a tab another extension moves the space of the tab at the new index.
+// A tab without a container there is in the space it sits in (folders first
+// puts the window's own "New Tab" among a space's tabs), so the first tab
+// with a container from there on decides.
 async function placeNextTo(windowId, tabId, before, after) {
   const tabs = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
   const tab = tabs.find(x => x.id === tabId);
@@ -462,7 +470,8 @@ async function placeNextTo(windowId, tabId, before, after) {
   let index = prev ? prev.index + 1 : next?.index;
   if (index === undefined) return;
   if (tab.index < index) index--;
-  if (index === tab.index || tabs[index]?.cookieStoreId !== tab.cookieStoreId) return;
+  const spaceFrom = i => tabs.slice(i).find(x => x.id !== tabId && (x.cookieStoreId !== NO_CONTAINER || tab.cookieStoreId === NO_CONTAINER))?.cookieStoreId;
+  if (index === tab.index || spaceFrom(index) !== tab.cookieStoreId) return;
   await browser.tabs.move(tabId, { windowId, index }).catch(() => {});
 }
 

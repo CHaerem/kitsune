@@ -60,6 +60,11 @@ jobs:
           firefox-version: ${{ matrix.firefox }}
       - name: Download Sidebery
         run: curl -fsSL -o "$RUNNER_TEMP/sidebery.xpi" https://addons.mozilla.org/firefox/downloads/latest/sidebery/latest.xpi
+      - name: Unit tests
+        working-directory: kitsune
+        run: node --test
+      # One test Firefox at a time (--serial): GitHub's runner is slower than
+      # a Mac, and three at once there would test the runner, not Kitsune.
       - name: Smoke test
         env:
           KITSUNE_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
@@ -67,4 +72,4 @@ jobs:
           KITSUNE_DOTFILES: ${{ github.workspace }}/dotfiles/home/firefox
         run: |
           echo "Firefox ${{ steps.firefox.outputs.firefox-version }} at $KITSUNE_FIREFOX"
-          python3 -I kitsune/tests/smoke.py
+          python3 -I kitsune/tests/smoke.py --serial
