@@ -196,22 +196,41 @@ async function fillWindow(windowId, { fresh = false } = {}) {
   }
 }
 
-// Sidebery's sidebar has no signal other extensions can see, so the
-// essentials' placeholders are loaded again every PROBE_MS: once the sidebar
-// runs, it moves each to its container's space, and hides those of the spaces
-// you are not in (its setting "hide tabs of inactive panels"). A hidden tab in
-// the window is the sign. Without one (all essentials in the space you are
-// in, or that setting off) it gives up after SIDEBAR_WAIT_MS.
+// Sidebery's sidebar has no signal meant for other extensions, but two of
+// the things it does when it starts in a window can be seen: it hides the tabs
+// of the spaces you are not in (its setting "hide tabs of inactive panels"),
+// and it tells Firefox which tab to select when you close the current one
+// (successorTabId, unless "after closing the active tab" is set to nothing).
+// Meanwhile the essentials' placeholders are loaded again every PROBE_MS, so
+// once the sidebar runs it moves each to its container's space. Without either
+// sign it gives up after SIDEBAR_WAIT_MS.
 async function sidebarStarted(windowId, essentials) {
   const t0 = Date.now();
-  let probed = t0;
+  let probed = t0, probes = 0;
   while (Date.now() - t0 < SIDEBAR_WAIT_MS) {
-    const hidden = await browser.tabs.query({ windowId, hidden: true }).catch(() => []);
-    if (hidden.length) return;
-    if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); await reloadPlaceholders(essentials); }
+    const sign = await sidebarSign(windowId);
+    if (sign) { noteSidebarWait({ ms: Date.now() - t0, probes, sign }); return; }
+    if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); probes++; await reloadPlaceholders(essentials); }
     await sleep(100);
   }
+  noteSidebarWait({ ms: Date.now() - t0, probes, sign: null });
 }
+
+async function sidebarSign(windowId) {
+  const tabs = await browser.tabs.query({ windowId }).catch(() => []);
+  if (tabs.some(t => t.hidden)) return "hidden";
+  const active = tabs.find(t => t.active);
+  if (active && active.successorTabId !== undefined && active.successorTabId !== browser.tabs.TAB_ID_NONE) return "successor";
+  return null;
+}
+
+// The last few waits, for the smoke test's timing report.
+const sidebarWaits = [];
+const noteSidebarWait = w => { sidebarWaits.push(w); if (sidebarWaits.length > 20) sidebarWaits.shift(); };
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== "sidebarWaits" || sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(""))) return;
+  return Promise.resolve(sidebarWaits);
+});
 
 // Make sure every synced tab has exactly one live tab and every window exactly
 // one representation of it, then fill in what is missing. Safe to run repeatedly.
