@@ -274,7 +274,9 @@ time, from:
 - `tests/fixtures`: Sidebery's spaces and settings, and the containers, made
   from your own setup without any addresses by `tests/fixtures/from_backup.py`
   (run it again when you change spaces or containers);
-- Sidebery as you have it installed, with its permissions and ⌃1/⌃2/⌃3;
+- Sidebery as you have it installed (or, if your Firefox has none, the newest
+  from addons.mozilla.org, kept for a day in `~/Library/Caches/kitsune`),
+  with its permissions and ⌃1/⌃2/⌃3;
 - Kitsune (this folder, or a signed `.xpi`);
 - test tabs in each space: essentials, a folder with tabs, ordinary tabs.
 

@@ -60,13 +60,38 @@ TEST_PREFS = {
 
 
 def sidebery_xpi():
-    """Sidebery: KITSUNE_SIDEBERY_XPI (an .xpi, or a folder for a temporary add-on), or as you have it installed."""
+    """Sidebery: KITSUNE_SIDEBERY_XPI (an .xpi, or a folder for a temporary add-on), as you have it installed, or downloaded."""
     if os.environ.get("KITSUNE_SIDEBERY_XPI"):
         return os.environ["KITSUNE_SIDEBERY_XPI"]
     found = glob.glob(os.path.expanduser(f"~/Library/Application Support/Firefox/Profiles/*.default-release/extensions/{SIDEBERY_ID}.xpi"))
-    if not found:
-        raise SystemExit("Sidebery not found in your Firefox profile")
-    return found[0]
+    if found:
+        return found[0]
+    return downloaded_sidebery()
+
+
+SIDEBERY_URL = "https://addons.mozilla.org/firefox/downloads/latest/sidebery/latest.xpi"
+SIDEBERY_CACHE = os.path.expanduser("~/Library/Caches/kitsune/sidebery.xpi")
+
+
+def downloaded_sidebery():
+    """The newest Sidebery from addons.mozilla.org, as the CI workflow gets it.
+
+    For a Mac where Firefox has no Sidebery of its own (a machine used only to
+    work on Kitsune). Kept for a day, so a run of tests downloads it once.
+    """
+    fresh = os.path.exists(SIDEBERY_CACHE) and time.time() - os.path.getmtime(SIDEBERY_CACHE) < 86400
+    if not fresh:
+        import urllib.request
+        os.makedirs(os.path.dirname(SIDEBERY_CACHE), exist_ok=True)
+        tmp = SIDEBERY_CACHE + ".part"
+        try:
+            urllib.request.urlretrieve(SIDEBERY_URL, tmp)
+        except OSError as e:
+            if not os.path.exists(SIDEBERY_CACHE):
+                raise SystemExit(f"Sidebery not found in your Firefox profile, and the download failed: {e}")
+        else:
+            os.replace(tmp, SIDEBERY_CACHE)
+    return SIDEBERY_CACHE
 
 
 class TestFirefox:
