@@ -24,6 +24,8 @@ is reported as failed. It checks that:
   - pinning a tab makes it an essential everywhere, also when the tab is a
     ghost; unpinning a copy removes it everywhere, and the copy you unpinned
     opens its page; an essential copy opens the real page in its container;
+    an essential dragged to another window is there once, and comes back in
+    the window it left;
   - a placeholder of a tab that no longer exists closes itself;
   - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
@@ -250,6 +252,16 @@ def essentials(m):
               saved: JSON.stringify(saved) === JSON.stringify(both), misplaced: [...await misplaced(w), ...await misplaced(other())]};""" % EXT_ID)
     check("a moved essential keeps its place, in the list and in the other window", r and r["moved"] and r["otherFollows"] and r["saved"]
           and not r["misplaced"], str(r))
+    # Dragging an essential to the other window, which has its own copy of it.
+    r = m.js(H + """
+      const count = () => wins().map(w => { const by = {}; for (const t of w.gBrowser.tabs) if (t.pinned && ek(w, t)) by[ek(w, t)] = (by[ek(w, t)] || 0) + 1; return by; });
+      const before = count(), w = main(), t = w.gBrowser.tabs.find(x => x.pinned && ek(w, x) && x.userContextId === 2), k = ek(w, t);
+      other().gBrowser.adoptTab(t, {tabIndex: 0}); await wait(5000);
+      const after = count();
+      return {k, before: before.map(b => b[k]), after: after.map(a => a[k]), same: JSON.stringify(before.map(b => Object.keys(b).sort())) === JSON.stringify(after.map(a => Object.keys(a).sort())),
+              doubled: after.flatMap(a => Object.entries(a).filter(([, n]) => n > 1)), misplaced: [...await misplaced(w), ...await misplaced(other())]};""")
+    check("an essential dragged to the other window is there once, and comes back in the window it left",
+          r["after"] == [1, 1] and r["same"] and not r["doubled"] and not r["misplaced"], str(r))
     r = m.js(H + """
       const byKey = Object.fromEntries((await storage("%s", ["essentials"])).essentials.map(e => [e.key, e.name || e.title]));
       const w = other(), copies = w.gBrowser.tabs.filter(t => t.pinned && !t.linkedPanel && ek(w, t));

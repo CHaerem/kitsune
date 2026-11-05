@@ -14,7 +14,8 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    in every window, in the same container (and therefore the same Sidebery
    space). Pinning or unpinning in one window does the same in the others.
    Closing an essential brings it back unloaded, like Zen. Moving one keeps
-   the new order, in every window and in new windows. An essential's
+   the new order, in every window and in new windows. Dragging one to another
+   window takes it there (in its place, not twice) and leaves a copy behind. An essential's
    title and icon follow its page, but only from the essential's own site,
    so a redirect to a sign-in page does not rename it.
 2. **Tabs in every window.** Every other tab is *live* in one window and an
