@@ -44,6 +44,8 @@ is reported as failed. It checks that:
     first in its space, with its pull requests unloaded; a closed pull request
     stays closed, one that leaves the search is removed everywhere, and a
     renamed one takes its new title;
+  - with ten more essentials and thirty more tabs, a new window still gets
+    them all, in their spaces, and they all go when closed;
   - after Firefox is quit and started again, both windows come back with the
     same essentials and tabs, one live tab each, folders with their tabs and
     every tab in its space, and tab sync and new windows still work (only
@@ -564,6 +566,47 @@ def live_folders(m):
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
 
+def many_tabs(m):
+    # Closer to a real setup (yours has about 30 essentials and 50 tabs): ten
+    # more essentials and thirty more tabs over the three spaces, then a new
+    # window, which must get them all, in their spaces, unloaded.
+    r = m.js(H + """
+      const w = main();
+      for (let i = 0; i < 30; i++) { w.gBrowser.addTrustedTab("https://example.org/?smoke-many-" + i, {userContextId: 1 + i % 3, inBackground: true}); await wait(150); }
+      await wait(4000);
+      for (let i = 0; i < 10; i++) {
+        const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-many-e" + i, {userContextId: 1 + i % 3, inBackground: true});
+        await wait(1500); w.gBrowser.pinTab(t); await wait(500);
+      }
+      await wait(6000);
+      const pinned0 = w.gBrowser.tabs.filter(t => t.pinned).length, want = w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length;
+      const t0 = Date.now(), n = w.OpenBrowserWindow(); n.__extra = true;
+      let ms = null;
+      try {
+        for (let i = 0; i < 100 && !n.gBrowser; i++) await wait(100);
+        for (let i = 0; i < 300 && ms === null; i++) {
+          await wait(100);
+          if (n.gBrowser.tabs.filter(t => t.pinned).length >= pinned0 && n.gBrowser.tabs.filter(t => !t.pinned && role(n, t)).length >= want) ms = Date.now() - t0;
+        }
+        const loaded = () => n.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html"));
+        for (let i = 0; i < 60 && (i < 16 || loaded().length); i++) await wait(250);
+        return {ms, essentials: [pinned0, n.gBrowser.tabs.filter(t => t.pinned).length], tabs: [want, n.gBrowser.tabs.filter(t => !t.pinned && role(n, t)).length],
+                stillLoaded: loaded().length, misplaced: [...await misplaced(w), ...await misplaced(other()), ...await misplaced(n)]};
+      } finally {
+        await close(n);
+        // Unpinning one copy removes an essential everywhere; then the tabs go.
+        for (const t of w.gBrowser.tabs.filter(t => t.pinned && url(t).includes("smoke-many"))) w.gBrowser.unpinTab(t);
+        await wait(4000);
+        await removeWhere((x, t) => !t.pinned && url(t).includes("smoke-many"));
+      }""")
+    check(f"with {r['essentials'][0]} essentials and {r['tabs'][0]} tabs, a new window gets them all ({r['ms']} ms)",
+          r["ms"] is not None and r["essentials"][0] == r["essentials"][1] and r["tabs"][0] == r["tabs"][1], str(r))
+    check("with that many, every tab is in its container's space in every window, and the placeholders unload",
+          not r["misplaced"] and not r["stillLoaded"], str(r), sidebery_bug="pin race")
+    left = m.js(H + """await wait(2000); return wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("smoke-many") || (t.pinned && !ek(w, t))).map(t => t.label));""")
+    check("and they are all gone again once closed", all(not x for x in left), str(left))
+
+
 def handover(m):
     r = m.js(H + """
       const t = other().gBrowser.addTrustedTab("https://example.org/?smoke-handover", {userContextId: 1, inBackground: true});
@@ -673,7 +716,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, handover, reopened_window, restart):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
             try:
                 group(m)
             except Exception:
