@@ -17,7 +17,8 @@ is reported as failed. It checks that:
   - every tab sits in its container's space in every window, also after an
     essential is closed (and brought back) or newly pinned, and after a tab is
     pulled in from another window;
-  - selecting a ghost pulls the live tab in; closing a tab closes it
+  - selecting a ghost pulls the live tab in, and leaves no placeholder in
+    Recently Closed; closing a tab closes it
     everywhere; closing a window hands its tabs over, and reopening it doubles
     nothing;
   - pinning a tab makes it an essential everywhere, also when the tab is a
@@ -275,13 +276,16 @@ def tab_sync(m):
       const t0 = Date.now(), ghost = w.gBrowser.tabs.find(x => key(w, x) === k); w.gBrowser.selectedTab = ghost;
       let ms = null; for (let i = 0; i < 100 && ms === null; i++) { await wait(15); if (w.gBrowser.selectedTab !== ghost && key(w, w.gBrowser.selectedTab) === k) ms = Date.now() - t0; }
       await wait(2500); const pulled = find(k);
+      const closedUrls = wins().flatMap(x => x.SessionStore.getClosedTabDataForWindow(x)).map(c => c.state.entries?.[c.state.index - 1]?.url || "");
+      const closedGhosts = closedUrls.filter(u => u.includes("ghost.html") && u.includes(encodeURIComponent(JSON.parse(k)))).length;
       const pf = await panelFor(), moved = w.gBrowser.tabs.find(x => key(w, x) === k), left = main().gBrowser.tabs.find(x => key(main(), x) === k);
       const spaces = [sbPanel(w, moved) === pf[ctxOf(moved)], left && sbPanel(main(), left) === pf[ctxOf(left)]];
       w.gBrowser.removeTab(moved); await wait(3000);
-      return {created, ms, pulled, spaces, closed: find(k)};""")
+      return {created, ms, pulled, spaces, closedGhosts, closed: find(k)};""")
     check("a new tab gets a ghost in the other window", r["created"] == [["live/loaded"], ["ghost/unloaded"]], str(r["created"]))
     check(f"selecting a ghost pulls the live tab in ({r['ms']} ms)", r["pulled"] == [["ghost/unloaded"], ["live/loaded"]], str(r["pulled"]))
     check("a pulled tab and the ghost left behind stay in their space", r["spaces"] == [True, True], str(r["spaces"]))
+    check("pulling a tab in leaves no placeholder in Recently Closed (⌘⇧T reopens what you closed)", r["closedGhosts"] == 0, str(r["closedGhosts"]))
     check("closing a tab closes it everywhere", r["closed"] == [[], []], str(r["closed"]))
     r = m.js(H + """
       const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");

@@ -247,6 +247,7 @@ async function reconcileAll() {
       const ghosts = here.filter(t => syncRoleByTab.get(t.id) === "ghost");
       const extra = here.length > ghosts.length ? ghosts : ghosts.slice(1);
       for (const t of extra) { syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id); }
+      if (extra.length) await forgetClosedPlaceholders("ghost", [key]);
     }
   }
   saveSynced(all);
@@ -286,17 +287,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   const reps = repsOf(key, await browser.tabs.query({}));
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   if (reps.length) await browser.tabs.remove(reps.map(t => t.id));
-  await forgetClosedGhosts(key);
-}
-
-// Closed ghosts would show up in Recently Closed Tabs, and reopen as an
-// empty placeholder. Only the real tab should be there.
-async function forgetClosedGhosts(key) {
-  const ghost = ghostUrl("ghost", key);
-  for (const item of await browser.sessions.getRecentlyClosed()) {
-    const t = item.tab;
-    if (t?.url === ghost) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
-  }
+  await forgetClosedPlaceholders("ghost", [key]);
 }
 
 // Forget a synced entry once no window has a tab for it any more.
@@ -354,6 +345,7 @@ async function pull(ghostId) {
       browser.tabs.remove(ghostId),
       parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
     ]);
+    await forgetClosedPlaceholders("ghost", [key]);
     if (entry) {
       // A never-loaded live tab is still a placeholder page; keep the real URL then.
       if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: live.favIconUrl || entry.icon });
@@ -396,6 +388,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
       if (others.length) await browser.tabs.remove(others.map(t => t.id));
+      await forgetClosedPlaceholders("ghost", [key]);
     });
     return;
   }
@@ -525,6 +518,7 @@ browser.windows.onCreated.addListener(win => {
 async function adoptRestored(windowId) {
   const all = await getSynced();
   let found = false;
+  const removed = [];
   for (const t of await browser.tabs.query({ windowId })) {
     if (syncKeyByTab.has(t.id)) continue;
     const [key, role] = await Promise.all([
@@ -534,9 +528,10 @@ async function adoptRestored(windowId) {
     if (!key || !role) continue;
     found = true;
     if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
-    if (isGhostUrl(t.url)) { syncBusy.add(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
+    if (isGhostUrl(t.url)) { syncBusy.add(t.id); removed.push(key); await browser.tabs.remove(t.id).catch(() => {}); }
     else await clearRole(t.id);
   }
+  if (removed.length) await forgetClosedPlaceholders("ghost", removed);
   return found;
 }
 

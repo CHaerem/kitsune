@@ -22,6 +22,19 @@ const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/
 const ghostUrl = (kind, key) => browser.runtime.getURL(`ghost.html?kind=${kind}&key=${encodeURIComponent(key)}`);
 const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.html"));
 
+// Placeholders we close ourselves would show up in Recently Closed Tabs, and
+// ⌘⇧T would bring one back instead of the tab you closed. Only real pages
+// should be there, so they are forgotten. (An essential copy's address may end
+// in "&placed=N", see essentials.js.)
+async function forgetClosedPlaceholders(kind, keys) {
+  const prefixes = [...keys].map(k => ghostUrl(kind, k));
+  const ours = url => prefixes.some(p => url === p || url?.startsWith(p + "&"));
+  const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
+  for (const t of closed.map(item => item.tab).filter(Boolean)) {
+    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+  }
+}
+
 async function normalWindows() {
   return (await browser.windows.getAll({ windowTypes: ["normal"] })).filter(w => !w.incognito);
 }

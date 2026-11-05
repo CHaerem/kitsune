@@ -178,6 +178,7 @@ async function onUnpinned(tab) {
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
   copies.forEach(id => busy.add(id));
   await browser.tabs.remove(copies);
+  await forgetClosedPlaceholders("essential", [key]);
 }
 
 // Essential closed: add it back, unloaded, in the same window.
