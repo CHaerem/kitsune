@@ -427,7 +427,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   const tab = sender.tab;
   if (!tab || sender.id !== browser.runtime.id) return;
   if (msg.type === "ghostInfo") return ghostInfo(msg.kind, msg.key);
-  if (msg.type === "ghostReady") { unloadWhenIconShown(tab.id, msg.icon); return; }
+  if (msg.type === "ghostReady") { unloadWhenIconShown(tab.id, sender.url, msg.icon); return; }
   // A ghost is being shown. It loads the real page itself only when there is
   // no live tab to pull in (the pull runs from onActivated, in the queue).
   if (msg.type === "ghostShown") {
@@ -444,15 +444,24 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 });
 
 // A placeholder is unloaded once Firefox shows its icon: an unloaded tab keeps
-// the icon it has, so unloaded sooner it would have none.
-const awaitingIcon = new Set();
-function unloadWhenIconShown(tabId, hasIcon) {
-  awaitingIcon.add(tabId);
+// the icon it has, so unloaded sooner it would have none. Only the load that
+// asked is unloaded: a placeholder loaded again meanwhile (a new address, or
+// the same one still loading) would be unloaded before it has its title, and
+// show its address instead. That load asks again when it is ready.
+const awaitingIcon = new Map(); // tabId -> address of the placeholder that is ready
+function unloadWhenIconShown(tabId, url, hasIcon) {
+  awaitingIcon.set(tabId, url);
   browser.tabs.get(tabId).then(t => { if (!hasIcon || t.favIconUrl) unloadGhost(tabId); }, () => awaitingIcon.delete(tabId));
 }
-function unloadGhost(tabId) {
+function unloadGhost(tabId, tries = 0) {
+  const url = awaitingIcon.get(tabId);
   if (!awaitingIcon.delete(tabId)) return;
-  browser.tabs.get(tabId).then(t => { if (!t.active && isGhostUrl(t.url)) return browser.tabs.discard(tabId); }).catch(() => {});
+  browser.tabs.get(tabId).then(t => {
+    if (t.active || !isGhostUrl(t.url) || t.url !== url) return;
+    if (t.status === "complete") return browser.tabs.discard(tabId);
+    // Still finishing its own load: look again shortly.
+    if (tries < 10) setTimeout(() => { if (!awaitingIcon.has(tabId)) { awaitingIcon.set(tabId, url); unloadGhost(tabId, tries + 1); } }, 300);
+  }).catch(() => {});
 }
 browser.tabs.onUpdated.addListener(tabId => {
   if (awaitingIcon.has(tabId)) unloadGhost(tabId);
