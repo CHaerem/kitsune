@@ -178,7 +178,15 @@ async function onUnpinned(tab) {
   const list = await getList();
   const entry = list.find(e => e.key === key);
   setList(list.filter(e => e.key !== key));
-  if (entry && isGhostUrl(tab.url)) await browser.tabs.update(tab.id, { url: entry.url }).catch(() => {});
+  if (isGhostUrl(tab.url)) {
+    if (entry) await browser.tabs.update(tab.id, { url: entry.url }).catch(() => {});
+    else {
+      // Unpinned while the essential was being removed from another window
+      // (its copies are removed then): it goes the same way.
+      busy.add(tab.id);
+      await browser.tabs.remove(tab.id).catch(() => {});
+    }
+  }
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
