@@ -24,6 +24,7 @@ is reported as failed. It checks that:
   - pinning a tab makes it an essential everywhere, also when the tab is a
     ghost; unpinning a copy removes it everywhere, and the copy you unpinned
     opens its page; an essential copy opens the real page in its container;
+  - a placeholder of a tab that no longer exists closes itself;
   - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
   - the extension starts again after being disabled and enabled;
@@ -333,6 +334,25 @@ def pinned_ghost(m):
           r and r["saved"] == 1 and r["copies"] == [1, 1] and r["synced"] == [[], []] and r["unloaded"], str(r))
 
 
+def orphans(m):
+    # A placeholder whose tab or essential no longer exists (left from before a
+    # restart) is closed, and is not left in Recently Closed. (Opened in the
+    # background: selecting one first would make the test depend on which
+    # neighbour Firefox selects when it closes.)
+    r = m.js(H + """
+      const base = "moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))["%s"] + "/ghost.html";
+      const w = main(), before = w.gBrowser.selectedTab;
+      w.gBrowser.addTrustedTab(base + "?kind=ghost&key=smoke-orphan-1", {inBackground: true});
+      w.gBrowser.addTrustedTab(base + "?kind=essential&key=smoke-orphan-2", {inBackground: true});
+      await wait(3000);
+      const left = wins().flatMap(x => x.gBrowser.tabs.filter(t => url(t).includes("smoke-orphan")).map(t => url(t)));
+      const closed = wins().flatMap(x => x.SessionStore.getClosedTabDataForWindow(x)).filter(c => JSON.stringify(c.state.entries || []).includes("smoke-orphan")).length;
+      if (!before.closing) w.gBrowser.selectedTab = before;
+      await removeWhere((x, t) => url(t).includes("smoke-orphan"));
+      return {left, closed};""" % EXT_ID)
+    check("a placeholder of a tab that no longer exists closes itself, and is not in Recently Closed", not r["left"] and r["closed"] == 0, str(r))
+
+
 def popups(m):
     # A sign-in popup (window.open with "popup") must not be synced: no ghosts
     # of it elsewhere, and nothing to pull out of the popup.
@@ -569,7 +589,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
             try:
                 group(m)
             except Exception:

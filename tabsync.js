@@ -222,10 +222,15 @@ async function reconcileAll() {
   const tabs = (await browser.tabs.query({})).filter(t => winIds.has(t.windowId));
 
   // Drop tabs whose key is no longer synced (e.g. state from an old install).
+  // A placeholder of such a tab has nothing to show, so it is closed.
+  const gone = [];
   for (const t of tabs) {
     const key = syncKeyByTab.get(t.id);
-    if (key && !all[key]) await clearRole(t.id);
+    if (!key || all[key]) continue;
+    if (isGhostUrl(t.url)) { gone.push(key); syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
+    else await clearRole(t.id);
   }
+  if (gone.length) await forgetClosedPlaceholders("ghost", gone);
 
   for (const key of Object.keys(all)) {
     const reps = repsOf(key, tabs);
@@ -433,6 +438,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   if (!tab || sender.id !== browser.runtime.id) return;
   if (msg.type === "ghostInfo") return ghostInfo(msg.kind, msg.key);
   if (msg.type === "ghostReady") { unloadWhenIconShown(tab.id, msg.icon); return; }
+  if (msg.type === "ghostOrphan") return serial(() => closeOrphan(tab.id, msg.kind, msg.key));
   // A ghost is being shown. It loads the real page itself only when there is
   // no live tab to pull in (the pull runs from onActivated, in the queue).
   if (msg.type === "ghostShown") {
@@ -462,6 +468,17 @@ function unloadGhost(tabId) {
 browser.tabs.onUpdated.addListener(tabId => {
   if (awaitingIcon.has(tabId)) unloadGhost(tabId);
 }, { properties: ["favIconUrl"] });
+
+// A placeholder whose tab or essential no longer exists (left from before a
+// restart, or by an older version) has nothing to show or open: it is closed.
+async function closeOrphan(tabId, kind, key) {
+  if (!["ghost", "essential", "lazy"].includes(kind) || (await ghostInfo(kind, key))) return;
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || !isGhostUrl(tab.url)) return;
+  syncBusy.add(tabId); busy.add(tabId); forget(tabId);
+  await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPlaceholders(kind, [key]);
+}
 
 async function ghostInfo(kind, key) {
   const entry = kind === "essential"
