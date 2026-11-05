@@ -33,7 +33,9 @@ is reported as failed. It checks that:
     compact mode on and off;
   - the toolbar follows the sidebar's width (220–480 px), and ⌘L opens the
     address bar centred with its results under it, also in compact mode;
-  - live folders (when the native host is installed) are in both windows.
+  - a live folder (with a stand-in for the native host) is in every window,
+    first in its space, with its pull requests unloaded; a closed pull request
+    stays closed, and one that leaves the search is removed everywhere.
 """
 import glob
 import json
@@ -46,7 +48,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from testfirefox import EXT_DIR, EXT_ID, SIDEBERY_ID, TestFirefox  # noqa: E402
 
 CMD, SHIFT, CTRL, ESC = "", "", "", ""
-NATIVE_HOST = os.path.expanduser("~/Library/Application Support/Mozilla/NativeMessagingHosts/kitsune_github.json")
 
 # Shared helpers for the chrome-context scripts below.
 H = """
@@ -404,12 +405,48 @@ def look(m):
 
 
 def live_folders(m):
-    if not os.path.exists(NATIVE_HOST):
-        print("SKIP  live folders (native host not installed: native/install.sh)")
-        return
-    live = m.js(H + """const groups = Object.values((await storage("%s", ["liveFolders"])).liveFolders || {}).map(f => JSON.stringify(f.groupKey));
-      const n = w => w.gBrowser.tabs.filter(t => groups.includes(key(w, t))).length; return [n(main()), n(other())];""" % EXT_ID)
-    check("live folders are in both windows", live[0] > 0 and live[0] == live[1], f"main {live[0]}, new {live[1]}")
+    # The native host is a stand-in (fake_github_host.py) that answers from
+    # m.fake_prs; the test rewrites the file and asks Kitsune to refresh.
+    def answer(items):
+        json.dump({"folders": [{"id": "smoke", "name": "Smoke PRs", "container": "firefox-container-2"}],
+                   "items": {"smoke": [{"url": f"https://example.org/?smoke-pr-{n}", "title": f"Pull request {n}",
+                                        "number": n, "repo": "smoke"} for n in items]}}, open(m.fake_prs, "w"))
+        return extension_message(m, {"type": "refreshLiveFolders"})
+
+    state = H + """
+      const pf = await panelFor(), out = [], isGroup = t => url(t).includes("/sidebery/group.html");
+      for (const w of [main(), other()]) {
+        const group = w.gBrowser.tabs.find(t => !t.pinned && url(t).includes("/sidebery/group.html#Smoke%20PRs"));
+        const prs = w.gBrowser.tabs.filter(t => t.label.includes("Pull request "));
+        const run = w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === 2);
+        const before = group ? run.slice(0, run.indexOf(group)) : [];
+        out.push({group: !!group, inFolder: prs.filter(t => group && t.openerTab === group).map(t => t.label.replace(/^.*Pull/, "Pull")).sort(),
+                  outside: prs.filter(t => !group || t.openerTab !== group).map(t => t.label),
+                  loaded: prs.filter(t => t.linkedPanel && !t.selected).map(t => t.label),
+                  first: before.every(t => isGroup(t) || (t.openerTab && isGroup(t.openerTab))),
+                  space: !!group && sbPanel(w, group) === pf["firefox-container-2"]});
+      }
+      return out;"""
+    replied = answer([1, 2])
+    time.sleep(4)
+    first = m.js(state)
+    want = ["Pull request 1", "Pull request 2"]
+    check("a live folder is in every window, first in its space, with its pull requests unloaded",
+          replied is True and all(w["group"] and w["inFolder"] == want and not w["outside"] and not w["loaded"] and w["first"] and w["space"]
+                                  for w in first), f"{replied}, {first}")
+    m.js(H + """const t = main().gBrowser.tabs.find(t => t.label.endsWith("Pull request 1")); if (t) main().gBrowser.removeTab(t); await wait(3000); return 1;""")
+    answer([1, 2, 3])
+    time.sleep(4)
+    second = m.js(state)
+    check("a closed pull request tab stays closed when the folder is refreshed",
+          all(w["inFolder"] == ["Pull request 2", "Pull request 3"] and not w["outside"] for w in second), str(second))
+    answer([3])
+    time.sleep(4)
+    third = m.js(state)
+    check("a pull request that leaves the search is removed from every window",
+          all(w["inFolder"] == ["Pull request 3"] and not w["outside"] for w in third), str(third))
+    json.dump({}, open(m.fake_prs, "w"))
+    m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
 
 def handover(m):

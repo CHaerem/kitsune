@@ -126,6 +126,12 @@ function refreshAllLiveFolders() {
 browser.alarms.create("liveFolders", { periodInMinutes: LIVE_REFRESH_MINUTES });
 browser.alarms.onAlarm.addListener(alarm => { if (alarm.name === "liveFolders" && started) refreshAllLiveFolders(); });
 
+// From the extension's own pages only (the smoke test refreshes with this).
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== "refreshLiveFolders" || sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(""))) return;
+  return refreshAllLiveFolders().then(() => true);
+});
+
 // First refresh once tab sync has started.
 (async () => {
   for (let i = 0; i < 120 && !started; i++) await sleep(1000);

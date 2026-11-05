@@ -277,6 +277,9 @@ time, from:
 - Sidebery as you have it installed, with its permissions and ⌃1/⌃2/⌃3;
 - Kitsune (this folder, or a signed `.xpi`);
 - test tabs in each space: essentials, a folder with tabs, ordinary tabs.
+- a stand-in for the live folders' native host (`tests/fake_github_host.py`),
+  which answers from a file the test writes, so live folders are tested
+  everywhere without your `gh` login or GitHub.
 
 The list of what it checks is at the top of `tests/smoke.py`. Each group of
 checks runs on its own; a check that crashes counts as failed. Run it after
@@ -298,8 +301,7 @@ Firefox change that would break the setup shows up before it reaches you). It
 runs on pushes and pull requests here and every Monday, so a Firefox or
 Sidebery update that breaks something shows up without any change here; after
 changing the Firefox files in dotfiles, start it by hand (Actions → Smoke test
-→ Run workflow). GitHub e-mails you when a run fails. The live folder check is
-skipped there (no native host).
+→ Run workflow). GitHub e-mails you when a run fails.
 
 The Firefox files come from your private dotfiles, read with a read-only
 deploy key (deploy keys do not expire). Set it up once, in your own terminal:
