@@ -18,7 +18,8 @@ is reported as failed. It checks that:
     essential is closed (and brought back) or newly pinned, and after a tab is
     pulled in from another window;
   - selecting a ghost pulls the live tab in; closing a tab closes it
-    everywhere; closing a window hands its tabs over;
+    everywhere; closing a window hands its tabs over, and reopening it doubles
+    nothing;
   - pinning a tab makes it an essential everywhere, also when the tab is a
     ghost; unpinning a copy removes it everywhere; an essential copy opens the
     real page in its container;
@@ -506,6 +507,29 @@ def handover(m):
     check("every tab in the main window is still in its container's space", not wrong, str(wrong[:5]))
 
 
+def reopened_window(m):
+    # Reopening the window closed above (⌘⇧N) brings its tabs back with their
+    # Kitsune values; nothing may be doubled.
+    r = m.js(H + """
+      const count = () => { const by = {};
+        for (const [i, w] of wins().entries()) for (const t of w.gBrowser.tabs) { const k = key(w, t); if (!k) continue;
+          const c = by[k] ??= {perWindow: wins().map(() => 0), live: 0}; c.perWindow[i]++; if (role(w, t) === "live") c.live++; if (role(w, t) === "copy") c.copy = true; }
+        return by; };
+      const synced = async () => Object.keys((await storage("%s", ["syncedTabs"])).syncedTabs).length;
+      const before = await synced();
+      const w = main().SessionStore.undoCloseWindow(0); w.__smoke = true;
+      for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);
+      await wait(9000);
+      const by = count(), after = await synced();
+      const doubled = Object.entries(by).filter(([, c]) => (!c.copy && c.live !== 1) || c.perWindow.some(n => n !== 1)).map(([k, c]) => [k, c]);
+      const dead = w.gBrowser.tabs.filter(t => url(t).includes("ghost.html") && !key(w, t) && !t.pinned).length;
+      const pinned = wins().map(x => x.gBrowser.tabs.filter(t => t.pinned).length);
+      await close(w);
+      return {before, after, doubled: doubled.slice(0, 5), dead, pinned};""" % EXT_ID)
+    check("a reopened window takes its tabs back, with nothing doubled", r["before"] == r["after"] and not r["doubled"] and not r["dead"]
+          and r["pinned"][0] == r["pinned"][1], str(r))
+
+
 def main():
     xpi = None
     if "--xpi" in sys.argv:
@@ -519,7 +543,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, pinned_ghost, popups, archiving, shortcuts, look, live_folders, handover):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, pinned_ghost, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
             try:
                 group(m)
             except Exception:

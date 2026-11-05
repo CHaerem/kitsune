@@ -507,10 +507,38 @@ browser.tabs.onAttached.addListener(tabId => {
 });
 
 // A new window gets essentials and ghosts of every synced tab.
+// A window you reopened (History → Recently Closed Windows, ⌘⇧N) comes back
+// with its tabs' Kitsune values: its tabs are taken back instead, so nothing
+// is doubled (see adoptRestored).
 browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
-  setTimeout(() => serial(() => fillWindow(win.id, { fresh: true })), NEW_WINDOW_DELAY_MS);
+  setTimeout(() => serial(async () => {
+    if (await adoptRestored(win.id)) await reconcileAll();
+    else await fillWindow(win.id, { fresh: true });
+  }), NEW_WINDOW_DELAY_MS);
 });
+
+// Tabs restored with their Kitsune values: a tab still synced is taken back
+// as what it was (reconcileAll then keeps one live tab and one tab per window);
+// a placeholder of a tab closed since is removed; any other tab is left to be
+// registered as new. Returns whether the window had any.
+async function adoptRestored(windowId) {
+  const all = await getSynced();
+  let found = false;
+  for (const t of await browser.tabs.query({ windowId })) {
+    if (syncKeyByTab.has(t.id)) continue;
+    const [key, role] = await Promise.all([
+      browser.sessions.getTabValue(t.id, SYNC_KEY),
+      browser.sessions.getTabValue(t.id, SYNC_ROLE),
+    ]);
+    if (!key || !role) continue;
+    found = true;
+    if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
+    if (isGhostUrl(t.url)) { syncBusy.add(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
+    else await clearRole(t.id);
+  }
+  return found;
+}
 
 // --- Startup --------------------------------------------------------------
 
