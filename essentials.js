@@ -8,6 +8,7 @@
 // - Pin a tab            -> new essential, added to every window.
 // - Unpin an essential   -> removed from the list and from the other windows.
 // - Close an essential   -> comes back unloaded (like Zen).
+// - Move an essential    -> the new order is kept, and the other windows follow.
 // - New window / startup -> missing essentials are added (driven from tabsync.js).
 //
 // Essentials keep the URL they were pinned with; navigating inside one does
@@ -199,6 +200,45 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
   if (info.isWindowClosing) { keyByTab.delete(tabId); return; }
   serial(() => onClosed(tabId, info.windowId));
 });
+
+// An essential moved to a new place: the list takes that window's order, and
+// the copies in the other windows are moved to match. Our own moves are
+// ignored (ownMoves), so the windows do not answer each other.
+const ownMoves = new Set();
+browser.tabs.onMoved.addListener((tabId, info) => {
+  if (ownMoves.delete(tabId) || busy.has(tabId) || !keyByTab.has(tabId)) return;
+  serial(() => onEssentialMoved(info.windowId));
+});
+
+async function onEssentialMoved(windowId) {
+  const list = await getList();
+  const here = await browser.tabs.query({ windowId, pinned: true });
+  const known = new Set(list.map(e => e.key));
+  const order = (await Promise.all(here.map(keyOf))).filter(k => known.has(k));
+  // The essentials in this window take their new order in the places they
+  // had in the list; essentials missing from this window stay where they are.
+  const byKey = new Map(list.map(e => [e.key, e]));
+  const slots = list.flatMap((e, i) => (order.includes(e.key) ? [i] : []));
+  const next = [...list];
+  slots.forEach((slot, j) => { next[slot] = byKey.get(order[j]); });
+  if (next.every((e, i) => e === list[i])) return;
+  setList(next);
+  for (const w of await normalWindows()) if (w.id !== windowId) await sortEssentials(w.id, next);
+}
+
+// Put a window's essentials in the list's order (pinned tabs come first).
+async function sortEssentials(windowId, list) {
+  const rank = new Map(list.map((e, i) => [e.key, i]));
+  const pinned = await browser.tabs.query({ windowId, pinned: true });
+  const keys = await Promise.all(pinned.map(keyOf));
+  const wanted = pinned.map((t, i) => [t.id, rank.get(keys[i]) ?? Infinity]).sort((a, b) => a[1] - b[1]);
+  for (const [index, [tabId]] of wanted.entries()) {
+    const tab = await browser.tabs.get(tabId).catch(() => null);
+    if (!tab || tab.index === index) continue;
+    ownMoves.add(tabId);
+    await browser.tabs.move(tabId, { index }).catch(() => ownMoves.delete(tabId));
+  }
+}
 
 // An essential dragged to another window: fill the gap in the window it left.
 browser.tabs.onDetached.addListener((tabId, info) => {

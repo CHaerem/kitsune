@@ -13,7 +13,8 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
 1. **Essentials in every window.** Pinned tabs are mirrored as unloaded copies
    in every window, in the same container (and therefore the same Sidebery
    space). Pinning or unpinning in one window does the same in the others.
-   Closing an essential brings it back unloaded, like Zen. An essential's
+   Closing an essential brings it back unloaded, like Zen. Moving one keeps
+   the new order, in every window and in new windows. An essential's
    title and icon follow its page, but only from the essential's own site,
    so a redirect to a sign-in page does not rename it.
 2. **Tabs in every window.** Every other tab is *live* in one window and an
@@ -173,6 +174,11 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   active space instead (seen on a slower machine). So a new window's essentials
   are created unpinned, placed by Sidebery, and pinned together 0.8 s later
   (`PIN_SETTLE_MS` in `common.js`); the smoke test opens three windows to check.
+  On GitHub's machines it still happens now and then, so up to Sidebery 5.6.1
+  that check is reported as `KNOWN` and does not block a release
+  (`KNOWN_SIDEBERY_BUGS` in `tests/smoke.py`). The fix is
+  [mbnuqw/sidebery#2497](https://github.com/mbnuqw/sidebery/pull/2497); with a
+  newer Sidebery the check is strict again.
 
 ## Performance (Firefox 159, Sidebery 5.6, 33 essentials + 53 tabs)
 
