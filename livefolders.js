@@ -119,7 +119,7 @@ async function renameLiveItem(key, item) {
   const entry = all[key], title = liveTitle(item);
   if (!entry || entry.title === title) return;
   const reps = repsOf(key, await browser.tabs.query({}));
-  if (!reps.length || !reps.every(t => t.discarded && isGhostUrl(t.url))) return;
+  if (!reps.length || !reps.every(t => isGhostUrl(t.url))) return;
   entry.title = title;
   saveSynced(all);
   for (const t of reps) {
