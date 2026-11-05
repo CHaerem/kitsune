@@ -193,8 +193,9 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
 ## Performance (Firefox 159, Sidebery 5.6, 33 essentials + 53 tabs)
 
 - New window: essentials after ~1.6 s, all tabs after ~1.6 s, sorted after
-  ~3 s. Placeholders load briefly and unload themselves; only folder copies
-  stay loaded.
+  ~3 s (measured before essentials waited for Sidebery's sidebar; pinning
+  now comes ~0.7 s later). Placeholders load briefly and unload themselves;
+  only folder copies stay loaded.
 - Selecting a ghost: the live tab is in place after ~50 ms.
 
 Timing constants live in `common.js`; re-measure if Sidebery or Firefox
