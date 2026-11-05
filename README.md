@@ -32,8 +32,9 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    pull request search, such as open pull requests in your company's
    organisation or your own repositories where you are author, assignee or
    asked for review. Refreshed every 15 minutes and at startup: new pull
-   requests get an unloaded tab, merged or closed ones are removed. A pull
-   request tab you close stays closed until it leaves the search.
+   requests get an unloaded tab, merged or closed ones are removed, and a
+   renamed one's unloaded tabs take the new title. A pull request tab you
+   close stays closed until it leaves the search.
 5. **⌘⇧C copies the address** of the current tab, as in Arc and Zen
    (`shortcuts.js`). Firefox gives ⌘⇧C to the developer tools' element
    picker, which wins over extensions; free it in `about:keyboard` (the

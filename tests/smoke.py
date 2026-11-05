@@ -40,7 +40,8 @@ is reported as failed. It checks that:
     address bar centred with its results under it, also in compact mode;
   - a live folder (with a stand-in for the native host) is in every window,
     first in its space, with its pull requests unloaded; a closed pull request
-    stays closed, and one that leaves the search is removed everywhere.
+    stays closed, one that leaves the search is removed everywhere, and a
+    renamed one takes its new title.
 """
 import glob
 import json
@@ -498,9 +499,9 @@ def look(m):
 def live_folders(m):
     # The native host is a stand-in (fake_github_host.py) that answers from
     # m.fake_prs; the test rewrites the file and asks Kitsune to refresh.
-    def answer(items):
+    def answer(items, renamed=()):
         json.dump({"folders": [{"id": "smoke", "name": "Smoke PRs", "container": "firefox-container-2"}],
-                   "items": {"smoke": [{"url": f"https://example.org/?smoke-pr-{n}", "title": f"Pull request {n}",
+                   "items": {"smoke": [{"url": f"https://example.org/?smoke-pr-{n}", "title": f"Pull request {n}" + (" renamed" if n in renamed else ""),
                                         "number": n, "repo": "smoke"} for n in items]}}, open(m.fake_prs, "w"))
         return extension_message(m, {"type": "refreshLiveFolders"})
 
@@ -536,6 +537,11 @@ def live_folders(m):
     third = m.js(state)
     check("a pull request that leaves the search is removed from every window",
           all(w["inFolder"] == ["Pull request 3"] and not w["outside"] for w in third), str(third))
+    answer([3], renamed=[3])
+    time.sleep(5)
+    fourth = m.js(state)
+    check("a renamed pull request's unloaded tabs take the new title",
+          all(w["inFolder"] == ["Pull request 3 renamed"] and not w["loaded"] for w in fourth), str(fourth))
     json.dump({}, open(m.fake_prs, "w"))
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
