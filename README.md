@@ -125,6 +125,19 @@ sign-in fails there. `teams.microsoft.com` likewise matches a Microsoft
 sign-in that returns to Teams. Anchor such rules to the start of the address,
 as a regular expression: `/^https:\/\/(www\.|m\.)?youtube\.com\//`.
 
+## Sidebery's look and settings come from dotfiles
+
+Sidebery's CSS (`sidebery.css`) and the settings that matter for Kitsune
+(`sidebery-settings.json`) are in dotfiles, which hands them to Sidebery as
+*managed storage*: a file in `~/Library/Application Support/Mozilla/ManagedStorage/`
+that Firefox gives the extension. Sidebery reads it every time it starts, and
+its values win over Sidebery's own, so nothing is pasted into Sidebery and a
+change in Sidebery's settings page lasts only until the next start. The test
+Firefox gets the same file built from the same dotfiles files (pointed at its
+profile, since Firefox only looks in your own `~/Library`); the fixture's
+settings are older values on purpose, so the tests show that dotfiles wins.
+Spaces and container rules are not settings and stay in Sidebery's storage.
+
 ## Scrolling in the sidebar (Sidebery settings)
 
 Scrolling only scrolls the tabs; spaces are switched with the buttons at the
@@ -139,7 +152,7 @@ block small vertical scroll events.
 | Set threshold for switching between panels and tabs by scrolling (`wheelThreshold`) | off | with it on, Sidebery blocks vertical scroll events below the vertical threshold |
 | Switch panels using vertical scroll over navigation bar (`navSwitchPanelsWheel`) | off | scrolling near the bottom would switch space |
 
-The test fixture (`tests/fixtures/sidebery.json`) has these values.
+These are set in dotfiles' `sidebery-settings.json` (see above).
 
 ## Known limitations
 

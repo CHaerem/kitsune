@@ -4,8 +4,10 @@ It never touches your own Firefox: it runs headless (no window, no focus, its
 own clipboard), with its own profile and its own Marionette port, and is
 deleted afterwards. The profile is built the same way every time, from:
 
-  - dotfiles: user.js, userChrome.css, customKeys.json and Sidebery's CSS
-    (sidebery.css), so the tests check the setup as dotfiles says it is;
+  - dotfiles: user.js, userChrome.css, customKeys.json, and Sidebery's CSS
+    and settings (sidebery.css, sidebery-settings.json) given to Sidebery as
+    managed storage the way dotfiles does, so the tests check the setup as
+    dotfiles says it is;
   - tests/fixtures: Sidebery's spaces and settings, and the containers
     (tests/fixtures/from_backup.py makes them from your own setup);
   - Sidebery, with the permissions and ⌃1/⌃2/⌃3 shortcuts you have;
@@ -102,6 +104,12 @@ class TestFirefox:
         shutil.copy(f"{DOTFILES}/userChrome.css", f"{self.dir}/chrome/userChrome.css")
         shutil.copy(f"{DOTFILES}/customKeys.json", f"{self.dir}/customKeys.json")
         shutil.copy(f"{FIXTURES}/containers.json", f"{self.dir}/containers.json")
+        # Sidebery's managed storage, built like dotfiles' home/firefox.nix does.
+        os.makedirs(f"{self.dir}/managed/ManagedStorage")
+        json.dump({"name": SIDEBERY_ID, "description": "test", "type": "storage", "data": {
+            "settings": json.load(open(f"{DOTFILES}/sidebery-settings.json")),
+            "sidebarCSS": open(f"{DOTFILES}/sidebery.css").read(),
+        }}, open(f"{self.dir}/managed/ManagedStorage/{SIDEBERY_ID}.json", "w"))
 
     def _start(self):
         env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1"}
@@ -112,11 +120,11 @@ class TestFirefox:
 
     def _setup(self):
         m = self.m
+        m.js(USE_TEST_MANAGED_STORAGE, f"{self.dir}/managed")
         sb = sidebery_xpi()  # a folder is loaded as a temporary add-on (e.g. a patched Sidebery)
         m.cmd("Addon:Install", {"path": sb, "temporary": os.path.isdir(sb)})
         time.sleep(4)
         fixture = json.load(open(f"{FIXTURES}/sidebery.json"))
-        fixture["sidebarCSS"] = open(f"{DOTFILES}/sidebery.css").read()
         m.js(SETUP_SIDEBERY, SIDEBERY_ID, fixture, SIDEBERY_PERMISSIONS, SIDEBERY_SHORTCUTS)
         m.js(SEED_TABS, SIDEBERY_ID)
         if self.xpi:
@@ -125,6 +133,18 @@ class TestFirefox:
             m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
         time.sleep(8)  # Kitsune starts: essentials, tab sync, live folders
 
+
+# Firefox reads managed storage files only from your own ~/Library (it ignores
+# HOME), so the test Firefox is pointed at the profile's copy instead; other
+# lookups (the live folders' native host) are left alone.
+USE_TEST_MANAGED_STORAGE = """
+  const [dir] = args;
+  const {NativeManifests} = ChromeUtils.importESModule("resource://gre/modules/NativeManifests.sys.mjs");
+  await NativeManifests.init();
+  const lookup = NativeManifests._lookup;
+  NativeManifests._lookup = (type, name, context) =>
+    type === "storage" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
+"""
 
 # Sidebery: permissions, shortcuts, and the fixture written to its storage
 # while it is disabled (it keeps its settings in memory while it runs).
