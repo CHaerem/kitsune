@@ -162,6 +162,8 @@ def new_window(m):
     check(f"a new window gets all essentials and tabs ({fill['ms']} ms)", fill["ms"] is not None and fill["essentials"][0] == fill["essentials"][1]
           and fill["tabs"][0] == fill["tabs"][1], f"essentials {fill['essentials']}, tabs {fill['tabs']}")
     check("placeholders unload themselves", not fill["stillLoaded"], f"still loaded: {fill['stillLoaded']}")
+    waits = extension_message(m, {"type": "sidebarWaits"})
+    print(f"INFO  waiting for Sidebery's sidebar in new windows: {waits}", flush=True)
     time.sleep(3)  # Sidebery stores its spaces shortly after the tabs settle
     view = """const w = args[0] ? other() : main(), out = {};
       for (const t of w.gBrowser.tabs) {

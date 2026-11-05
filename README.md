@@ -179,9 +179,11 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
 - A tab that exists before a new window's sidebar has started gets the last
   active space, whatever its container, and a pinned tab keeps its space. So a
   new window's essentials are created unpinned, and pinned only once Sidebery's
-  sidebar there has started: their placeholders are loaded again every 0.5 s
-  until Sidebery moves them to their spaces and hides the tabs of the other
-  spaces (at most 4 s; `PROBE_MS` and `SIDEBAR_WAIT_MS` in `common.js`). Just
+  sidebar there has started: their placeholders are loaded again every 0.5 s,
+  so Sidebery moves them to their spaces once it runs, until Sidebery shows
+  that it has (it hides the tabs of the other spaces, or sets which tab to
+  select after closing the current one; at most 4 s; `PROBE_MS` and
+  `SIDEBAR_WAIT_MS` in `common.js`). Just
   before pinning, each loads its placeholder once more and gets 0.6 s for
   Sidebery's container rule. The smoke test opens three windows to check. Up
   to Sidebery 5.6.1 a failure of that check is reported as `KNOWN` and does
