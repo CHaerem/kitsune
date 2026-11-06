@@ -1,117 +1,245 @@
-/* Tidier's sidebar: calm and plain, like Zen and Arc. The window's own
- * background (userChrome.css in dotfiles) shows through, so the sidebar and
- * the window are one surface; the active space's colour is the accent. */
+/* Tidier's sidebar: flat and compact, as Zen is at its calmest. The window's own colour
+ * (userChrome.css in the dotfiles) continues behind it, so the sidebar and the window
+ * are one surface; nothing has a border, and what is not needed now is not shown.
+ * Colours and sizes are in tokens.css. */
 
-:root {
-  color-scheme: light dark;
-  --text: light-dark(#1d1d1f, #ececf0);
-  --muted: light-dark(#6e6e73, #a1a1a6);
-  --hover: light-dark(rgba(0, 0, 0, .05), rgba(255, 255, 255, .07));
-  --selected: light-dark(rgba(255, 255, 255, .85), rgba(255, 255, 255, .12));
-  --tile: light-dark(rgba(0, 0, 0, .045), rgba(255, 255, 255, .06));
-  --accent: #7a7a80; /* the active space's colour, set by sidebar.js */
-  --radius: 8px;
-  --row: 32px;
-  font: 13px/1.3 system-ui, -apple-system, sans-serif;
-}
-
-/* The window's own colour (userChrome.css's --zen-frame); a sidebar cannot be
- * transparent, so your tidier.css (dotfiles) sets it per space. */
-html { --frame: light-dark(#ececf0, #1f1f23); background: var(--frame); transition: background-color .25s ease; }
+html { background: var(--frame); transition: background-color var(--slow) var(--ease); }
 html, body { height: 100%; margin: 0; }
 body {
   display: flex; flex-direction: column;
   background: transparent; color: var(--text);
-  padding: 4px 8px 0; box-sizing: border-box;
+  padding: 4px var(--gutter) 0; box-sizing: border-box;
   user-select: none; overflow: hidden;
 }
+button { font: inherit; }
+:focus-visible { outline: 1.5px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset: -1.5px; }
 
-/* Essentials: a grid of tiles, as in Zen and Arc. */
+/* Essentials: a grid of small tiles. Empty cells stay empty, so a tile is the same size
+ * in every space and nothing jumps when you change space. The grid stands 4 px out of
+ * its place on all sides, for a drop's tint to have room around the tiles. */
 #essentials {
-  display: grid; gap: 6px; padding: 4px 0 10px;
-  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  flex: none; display: grid; gap: var(--tile-gap);
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile-min), 1fr));
+  margin: -4px -4px 2px; padding: 4px;
+  border-radius: var(--radius-large);
 }
 #essentials:empty { display: none; }
 .tile {
-  height: 40px; border-radius: var(--radius); background: var(--tile);
+  position: relative;
+  height: var(--tile-height); border-radius: var(--radius); background: var(--tile);
   display: grid; place-items: center; cursor: default;
+  transition: background-color var(--quick) var(--ease), scale var(--quick) var(--ease);
 }
-.tile:hover { background: var(--hover); }
-.tile.active { background: var(--selected); box-shadow: 0 0 0 1.5px var(--accent) inset; }
-.tile img, .tile .letter { width: 18px; height: 18px; }
-.tile.unloaded img { opacity: .55; }
+.tile:hover { background: var(--tile-hover); }
+.tile:active { scale: .96; }
+.tile.active { background: var(--selected); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.tile.active:hover { background: var(--selected-hover); }
+.tile img, .tile .letter { width: var(--icon); height: var(--icon); }
+/* A black icon on a dark ground, or a white one on a light ground, would be gone without
+ * a trace of an edge. On the icons that have a ground of their own, it does not show. */
+.tile img, .row img { filter: drop-shadow(0 0 .5px var(--icon-edge)); }
 
-/* Folders and tabs. */
-#tabs { flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }
+/* The space's name, then the one thing you can always do in it. */
+#space-name:empty, #actions { display: none; }
+#space-name {
+  flex: none; padding: 6px var(--row-inset) 2px;
+  font-size: var(--size-small); font-weight: var(--weight-strong); letter-spacing: 0; color: var(--muted);
+  white-space: nowrap; overflow: hidden;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.alone #actions { display: flex; flex: none; position: relative; }
+#new-tab {
+  flex: 1; min-width: 0; height: var(--row);
+  display: flex; align-items: center; gap: var(--icon-gap); padding: 0 var(--row-inset);
+  border: 0; border-radius: var(--radius); background: none; color: var(--muted);
+  text-align: left; cursor: default;
+  transition: background-color var(--quick) var(--ease), color var(--quick) var(--ease);
+}
+#new-tab::before {
+  content: ""; flex: none; width: var(--icon); height: var(--icon);
+  background: currentColor; mask: var(--i-plus) center / 14px no-repeat;
+}
+#new-tab:hover { background: var(--hover); color: var(--text); }
+/* New folder is there when you come for it: right click on the list does the same. */
+#new-folder {
+  position: absolute; right: 6px; top: calc((var(--row) - 20px) / 2);
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-small);
+  display: grid; place-items: center; background: none; color: var(--muted);
+  opacity: 0; transition: opacity var(--quick) var(--ease);
+}
+#new-folder::before {
+  content: ""; width: var(--icon); height: var(--icon);
+  background: currentColor; mask: var(--i-folder-plus) center / contain no-repeat;
+}
+#actions:hover #new-folder, #new-folder:focus-visible { opacity: 1; }
+#new-folder:hover { background: var(--hover); color: var(--text); }
+
+/* Folders and tabs. The rows' margins collapse into 1 px between any two of them, also
+ * across a folder's edge, so two fills never touch. The list fades out at its ends
+ * instead of ending at a line. */
+#tabs {
+  flex: 1; min-height: 0; overflow: hidden auto; padding-block: 3px 16px;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+  mask-image: linear-gradient(to bottom, transparent, #000 3px, #000 calc(100% - 16px), transparent);
+}
 .row {
-  height: var(--row); display: flex; align-items: center; gap: 8px;
-  padding: 0 8px; border-radius: var(--radius); cursor: default;
+  position: relative;
+  height: var(--row); margin-block: 1px; box-sizing: border-box;
+  display: flex; align-items: center; gap: var(--icon-gap);
+  padding: 0 var(--row-inset); border-radius: var(--radius); cursor: default;
+  color: var(--text-soft);
+  transition: background-color var(--quick) var(--ease), color var(--quick) var(--ease);
 }
-.row:hover { background: var(--hover); }
-.row.active { background: var(--selected); }
-.row img, .row .letter { width: 16px; height: 16px; flex: none; }
-.row .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row.unloaded .title { color: var(--muted); }
-.row.unloaded img { opacity: .55; }
-.row .close {
-  visibility: hidden; border: 0; background: none; color: var(--muted);
-  width: 20px; height: 20px; border-radius: 5px; font-size: 14px; line-height: 1;
+.row:hover { background: var(--hover); color: var(--text); }
+.row.active { background: var(--selected); color: var(--text); }
+.row.active:hover { background: var(--selected-hover); }
+.row img, .row .letter { width: var(--icon); height: var(--icon); flex: none; }
+
+/* A title that does not fit fades out, without dots. Under the mouse, sooner: the close
+ * button has its place at the end of the row. */
+.row .title {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
 }
-.row:hover .close { visibility: visible; }
-.row .close:hover { background: var(--hover); color: var(--text); }
+.row.tab:hover .title { mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent calc(100% - 20px)); }
+
+/* Unloaded: at rest, in the text and in the icon. */
+.row.unloaded { color: var(--muted); }
+.row.unloaded:hover { color: var(--text-soft); }
+.row.unloaded img, .tile.unloaded img { opacity: .55; filter: saturate(.7) drop-shadow(0 0 .5px var(--icon-edge)); }
+.row.unloaded .letter, .tile.unloaded .letter { opacity: .55; }
+
+/* No icon: a plain letter, not louder than the icons around it. */
 .letter {
   display: grid; place-items: center; border-radius: 4px;
-  background: var(--accent); color: white; font-size: 10px; font-weight: 600;
+  background: var(--tile-hover); color: var(--text-soft);
+  font-size: 10px; font-weight: var(--weight-strong); line-height: 1; text-transform: uppercase;
 }
 
-.folder > .row .chevron { width: 16px; text-align: center; color: var(--muted); transition: transform .15s ease; }
-.folder.collapsed > .row .chevron { transform: rotate(-90deg); }
-.folder > .children { padding-left: 14px; }
+/* What the script writes as a character (×, 🔊, ▾) is drawn here instead, in the colour
+ * of the text and at the size wanted: the character itself is there for no one to see. */
+.row .close, .row .sound, .chevron { position: relative; font-size: 0; }
+.row .close::before, .row .sound::before, .chevron::before {
+  content: ""; position: absolute; inset: 0; background: currentColor;
+}
+
+/* Close is drawn over the end of the row, so at rest it takes nothing from the title.
+ * Its middle is as far from the row's end as an icon's is from the start. */
+.row .close {
+  position: absolute; right: 6px; top: calc((var(--row) - 20px) / 2);
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-small);
+  background: none; color: var(--muted);
+  visibility: hidden; opacity: 0;
+  transition: opacity var(--quick) var(--ease), visibility var(--quick);
+}
+.row .close::before { mask: var(--i-close) center / 12px no-repeat; }
+.row:hover .close { visibility: visible; opacity: 1; }
+.row .close:hover { background: var(--hover); color: var(--text); }
+
+/* Sound stays at the end of the row, and steps aside for the close button. */
+.row .sound {
+  flex: none; width: 20px; height: 20px; margin-inline: -2px; padding: 0; border: 0;
+  border-radius: var(--radius-small);
+  background: none; color: var(--muted);
+  transition: translate var(--quick) var(--ease);
+}
+.row .sound::before { mask: var(--i-sound) center / 14px no-repeat; }
+.row .sound[title="Unmute"] { color: var(--faint); }
+.row .sound[title="Unmute"]::before { mask-image: var(--i-muted); }
+.row:hover .sound { translate: -22px 0; }
+.row .sound:hover { background: var(--hover); color: var(--text); }
+
+/* Folders: a name in the column of the titles, and its tabs' icons under that name. */
+.folder > .row .title { font-weight: var(--weight-strong); }
+.chevron {
+  flex: none; width: var(--icon); height: var(--icon); color: var(--faint);
+  transition: rotate var(--quick) var(--ease), color var(--quick) var(--ease);
+}
+.chevron::before { mask: var(--i-chevron) center / 12px no-repeat; }
+.folder.collapsed > .row .chevron { rotate: -90deg; }
+.row:hover .chevron { color: var(--muted); }
+.folder > .children { padding-left: var(--indent); }
 .folder.collapsed > .children { display: none; }
-.folder > .row .title { font-weight: 500; }
-
-/* A thin line between the folders (the kept part) and the other tabs. */
-.divider { height: 1px; margin: 8px 8px; background: var(--hover); }
-
-/* Spaces, at the bottom. */
-#spaces {
-  display: flex; justify-content: center; gap: 4px;
-  padding: 6px 0 8px; border-top: 1px solid var(--hover);
+.row .count { flex: none; color: var(--faint); font-size: var(--size-small); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.row .count:empty { display: none; }
+.folder.live > .row .title::after {
+  content: ""; display: inline-block; width: 11px; height: 11px; margin-left: 6px; vertical-align: -1px;
+  background: var(--faint); mask: var(--i-live) center / contain no-repeat;
 }
+.row .rename {
+  flex: 1; min-width: 0; height: 22px; box-sizing: border-box;
+  margin-left: -6px; padding: 0 5px; /* the text stays exactly where the name was */
+  font: inherit; font-weight: var(--weight-strong); color: var(--text);
+  background: var(--selected); border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: var(--radius-small); outline: none; user-select: text;
+}
+
+/* Kept above, today's below: the thinnest line there is at any screen's sharpness. */
+.divider { height: 0; margin: 6px var(--row-inset); border-top: .5px solid var(--line); }
+
+/* An empty list says so once, quietly, where the first title would be. */
+#tabs:empty::before {
+  content: "No tabs"; display: block; padding: 6px var(--row-inset) 0 calc(var(--row-inset) + var(--indent));
+  color: var(--faint);
+}
+
+/* Spaces, at the bottom: one dot each, the active one in its full colour. */
+#spaces { flex: none; display: flex; justify-content: center; padding: 0 0 6px; }
 .space {
-  width: 30px; height: 30px; border-radius: var(--radius); border: 0;
+  width: 24px; height: 26px; border-radius: var(--radius-small); border: 0; padding: 0;
   background: none; display: grid; place-items: center; cursor: default;
+  transition: background-color var(--quick) var(--ease);
 }
-.space:hover { background: var(--hover); }
-.space .dot { width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--color) 45%, transparent); }
-.space.active .dot { background: var(--color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color) 30%, transparent); }
+.space .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: color-mix(in srgb, var(--color) 38%, transparent);
+  transition: background-color var(--quick) var(--ease), scale var(--quick) var(--ease);
+}
+.space:hover .dot { background: color-mix(in srgb, var(--color) 75%, transparent); scale: 1.15; }
+.space.active .dot { background: var(--color); scale: 1.15; }
 
-/* Tidier alone: the rest of what makes it the sidebar. */
-#space-name:empty, #actions { display: none; }
-#space-name { padding: 2px 8px 6px; font-weight: 600; color: var(--muted); font-size: 12px; }
-.alone #actions { display: flex; gap: 4px; padding-bottom: 6px; }
-#actions button {
-  border: 0; background: none; color: var(--muted); height: 28px; border-radius: var(--radius);
-  padding: 0 8px; font: inherit; text-align: left; cursor: default;
+/* Notices. */
+.notice {
+  flex: none; padding: 6px var(--row-inset); margin-bottom: 6px; border-radius: var(--radius);
+  background: var(--tile); color: var(--muted); font-size: var(--size-small); letter-spacing: 0;
 }
-#actions button:hover { background: var(--hover); color: var(--text); }
-#new-tab { flex: 1; }
-#new-folder { flex: none; width: 28px; text-align: center !important; padding: 0 !important; }
-.notice { padding: 6px 8px; margin-bottom: 6px; border-radius: var(--radius); background: var(--tile); color: var(--muted); font-size: 12px; }
 .notice[hidden], #menu[hidden] { display: none; }
-.notice button { width: 100%; border: 0; background: var(--selected); color: var(--text); padding: 6px; border-radius: 6px; font: inherit; }
-.row .sound { border: 0; background: none; width: 20px; height: 20px; padding: 0; font-size: 11px; line-height: 1; border-radius: 5px; }
-.row .sound:hover { background: var(--hover); }
-.row .count { color: var(--muted); font-size: 11px; }
-.row .rename { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--selected); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 4px; }
-.folder.live > .row .title::after { content: " ⟳"; color: var(--muted); }
-#menu {
-  position: fixed; z-index: 10; min-width: 140px; padding: 4px; border-radius: var(--radius);
-  background: Canvas; color: CanvasText; box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+/* A button and nothing else: no box around the box. */
+#hiding { padding: 0; background: none; }
+.notice button {
+  width: 100%; min-height: var(--row); border: 0; padding: 4px var(--row-inset); border-radius: var(--radius);
+  background: var(--selected); color: var(--text); font: inherit; text-align: left;
+  transition: background-color var(--quick) var(--ease);
 }
-#menu .item { display: block; width: 100%; border: 0; background: none; color: inherit; padding: 5px 8px; border-radius: 5px; text-align: left; font: inherit; }
+.notice button:hover { background: var(--selected-hover); }
+
+/* The small menu. */
+#menu {
+  position: fixed; z-index: 10; min-width: 140px; padding: 4px; border-radius: var(--radius-large);
+  background: var(--float); color: var(--text);
+  box-shadow: 0 0 0 .5px var(--float-edge), 0 6px 20px var(--float-shadow);
+  animation: menu-in var(--quick) var(--ease);
+}
+@keyframes menu-in { from { opacity: 0; translate: 0 -2px; } }
+#menu .item {
+  display: block; width: 100%; height: 26px; padding: 0 8px; border: 0;
+  border-radius: var(--radius-small); background: none; color: inherit;
+  text-align: left; font: inherit; white-space: nowrap;
+}
 #menu .item:hover { background: var(--hover); }
-.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
-.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
-.drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
-.cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+
+/* Dragging: a line where it would land, and a tint on what would take it. Tiles sit side
+ * by side, so theirs stands upright. The line lies across the gap between two rows. */
+.drop-before, .drop-after { position: relative; }
+.drop-before::before, .drop-after::after {
+  content: ""; position: absolute; z-index: 2; pointer-events: none;
+  left: var(--row-inset); right: var(--row-inset); height: 2px;
+  border-radius: 1px; background: var(--accent);
+}
+.drop-before::before { top: -1.5px; }
+.drop-after::after { bottom: -1.5px; }
+.tile.drop-before::before { top: 5px; bottom: 5px; left: -3px; right: auto; width: 2px; height: auto; }
+.drop-into { background: color-mix(in srgb, var(--accent) 14%, transparent) !important; border-radius: var(--radius); }
+
+/* Where the keys are. */
+.cursor { outline: 1.5px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -1.5px; }

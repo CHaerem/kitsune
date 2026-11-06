@@ -1,0 +1,93 @@
+/* What Tidier looks like, in one place: the sidebar, the settings page and whatever
+ * else it draws (a command bar) link this file first and take their colours, sizes and
+ * small icons from here. It sets nothing but these and the page's font.
+ *
+ * Colours of text and fills are see-through on purpose: the window behind them has a
+ * tint per space (userChrome.css, tidier.css), and a see-through colour takes on that
+ * tint by itself, where a solid grey would sit on it as a separate thing. */
+:root {
+  color-scheme: light dark;
+
+  /* The window's own colour (--zen-frame in userChrome.css). A sidebar cannot be
+   * transparent, so tidier.css in the dotfiles repeats it per space, keyed on
+   * html[data-space]. */
+  --frame: light-dark(#ececf0, #1f1f23);
+  /* A page of its own, not part of the window, such as the settings. */
+  --page: light-dark(#fafafb, #18181b);
+
+  /* The active space's colour, set by sidebar.js. The only colour Tidier adds to the
+   * window, and only on what is being acted on. */
+  --accent: #7a7a80;
+
+  /* Text, strongest to weakest: what is selected; what is open; what is resting;
+   * what only supports something else. */
+  --text: light-dark(rgba(22, 22, 28, .92), rgba(255, 255, 255, .90));
+  --text-soft: light-dark(rgba(22, 22, 28, .78), rgba(255, 255, 255, .74));
+  --muted: light-dark(rgba(22, 22, 28, .56), rgba(255, 255, 255, .48));
+  --faint: light-dark(rgba(22, 22, 28, .36), rgba(255, 255, 255, .30));
+
+  /* Fills. Selected is a lighter surface in both schemes, as if lifted a little. */
+  --hover: light-dark(rgba(22, 22, 28, .045), rgba(255, 255, 255, .05));
+  --selected: light-dark(rgba(255, 255, 255, .56), rgba(255, 255, 255, .095));
+  --selected-hover: light-dark(rgba(255, 255, 255, .72), rgba(255, 255, 255, .125));
+  --tile: light-dark(rgba(22, 22, 28, .035), rgba(255, 255, 255, .045));
+  --tile-hover: light-dark(rgba(22, 22, 28, .08), rgba(255, 255, 255, .095));
+  --line: light-dark(rgba(22, 22, 28, .09), rgba(255, 255, 255, .08));
+  --line-strong: light-dark(rgba(22, 22, 28, .22), rgba(255, 255, 255, .20));
+  --icon-edge: light-dark(rgba(22, 22, 28, .18), rgba(255, 255, 255, .18));
+
+  /* What floats above the rest: the small menu, a command bar. */
+  --float: light-dark(color-mix(in srgb, var(--frame) 22%, white), color-mix(in srgb, var(--frame) 90%, white));
+  --float-edge: light-dark(rgba(0, 0, 0, .07), rgba(255, 255, 255, .09));
+  --float-shadow: light-dark(rgba(0, 0, 0, .14), rgba(0, 0, 0, .45));
+
+  /* Type: one family, two sizes, two weights. No web font: this has to draw at once. */
+  --font: system-ui, -apple-system, sans-serif;
+  --size: 13px;
+  --size-small: 11.5px;
+  --leading: 1.35;
+  --weight-strong: 500;
+
+  /* Shape. */
+  --radius: 7px;
+  --radius-small: 5px;
+  --radius-large: 9px;
+
+  /* The grid: everything in the sidebar hangs on these. With the 8 px gutter the middle
+   * of an icon is 24 px in, under the middle of the address bar's first icon. */
+  --gutter: 8px;
+  --row: 28px;
+  --row-inset: 8px;
+  --icon: 16px;
+  --icon-gap: 8px;
+  --indent: 24px; /* an icon and its gap: a tab's icon sits under its folder's name */
+  --tile-height: 32px;
+  --tile-min: 34px;
+  --tile-gap: 4px;
+
+  /* Motion: short, and none at all for those who ask for none. */
+  --quick: .12s;
+  --slow: .25s;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+
+  /* Small icons, on a 16 px grid, drawn with `mask` so they take the text's colour. */
+  --i-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M8 3.5v9M3.5 8h9'/%3E%3C/svg%3E");
+  --i-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M4.5 4.5l7 7M11.5 4.5l-7 7'/%3E%3C/svg%3E");
+  --i-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  --i-folder-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 5A1.5 1.5 0 0 1 4 3.5h2.3l1.4 1.5H12a1.5 1.5 0 0 1 1.5 1.5v5a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5zM8 7.2v3.6M6.2 9h3.6'/%3E%3C/svg%3E");
+  --i-sound: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath fill='%23000' d='M2.5 6.3v3.4h2.2l3 2.6V3.7l-3 2.6z'/%3E%3Cpath d='M10.300 6a3 3 0 0 1 0 4M12 4.300a5.5 5.5 0 0 1 0 7.400'/%3E%3C/svg%3E");
+  --i-muted: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath fill='%23000' d='M2.5 6.3v3.4h2.2l3 2.6V3.7l-3 2.6z'/%3E%3Cpath d='M10.500 6.300l3 3.400M13.500 6.300l-3 3.400'/%3E%3C/svg%3E");
+  --i-live: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 8a5 5 0 1 1-1.5-3.5L13 6M13 2.5V6H9.5'/%3E%3C/svg%3E");
+  /* For a <select>, whose arrow cannot be masked; a grey that reads in both schemes. */
+  --i-select: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23888' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+
+  font: var(--size)/var(--leading) var(--font);
+  /* macOS's own apps set this size a little tighter than the font's natural spacing,
+   * which Firefox leaves as it is; and it would thicken light text on a dark ground. */
+  letter-spacing: -.006em;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --quick: 0s; --slow: 0s; }
+}

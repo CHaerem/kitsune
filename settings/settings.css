@@ -1,11 +1,66 @@
-:root { color-scheme: light dark; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
-body { max-width: 640px; margin: 32px auto; padding: 0 16px; }
-h1 { font-size: 22px; margin-bottom: 24px; }
-h2 { font-size: 15px; margin: 0 0 8px; }
-section { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); }
-.hint { color: color-mix(in srgb, CanvasText 60%, transparent); margin: 0 0 10px; }
-.notice { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, orange 18%, transparent); margin-bottom: 10px; }
-.line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+/* The settings page: the sidebar's quiet manners on a page of its own. Colours and sizes
+ * are in ../sidebar/tokens.css. No boxes and no lines: whitespace keeps the parts apart. */
+body { max-width: 540px; margin: 0 auto; padding: 56px 24px 64px; background: var(--page); color: var(--text); line-height: 1.5; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 36px; }
+h2 { font-size: var(--size); font-weight: 600; margin: 0 0 4px; }
+section { margin-bottom: 36px; }
+p { margin: 0 0 10px; color: var(--text-soft); }
+p:empty { display: none; }
+.hint { color: var(--muted); margin: 0 0 12px; }
+#version { color: var(--faint); font-size: var(--size-small); margin: 0; }
+.notice { padding: 8px 10px; border-radius: var(--radius); background: var(--tile); margin-bottom: 10px; }
+#notices:has(.notice) { margin-bottom: 26px; }
+ul, ol { margin: 0 0 12px; padding-left: 18px; color: var(--text-soft); }
+li { margin-bottom: 6px; }
+code { font: 12px ui-monospace, monospace; padding: 1px 4px; border-radius: 4px; background: var(--tile); }
+
+.line { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
 .line input[type=text] { flex: 1; min-width: 0; }
-button, input, select { font: inherit; }
+
+/* Fields and buttons: soft fills, no borders, nothing like a default form. */
+button, input, select { font: inherit; color: inherit; }
+input[type=text], input[type=number], select, button {
+  appearance: none; height: 28px; box-sizing: border-box; border: 0; border-radius: var(--radius);
+  background-color: var(--tile); outline: none;
+  transition: background-color var(--quick) var(--ease), box-shadow var(--quick) var(--ease);
+}
+input[type=text], input[type=number] { padding: 0 8px; }
+input[type=number] { width: 52px; margin-inline: 4px; text-align: center; -moz-appearance: textfield; }
+select { padding: 0 26px 0 8px; background-image: var(--i-select); background-repeat: no-repeat; background-position: right 6px center; background-size: 14px; }
+input::placeholder { color: var(--faint); }
+input[type=text]:hover, input[type=number]:hover, select:hover, button:hover { background-color: var(--tile-hover); }
+input[type=text]:focus, input[type=number]:focus, select:focus-visible, button:focus-visible {
+  background-color: var(--tile); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+button { padding: 0 12px; margin-right: 2px; }
+/* A button on a line of its own keeps its distance from what comes after it. */
+section > button, #move-back > button, #merge > button { margin-bottom: 8px; }
+input[type=checkbox] { accent-color: var(--accent); margin: 0 4px 0 0; }
+
+/* The names of the spaces look like text until you come to change them. */
+#spaces input[type=text] { background-color: transparent; }
+#spaces input[type=text]:hover { background-color: var(--tile); }
+#spaces input[type=text]:focus { background-color: var(--tile); }
+#spaces .line { margin-bottom: 0; gap: 4px; }
+#spaces .line > span { flex: none; width: 8px; height: 8px; border-radius: 50%; background: currentColor; font-size: 0; }
+
+/* Removing a rule: there when you come for it. */
+#rules .line { position: relative; }
+#rules button { position: absolute; right: -28px; width: 24px; padding: 0; margin: 0; background: none; color: var(--muted); opacity: 0; }
+#rules .line:hover button, #rules button:focus-visible { opacity: 1; }
+#rules button:hover { background-color: var(--tile); color: var(--text); }
+#add-rule { margin-top: 4px; }
+#merge { margin-bottom: 2px; }
+#merge-spaces { margin-bottom: 8px; }
+
+/* Choosing a file: the label is the button. The field itself says only "No file
+ * selected", and what came of it is said below once it has been read. */
+label:has(input[type=file]) {
+  display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: var(--radius);
+  background: var(--tile); color: var(--text); transition: background-color var(--quick) var(--ease);
+}
+label:has(input[type=file]):hover { background: var(--tile-hover); }
+label:has(input[type=file]:focus-visible) { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent); }
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
 [hidden] { display: none !important; }
