@@ -382,7 +382,8 @@ def folder_pull(m):
       const after = [moved && sbParent(b, moved) === id(folderOf(b, 2)), left && sbParent(a, left) === id(folderOf(a, 2))];
       const roles = [role(b, moved), role(a, left)];
       const sbData = (w, t) => { try { const d = JSON.parse(w.SessionStore.getCustomTabValue(t, "extension:%s:data") || "{}"); return [d.parentId, d.panelId?.slice(0, 4)]; } catch (e) { return null; } };
-      const around = (w, t) => t ? w.gBrowser.tabs.slice(Math.max(0, t._tPos - 3), t._tPos + 3).map(x => [x._tPos, id(x), x.label.slice(0, 18), sbData(w, x), x.openerTab ? id(x.openerTab) : null]) : null;
+      const around = (w, t) => { if (!t) return null; const ts = [...w.gBrowser.tabs], i = ts.indexOf(t), f = ts.indexOf(folderOf(w, 2));
+        return [f, i, ts.slice(Math.max(0, i - 3), i + 3).map(x => [ts.indexOf(x), id(x), x.label.slice(0, 18), sbData(w, x), x.openerTab ? id(x.openerTab) : null])]; };
       const diag = {movedId: moved && id(moved), folderB: id(folderOf(b, 2)), aroundB: around(b, moved), leftId: left && id(left), folderA: id(folderOf(a, 2))};
       a.focus(); await wait(500);
       return {before, after, roles, diag};""" % (SIDEBERY_ID, SIDEBERY_ID))
