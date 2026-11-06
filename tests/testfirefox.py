@@ -88,6 +88,8 @@ PAGES = {
     "/agent": AGENT_PAGE,
     # As when Firefox has filled in a saved password, in any container.
     "/agent-signin": """<title>Sign in</title><form onsubmit="event.preventDefault(); document.title = 'Signed in';"><input name="u" value="SECRET-USER"><input type="password" value="SECRET-PASSWORD"><button>Sign in</button></form>""",
+    # The same, in a closed shadow part of the page, with the button outside it.
+    "/agent-shadow": """<title>Shadow sign in</title><div id="host"></div><button onclick="document.title = 'Signed in';">Sign in</button><script>document.getElementById("host").attachShadow({mode: "closed"}).innerHTML = '<input type="password" value="SECRET-PASSWORD">';</script>""",
 }
 
 

@@ -618,7 +618,7 @@ async function claudeCopy(tabIds, windowId) {
     const page = await claudeRead(ids[0]);
     if (!page) return;
     await navigator.clipboard.writeText(claudePageText(page));
-    globalThis.say?.(windowId, page.text ? "Copied for Claude" : "Copied the title and address: the text can only be read from a loaded page, with reading pages allowed on the settings page");
+    globalThis.say?.(windowId, page.text ? "Copied for Claude" : "Copied only its title and address: it is not loaded, or reading pages is not allowed");
   } else if (ids.length) {
     const tabs = (await Promise.all(ids.map(id => claudeRead(id, { text: false })))).filter(Boolean);
     await navigator.clipboard.writeText(tabs.map(t => `- ${claudeLink(t)}`).join("\n") + "\n");

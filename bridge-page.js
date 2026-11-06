@@ -194,8 +194,14 @@ function pageTarget({ ref, selector, text }) {
 // Firefox fills in saved passwords in any container, so without this an agent could sign
 // in to your own account from its own space, never knowing the password, with one click
 // on Sign in (and a page could ask it to). An extension cannot turn that filling off.
-function pagePasswordFilled() {
-  return [...document.querySelectorAll("input[type=password]")].some(field => field.value !== "");
+// Also inside a web component's shadow part, which only an extension can look into when closed.
+function pagePasswordFilled(root = document) {
+  for (const el of root.querySelectorAll("*")) {
+    if (el.tagName.toUpperCase() === "INPUT" && el.type === "password" && el.value !== "") return true;
+    const inner = el.openOrClosedShadowRoot ?? el.shadowRoot;
+    if (inner && pagePasswordFilled(inner)) return true;
+  }
+  return false;
 }
 var PAGE_PASSWORD_FILLED = "A password is filled in on this page, so clicking and sending here is left to the person.";
 

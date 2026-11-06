@@ -1593,6 +1593,12 @@ def alone_bridge(m):
     title = json.loads(re.search(r"\n(\[.*\])\n", client.call("list_tabs")[0], re.S).group(1))
     check("so nothing was sent", not any(t["title"] == "Signed in" for t in title), str(title))
     client.call("close_tab", tab=signin)
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent-shadow")
+    signin = json.loads(text)["tab"]
+    client.call("wait_for", tab=signin, selector="button")
+    text, is_error, _ = client.call("click", tab=signin, selector="button")
+    check("nor with the password inside a closed part of the page", is_error and "left to the person" in text, text)
+    client.call("close_tab", tab=signin)
 
     # Refused: a tab in a space that is not open, also past the MCP server, straight on the socket.
     mine = m.js(H + """const t = main().gBrowser.selectedTab; return {context: t.userContextId, id: 0};""")
@@ -1724,11 +1730,15 @@ def alone_bridge(m):
     if m.can_restart:
         ext_page(m, "/settings/settings.html", """doc.getElementById("bridge-on").click(); await wait(800); return 1;""")
         check("on again", until(lambda: os.path.exists(sock)))
+        # (The test's own pages are closed first: restored unloaded, they could not be scripted.)
+        m.js(H + """for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (/\\/(settings|sidebar)\\/[a-z]+\\.html/.test(url(t))) w.gBrowser.removeTab(t); await wait(500); return 1;""")
         m.restart()
         m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(9000); return 1;""")
         check("on stays on across a restart", until(lambda: os.path.exists(sock), 15) and running())
         check("and works", not client.call("list_spaces")[1])
-        ext_page(m, "/settings/settings.html", """doc.getElementById("bridge-on").click(); await wait(800); return 1;""")
+        r = ext_page(m, "/settings/settings.html", """const on = doc.getElementById("bridge-on"); for (let i = 0; i < 50 && !on.checked; i++) await wait(100);
+          const was = on.checked; on.click(); await wait(800); return was;""")
+        check("the settings page shows it on, after a restart", r is True, str(r))
         check("off again", until(lambda: not os.path.exists(sock) and not running(), 5))
     client.close()
     # What the agent left, so the rest sees the same tabs as before.
