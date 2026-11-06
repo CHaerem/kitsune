@@ -25,12 +25,22 @@ const busy = new Set();
 // Tab ID -> key, so we know which essential a closed tab was.
 const keyByTab = new Map();
 
-const getList = () => essentialsList.get();
-// Each space's essentials together, in the order the spaces first appear
-// (bySpace, tabsync.js): Sidebery shows pinned tabs by space, and when
-// Firefox starts it moves them so that each space's are together, which
-// would reorder essentials kept apart.
-const setList = list => essentialsList.set(bySpace(list, e => e.cookieStoreId));
+// Each space's essentials are kept together, the spaces in the order they
+// already have in the list: Sidebery shows pinned tabs by space, and when
+// Firefox starts it moves them so that each space's are together, in its
+// order of spaces, which would otherwise reorder the essentials.
+let spaceOrder = null; // containers, in the order of their essentials in the list
+async function getList() {
+  const list = await essentialsList.get();
+  if (!spaceOrder) spaceOrder = [...new Set(list.map(e => e.cookieStoreId))];
+  return list;
+}
+function setList(list) {
+  const order = [...new Set([...(spaceOrder || []), ...list.map(e => e.cookieStoreId)])];
+  const grouped = [...list].sort((a, b) => order.indexOf(a.cookieStoreId) - order.indexOf(b.cookieStoreId));
+  spaceOrder = [...new Set(grouped.map(e => e.cookieStoreId))];
+  essentialsList.set(grouped);
+}
 
 function tagTab(tabId, key) {
   keyByTab.set(tabId, key);
@@ -82,6 +92,9 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
   try {
     await settle(tabs);
     await pinEssentialCopies(tabs);
+    // Created unpinned, they could not be put among the pinned tabs, and
+    // pinning puts each last: now each goes to its place in the list.
+    await sortEssentials(windowId, await getList());
   } finally {
     setTimeout(() => tabs.forEach(({ tab }) => busy.delete(tab.id)), 1500);
   }
