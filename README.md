@@ -189,8 +189,8 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
 - Moving a tab into or out of a folder is copied to the other windows, but
   not moving it elsewhere: Sidebery gives a tab another extension moves the
   space of the tab it lands next to, so moving ghosts around could change
-  their space. Where the tab is live, in a window you are not using, it stays
-  where it was there. A new window takes the order of the window with the
+  their space. Where the tab is live or selected, in a window you are not
+  using, it stays where it was there. A new window takes the order of the window with the
   most tabs.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
