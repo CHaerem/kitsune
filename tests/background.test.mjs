@@ -1357,3 +1357,17 @@ test("an unloaded essential dragged to a window arrives once, also if it looks u
   }
   x.kill();
 });
+
+test("a tab closed in the moment it is registered gets no ghosts", async () => {
+  for (const delay of [1500, 1502, 1504, 1506, 1508, 1510, 1512, 1514, 1516, 1520, 1525, 1530, 1540]) {
+    const { ff, x, windows: [a, b] } = await chaosStart({ seed: delay });
+    const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+    await ff.clock.run(delay);
+    const url = t.url;
+    ff.closeTab(t.id);
+    await ff.clock.idle(60000);
+    assert.deepEqual(ff.list(b.id).filter(y => y.url.includes("ghost.html")).map(y => y.url), [], `closed after ${delay} ms`);
+    assert.deepEqual(Object.values(ff.synced ?? {}).filter(e => e.url === url), [], `closed after ${delay} ms`);
+    x.kill();
+  }
+});

@@ -410,6 +410,8 @@ async function register(tabId) {
   noteSaved(all);
   saveSynced(all);
   await setRole(tab.id, key, entry.group ? "copy" : "live");
+  // Closed just now, by you: its close told nothing, since it had no key yet. No ghosts for it.
+  if (!syncKeyByTab.has(tab.id)) { delete all[key]; saveSynced(all); return; }
   const tabs = await browser.tabs.query({});
   for (const w of await normalWindows()) {
     if (w.id === tab.windowId) continue;
