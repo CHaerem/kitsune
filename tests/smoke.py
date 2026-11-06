@@ -807,8 +807,11 @@ def restart(m):
 # The windows whose essentials (pinned tabs) are not together by space, with
 # the containers of their pinned tabs in order.
 PINS_APART = """
-  return wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => t.userContextId))
-    .filter(cs => !cs.every((c, i) => i === 0 || c === cs[i - 1] || !cs.slice(0, i).includes(c)));"""
+  const apart = cs => !cs.every((c, i) => i === 0 || c === cs[i - 1] || !cs.slice(0, i).includes(c));
+  const ws = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => t.userContextId + ":" + (ek(w, t) || "-").slice(0, 4)));
+  if (!ws.some(cs => apart(cs.map(c => c.split(":")[0])))) return null;
+  const list = (await storage("%s", ["essentials"])).essentials.map(e => e.cookieStoreId.slice(-1) + ":" + e.key.slice(0, 4));
+  return {windows: ws, list};""" % EXT_ID
 apart_after = []
 
 
