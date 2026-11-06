@@ -1649,7 +1649,8 @@ def alone_drag_details(m):
       const known = new Set(plainTabs().map(r => r.dataset.tab));
       send({type: "newTab", space});
       await until(() => plainTabs().some(r => !known.has(r.dataset.tab)));
-      const bare = plainTabs().find(r => !known.has(r.dataset.tab)), web = plainTabs()[0];
+      const bareId = plainTabs().find(r => !known.has(r.dataset.tab)).dataset.tab, bareRow = () => plainTabs().find(r => r.dataset.tab === bareId);
+      const bare = bareRow(), web = plainTabs()[0];
       start(bare);
       out.bareTile = over(tileEls()[0], .25);
       out.bareSpace = over(doc.querySelector(".space:not(.active)"));
@@ -1657,13 +1658,23 @@ def alone_drag_details(m):
       out.bareInFolder = over(inside, .5, .2);
       out.bareAmong = over(web, .5, .2);
       end(bare);
+      // Pinned, as Firefox's own menu can: a tile with no essential behind it, so no place among them.
+      send({type: "pin", tabId: Number(bareId), pinned: true});
+      await until(() => !bareRow());
+      const bareTile = doc.querySelector(`#essentials .tile[data-tab="${bareId}"]`);
+      start(bareTile);
+      out.bareAmongTiles = over(tileEls()[0], .25);
+      out.bareToList = over(list, .5, .999);
+      end(bareTile);
+      send({type: "pin", tabId: Number(bareId), pinned: false});
+      await until(() => bareRow());
       // A tab dropped right above it lands there, not past it at the end.
       out.aboveBare = {want: Number(web.dataset.tab)};
-      start(web); drop(bare, .5, .2); end(web);
-      await until(() => plainTabs().indexOf(web) === plainTabs().indexOf(bare) - 1);
-      out.aboveBare.got = Number(plainTabs()[plainTabs().indexOf(bare) - 1]?.dataset.tab);
-      send({type: "close", tabId: Number(bare.dataset.tab)});
-      await until(() => !bare.isConnected);
+      start(web); drop(bareRow(), .5, .2); end(web);
+      await until(() => plainTabs().indexOf(web) === plainTabs().indexOf(bareRow()) - 1);
+      out.aboveBare.got = Number(plainTabs()[plainTabs().indexOf(bareRow()) - 1]?.dataset.tab);
+      send({type: "close", tabId: Number(bareId)});
+      await until(() => !bareRow());
       start(inside); drop(plainTabs()[0], .5, .2); end(inside);
       await until(() => !h1.parentElement.querySelector(".tab"));
       for (const h of [h1, h2, h3]) send({type: "deleteFolder", key: h.dataset.folderHead});
@@ -1677,6 +1688,7 @@ def alone_drag_details(m):
     check("a tab in a live folder has no place among the other tabs", r["liveToRow"] == [False] and r["liveToFolder"] == [False] and r["liveToEnd"] == [False], str(r))
     check("a new tab page has no mark on an essential, a space or a folder, only among the tabs",
           r["bareTile"] == [False] and r["bareSpace"] == [False] and r["bareFolder"] == [False] and r["bareInFolder"] == [False] and r["bareAmong"][0] is True, str(r))
+    check("and pinned it has no place among the essentials, only the way back", r["bareAmongTiles"] == [False] and r["bareToList"] == [True, "drop-into"], str(r))
     check("a tab dropped right above a new tab page lands there", r["aboveBare"]["got"] == r["aboveBare"]["want"], str(r))
 
     def essentials_here():
@@ -1801,7 +1813,8 @@ def alone_drag_details(m):
     check("a space's first essential is dropped on the space's name, where the grid would be", r["over"] == [True, "drop-into"] and r["placed"] is True and r["tiles"] == r["want"], str(r))
     r = m.js(H + """for (let i = 0; i < 100 && wins().some(w => !w.gBrowser.tabs.some(t => t.pinned && t.userContextId === 4)); i++) await wait(50);
       const copies = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned && t.userContextId === 4).map(t => !!ek(w, t)));
-      main().gBrowser.unpinTab(main().gBrowser.tabs.find(t => t.pinned && t.userContextId === 4));
+      const tile = main().gBrowser.tabs.find(t => t.pinned && t.userContextId === 4);
+      if (tile) main().gBrowser.unpinTab(tile);
       await wait(3000);
       await removeWhere((w, t) => t.userContextId === 4);
       return copies;""")
@@ -1899,6 +1912,7 @@ def alone_drag_details(m):
         fast = rate()
         check("with the pointer resting at the bottom edge the list goes on scrolling, faster the closer", 0 < slow and slow * 2 < fast, f"{slow} {fast}")
         r1 = here("""await until(() => list.scrollTop >= list.scrollHeight - list.clientHeight - 1);
+          await wait(300); // the last step or two
           return {top: list.scrollTop, marks: document.querySelectorAll(".drop-before, .drop-after").length};""")
         # More to scroll, with the pointer still there and no new dragover: nothing keeps it running at the end.
         r1b = here("""const a = list.scrollTop; list.style.paddingBottom = "600px"; await wait(500); const b = list.scrollTop; list.style.paddingBottom = ""; await wait(100); return [a, b];""")

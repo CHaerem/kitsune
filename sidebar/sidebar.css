@@ -128,4 +128,5 @@ body {
 .drop-left::after { left: -4px; }
 .drop-right::after { right: -4px; }
 .drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
+#space-name.drop-into { outline-offset: 1px; } /* its text sits close to its top */
 .cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }

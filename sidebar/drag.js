@@ -22,11 +22,11 @@ function startDrag(e, what) {
   e.dataTransfer.setData("text/plain", ""); // Firefox starts no drag without data
   e.stopPropagation();
 }
-addEventListener("dragend", () => { dragging = null; settle(); });
+addEventListener("dragend", () => { dragging = null; settleDrag(); });
 // Past the sidebar's edge a drop does nothing here, and no more dragover comes to take
 // the mark away. (A leave with no next element is the leaving of the page itself.)
-addEventListener("dragleave", e => { if (!e.relatedTarget) settle(); });
-const settle = () => { marks(); scrollList(0); };
+addEventListener("dragleave", e => { if (!e.relatedTarget) settleDrag(); });
+const settleDrag = () => { marks(); dragScroll(0); };
 
 const MARKS = ["drop-before", "drop-after", "drop-left", "drop-right", "drop-into"];
 const MARKED = MARKS.map(c => "." + c).join();
@@ -46,7 +46,7 @@ const draggedNow = () => kept.get(dragging.kind === "folder" ? "folder:" + dragg
 port.onMessage.addListener(() => {
   if (!dragging || draggedNow()) return;
   dragging = null;
-  settle();
+  settleDrag();
 });
 
 // --- The list scrolls at its edges ------------------------------------------------
@@ -56,10 +56,12 @@ port.onMessage.addListener(() => {
 // it took one step and no more, however long a drag was held there. So this does it: it
 // goes on while the pointer rests there, faster the closer to the edge, and exists only
 // during a drag. It ends by itself at the list's end, so nothing can keep it going.
+// (A timer: requestAnimationFrame stopped for seconds on end during a drag in the test
+// Firefox, with the page in view. The picture follows at its own pace either way.)
 const EDGE_ZONE = 40, EDGE_SPEED = 900; // how near the edge in pixels, and pixels a second at the edge
-let scrolling = null; // { speed, frame, last, carry }
+let dragScrolling = null; // { speed, timer, last, carry }
 
-function edgeSpeed(e) {
+function dragEdgeSpeed(e) {
   const list = document.getElementById("tabs");
   // An essential has no place in the list to be scrolled to: anywhere there unpins it.
   if (!dragging || dragging.kind === "essential" || !list.contains(e.target)) return 0;
@@ -70,28 +72,29 @@ function edgeSpeed(e) {
   return (fromTop < fromBottom ? -1 : 1) * EDGE_SPEED * (.1 + .9 * closeness * closeness);
 }
 
-function scrollList(speed) {
+function dragScroll(speed) {
   if (!speed) {
-    if (scrolling) cancelAnimationFrame(scrolling.frame);
-    scrolling = null;
-  } else if (scrolling) {
-    scrolling.speed = speed;
+    clearInterval(dragScrolling?.timer);
+    dragScrolling = null;
+  } else if (dragScrolling) {
+    dragScrolling.speed = speed;
   } else {
-    scrolling = { speed, last: performance.now(), carry: 0, frame: requestAnimationFrame(scrollStep) };
+    dragScrolling = { speed, last: performance.now(), carry: 0, timer: setInterval(dragScrollStep, 16) };
   }
 }
 
-function scrollStep(now) {
-  const list = document.getElementById("tabs"), was = list.scrollTop;
-  // By the time passed, as a sidebar has no fixed frame rate, and in whole pixels, as a
-  // small fraction added to scrollTop would be rounded away and never add up.
-  scrolling.carry += scrolling.speed * Math.max(now - scrolling.last, 0) / 1000;
-  scrolling.last = now;
-  const step = Math.trunc(scrolling.carry);
-  scrolling.carry -= step;
+function dragScrollStep() {
+  if (!dragging) { dragScroll(0); return; } // however the drag ended (selection.js ends it too)
+  const list = document.getElementById("tabs"), was = list.scrollTop, now = performance.now();
+  // By the time passed, as a busy machine has no fixed pace (but no leap after a stall,
+  // which would lose your place), and in whole pixels, as a small fraction added to
+  // scrollTop would be rounded away and never add up.
+  dragScrolling.carry += dragScrolling.speed * Math.min(now - dragScrolling.last, 100) / 1000;
+  dragScrolling.last = now;
+  const step = Math.trunc(dragScrolling.carry);
+  dragScrolling.carry -= step;
   list.scrollTop = was + step;
-  if (step && list.scrollTop === was) scrolling = null; // the end of the list
-  else scrolling.frame = requestAnimationFrame(scrollStep);
+  if (step && list.scrollTop === was) dragScroll(0); // the end of the list
 }
 
 // The place among the essentials under the pointer. They are a grid, so a tile's left
@@ -128,8 +131,10 @@ function dropAt(e) {
   }
   // A new tab page or the like: no space can open it and no essential or folder can keep
   // it (moveToSpace, onPinned and moveTab go by the address), so it only has a place among
-  // the ordinary tabs. Such a tab is never in a folder, so this looks at the loose ones.
-  if (dragging.kind === "tab" && view.tabs.some(i => i.id === dragging.tabId && !i.page) && (!t.closest("#tabs") || t.dataset.folderHead || t.dataset.folder)) return null;
+  // the ordinary tabs. Such a tab is never in a folder, so only the loose ones are looked
+  // at. Pinned from Firefox's own menu it has a tile, but no place among the essentials.
+  const bare = [...view.essentials, ...view.tabs].some(i => i.id === dragging.tabId && !i.page);
+  if (bare && (!t.closest("#tabs") || (dragging.kind === "tab" && (t.dataset.folderHead || t.dataset.folder)))) return null;
   // With no essentials the grid takes no room, and the space's name is where it would be.
   if (t.id === "space-name") {
     if (dragging.kind !== "tab" || document.querySelector("#essentials .tile")) return null;
@@ -179,12 +184,12 @@ function nextTab(t) {
 addEventListener("dragover", e => {
   const drop = dropAt(e);
   marks(drop?.target, drop?.cls);
-  scrollList(edgeSpeed(e));
+  dragScroll(dragEdgeSpeed(e));
   if (drop) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
 });
 addEventListener("drop", e => {
   const drop = dropAt(e);
-  settle();
+  settleDrag();
   dragging = null;
   if (drop) { e.preventDefault(); send(drop.msg); }
 });
