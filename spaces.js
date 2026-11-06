@@ -80,6 +80,7 @@ async function lastUsedIn(windowId, space, exceptId) {
 // Switching: back to the tab you used last in that space, else a new tab there.
 async function switchSpace(windowId, space) {
   const last = await lastUsedIn(windowId, space);
+  if (activeSpace.get(windowId) !== space) await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {});
   activeSpace.set(windowId, space); // before the tab is selected, so onActivated agrees
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
   else if (tidierAlone) await createTab({ windowId, cookieStoreId: space });
@@ -255,9 +256,11 @@ async function startSpaces() {
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
     const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
+    // The selected tab decides the space, also now: what is stored can be behind it.
+    const active = tabs.find(t => t.active);
+    if (active && active.cookieStoreId !== NO_CONTAINER) activeSpace.set(w.id, active.cookieStoreId);
     const space = await spaceOf(w.id, tabs, await spaceList(used));
     await showSpace(w.id);
-    const active = tabs.find(t => t.active);
     if (active && active.cookieStoreId === space) await setSuccessor(active);
   }
 }

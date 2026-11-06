@@ -1057,3 +1057,22 @@ test("a tab closed as its new window opens does not leave the window empty", asy
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("the space you switched to is kept, and an update shows the selected tab's space", async () => {
+  const ff = new FakeFirefox();
+  const C2 = "firefox-container-2";
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/", { cookieStoreId: C2 }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const inTwo = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C2 }, { syncKey: "b", syncRole: "live" });
+  const x = await alone(ff);
+  const stored = {};
+  x.b.sessions.setWindowValue = async (id, k, v) => { stored[k] = v; };
+  await x.js(`switchSpace(${w.id}, "${C2}")`);
+  assert.equal(stored.space, C2, "the switch is stored with the window");
+  // An update: a new background page, with what is stored behind the selected tab.
+  const y = await (async () => { const n = ff.boot(); n.b.sessions.getWindowValue = async () => C1; n.b.runtime.onInstalled.fire({ reason: "update" }); await wait(3500); return n; })();
+  assert.equal(y.js(`activeSpace.get(${w.id})`), C2);
+  assert.equal(ff.tabs.get(inTwo.id).hidden, false);
+  y.kill();
+});
