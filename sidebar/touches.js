@@ -13,23 +13,23 @@
 
   const iconOf = id => (kept.get("tab:" + id) ?? kept.get("tile:" + id))?.querySelector("img, .letter");
 
-  function markSlow(id) {
+  const markSlow = id => {
     const icon = iconOf(id);
     if (!icon || icon.classList.contains("slow-load")) return;
     icon.classList.add("slow-load");
     // A new icon goes on from where the old one was, instead of jumping back to bright.
     for (const animation of icon.getAnimations()) animation.startTime = slowSince.get(id);
-  }
+  };
 
   // Back to bright, softly. Not with a CSS transition on the icon: when an animation ends,
   // Firefox runs that from bright down to the last breathing value, and then jumps (seen in 158).
-  function unmarkSlow(id) {
+  const unmarkSlow = id => {
     const icon = iconOf(id);
     if (!icon?.classList.contains("slow-load")) return; // out of sight, or drawn anew at this moment
     const from = getComputedStyle(icon).opacity;
     icon.classList.remove("slow-load");
     if (!matchMedia("(prefers-reduced-motion: reduce)").matches) icon.animate({ opacity: [from, 1] }, BRIGHTEN_MS);
-  }
+  };
 
   // Runs after render(), which listens first, so the icons here are the ones just drawn.
   port.onMessage.addListener(({ loading: list }) => {
