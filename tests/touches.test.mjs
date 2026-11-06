@@ -108,6 +108,50 @@ test("a tab's own icon first, then the record's, then none for the letter; also 
   x.kill();
 });
 
+// Firefox drops a tab's icon when a new page comes in, and a page may have none at all.
+test("a page with no icon keeps the record's on the same site, and has none of another site's", async () => {
+  const icon = "https://a.example/favicon.ico";
+  const store = () => ({ syncedTabs: { k: { url: "https://a.example/", title: "A", icon, cookieStoreId: C1, parentKey: null, group: false, added: 1 } } });
+  const tabs = [[{ url: "https://a.example/", title: "A", favIconUrl: icon, active: true }, { syncKey: "k", syncRole: "live" }]];
+  const iconNow = async (x, w) => flat(await viewOf(x, w))[0].icon;
+  const go = async (ff, t, url, title) => { delete t.favIconUrl; ff.navigate(t.id, url, title); await wait(1000); };
+
+  let { ff, x, w, made } = await started(tabs, { store: store() });
+  await go(ff, made[0], "https://www.a.example/page", "Same site");
+  assert.equal(await iconNow(x, w), icon, "the same site, as far as a person can tell");
+  // As Firefox does it: the new page's first title comes while the tab still has the old icon.
+  Object.assign(made[0], { url: "https://b.example/", title: "b.example/", status: "loading" });
+  x.b.tabs.onUpdated.fire(made[0].id, { title: made[0].title }, ff.snap(made[0]));
+  await wait(500);
+  assert.equal((await x.js("getSynced()")).k.icon, undefined, "not taken for the new page's");
+  await go(ff, made[0], "https://b.example/", "Another site");
+  assert.equal(await iconNow(x, w), null, "the old site's icon says something untrue");
+  assert.equal((await x.js("getSynced()")).k.icon, undefined, "its placeholders read the record");
+  made[0].favIconUrl = "https://b.example/favicon.ico";
+  x.b.tabs.onUpdated.fire(made[0].id, { favIconUrl: made[0].favIconUrl }, ff.snap(made[0]));
+  await wait(1000);
+  assert.equal(await iconNow(x, w), made[0].favIconUrl);
+  assert.equal((await x.js("getSynced()")).k.icon, made[0].favIconUrl);
+  x.kill();
+
+  // With the setting off the record is left as it always was.
+  ({ ff, x, w, made } = await started(tabs, { store: store(), alone: false }));
+  await go(ff, made[0], "https://b.example/", "Another site");
+  assert.equal((await x.js("getSynced()")).k.icon, icon);
+  x.kill();
+});
+
+test("a placeholder comes to hear of it, also when only the icon has changed", async () => {
+  const icon = "https://a.example/favicon.ico";
+  const store = { syncedTabs: { k: { url: "https://a.example/", title: "Same title", icon, cookieStoreId: C1, parentKey: null, group: false, added: 1 } } };
+  const { ff, x, made } = await started([[{ url: "https://a.example/", title: "Same title", favIconUrl: icon, active: true }, { syncKey: "k", syncRole: "live" }]], { store });
+  delete made[0].favIconUrl;
+  ff.navigate(made[0].id, "https://b.example/", "Same title");
+  await wait(500);
+  assert.equal(x.js("refreshTimers.has('k')"), true);
+  x.kill();
+});
+
 // --- Loading -----------------------------------------------------------------------------
 test("a placeholder never counts as loading, nor does a discarded tab", async () => {
   const { x } = await started([[{ url: "https://site.example/", active: true }]]);
@@ -252,6 +296,31 @@ test("a tab out of sight gets its sign when it comes back, and one that finished
   assert.equal(two.classList.contains("slow-load"), false);
 });
 
+test("a second load waits its own half second, and nothing is kept of the first", () => {
+  const p = page(), icon = p.add(1);
+  p.view([1]);
+  p.pass(500);
+  p.pass(1000);
+  p.view([]);
+  p.view([1]);
+  assert.equal(icon.classList.contains("slow-load"), false, "a fast second load shows nothing either");
+  p.pass(500);
+  assert.equal(icon.classList.contains("slow-load"), true);
+  assert.equal(icon.animation.startTime, 2000, "from its own start, not settled at once");
+});
+
+test("an icon drawn anew just as the load ends brightens too, instead of jumping", () => {
+  const p = page(), first = p.add(1);
+  p.view([1]);
+  p.pass(500);
+  const second = p.add(1); // the page's last title came with the end of the load
+  p.view([]);
+  assert.equal(second.classList.contains("slow-load"), false);
+  assert.equal(second.faded.length, 1);
+  assert.ok(second.faded[0][0][0] < 1 && second.faded[0][0][1] === 1, JSON.stringify(second.faded));
+  assert.equal(first.faded.length, 0);
+});
+
 test("a tile shows the sign too", () => {
   const p = page(), icon = p.add(5, "tile");
   p.view([5]);
@@ -259,13 +328,26 @@ test("a tile shows the sign too", () => {
   assert.equal(icon.classList.contains("slow-load"), true);
 });
 
+// Also what a page asks for by itself: with the setting off this sidebar is as it was.
+test("what stands still for less motion does so only with Tidier alone", () => {
+  const css = readFileSync(new URL("../sidebar/sidebar.css", import.meta.url), "utf8");
+  const block = css.match(/@media \(prefers-reduced-motion: reduce\) \{([^}]*\})/)[1];
+  const selector = block.slice(0, block.indexOf("{")).trim();
+  for (const one of selector.split(",")) assert.match(one.trim(), /^\.alone\b/, one);
+});
+
 test("with less motion asked for, the sign goes without a fade", () => {
   const p = page({ reduced: true }), icon = p.add(1);
   p.view([1]);
   p.pass(500);
+  const drawnAnew = p.add(2);
+  p.view([2]);
+  p.pass(500);
+  p.add(2);
   p.view([]);
   assert.equal(icon.classList.contains("slow-load"), false);
   assert.equal(icon.faded.length, 0);
+  assert.equal(drawnAnew.faded.length, 0);
 });
 
 test("a warm-up once for each time the pointer comes to a tab, only a loaded one that is not showing", () => {

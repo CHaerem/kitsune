@@ -73,7 +73,7 @@ body {
 /* Asked for less motion, in the system's settings: everything stands still, and a slow
  * load is only dimmed, as an unloaded tab's icon is. For whatever moves in this sidebar. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .alone, .alone *, .alone *::before, .alone *::after { animation: none !important; transition: none !important; }
   .slow-load { opacity: .55; }
 }
 

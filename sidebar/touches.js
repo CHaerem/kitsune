@@ -8,6 +8,7 @@
   // state changes, which would replace the icon as a load starts and ends. (A title that
   // arrives during the load still does, so a new icon gets the class back below.)
   const SLOW_LOAD_MS = 500, BRIGHTEN_MS = 300;
+  const HALFWAY = .7; // between the sign's bright and dim
   const loadTimers = new Map(); // tabId -> timer, while it may still turn out fast
   const slowSince = new Map(); // tabId -> when its icon started breathing
 
@@ -23,10 +24,12 @@
 
   // Back to bright, softly. Not with a CSS transition on the icon: when an animation ends,
   // Firefox runs that from bright down to the last breathing value, and then jumps (seen in 158).
+  // An icon drawn anew by this very view (a page's last title often comes with the end of its
+  // load) has no breathing to go on from, and would jump to bright without this.
   const unmarkSlow = id => {
     const icon = iconOf(id);
-    if (!icon?.classList.contains("slow-load")) return; // out of sight, or drawn anew at this moment
-    const from = getComputedStyle(icon).opacity;
+    if (!icon) return; // out of sight
+    const from = icon.classList.contains("slow-load") ? getComputedStyle(icon).opacity : HALFWAY;
     icon.classList.remove("slow-load");
     if (!matchMedia("(prefers-reduced-motion: reduce)").matches) icon.animate({ opacity: [from, 1] }, BRIGHTEN_MS);
   };

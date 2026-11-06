@@ -46,6 +46,16 @@ let started = false;             // tab sync waits for startup before reacting
 const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
 const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); };
+// The icon a record keeps. Firefox drops a tab's icon as a new page comes in, and a page
+// may have none: on the same site the one the record has is still right, and keeps a row
+// from showing a letter meanwhile. On another site it is the old site's, which a placeholder
+// and the row would show as this page's; and the new page's first title comes while the tab
+// itself still has the old icon, so that one says nothing either. (With Sidebery every commit
+// reaches the daily browser, so there the record stays as it was.)
+const keptIcon = (entry, tab) => {
+  if (!tidierAlone || sameSite(entry.url, tab.url)) return tab.favIconUrl || entry.icon;
+  return tab.favIconUrl !== entry.icon ? tab.favIconUrl : undefined;
+};
 // Sidebery adds a channel suffix ("~!...!~") to group URLs; strip it when copying.
 // (Ghost placeholder URLs come from ghostUrl() in common.js.)
 const groupBaseUrl = url => url.replace(/~!.*!~$/, "");
@@ -342,7 +352,7 @@ async function reconcileAll() {
       const keep = live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
       // Keep title and icon current (older entries have no icon).
-      if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keep.favIconUrl || all[key].icon });
+      if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keptIcon(all[key], keep) });
       for (const t of live) if (t.id !== keep.id) await setRole(t.id, key, "ghost");
     }
     for (const w of wins) {
@@ -406,7 +416,7 @@ async function reopenedSaved(tab, all) {
     await browser.tabs.remove(t.id).catch(() => {});
   }
   await forgetClosedPlaceholders("ghost", [key]);
-  if (isWeb(tab.url)) Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
+  if (isWeb(tab.url)) Object.assign(entry, { url: tab.url, title: tab.title, icon: keptIcon(entry, tab) });
   saveSynced(all);
   return true;
 }
@@ -555,7 +565,7 @@ async function pull(ghostId) {
     await forgetClosedPlaceholders("ghost", [key]);
     if (entry) {
       // A never-loaded live tab is still a placeholder page; keep the real URL then.
-      if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: live.favIconUrl || entry.icon });
+      if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: keptIcon(entry, live) });
       saveSynced(all);
       // The old window gets a ghost where the live tab was.
       const opener = fromOpener !== undefined && (await browser.tabs.get(fromOpener).catch(() => null));
@@ -702,10 +712,11 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       const all = await getSynced();
       const entry = all[key];
       if (!entry || !isWeb(tab.url)) return;
-      const changed = entry.title !== tab.title || (tab.favIconUrl && entry.icon !== tab.favIconUrl);
+      const icon = keptIcon(entry, tab);
+      const changed = entry.title !== tab.title || entry.icon !== icon;
       const moved = entry.url !== tab.url;
       if (!changed && !moved) return;
-      Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
+      Object.assign(entry, { url: tab.url, title: tab.title, icon });
       // On its saved address, a saved tab's saved title and icon follow the page.
       if (entry.saved?.url === tab.url) Object.assign(entry.saved, { title: tab.title, icon: tab.favIconUrl || entry.saved.icon });
       noteSaved(all, [key]);
