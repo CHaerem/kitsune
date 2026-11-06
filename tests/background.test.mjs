@@ -1392,3 +1392,22 @@ test("a window reopened while Tidier is starting is taken back, not doubled", as
   assert.equal(ff.list(back.id).filter(t => ff.values.get(t.id)?.syncKey === "b").length, 1);
   x.kill();
 });
+
+test("in the moment after an update Tidier alone knows it is alone", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  const a = ff.addWindow({ focused: true }), b = ff.addWindow();
+  ff.addTab(a.id, { url: "about:home", active: true });
+  ff.addTab(b.id, { url: "about:home", active: true });
+  ff.boot().b.runtime.onInstalled.fire({ reason: "install" });
+  await ff.clock.run(3000);
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  const x = ff.update();
+  await ff.clock.run(100);
+  ff.pinTab(t); // before Tidier has started again
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://e.example/"], "it stays an essential");
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "with a copy in the other window");
+  x.kill();
+});

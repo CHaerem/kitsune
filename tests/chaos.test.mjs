@@ -45,6 +45,7 @@ class World {
     this.excused = new Set();    // keys you did away with
     this.essentials = new Map(); // essential key -> its address
     this.goneEssentials = new Set();
+    this.closedAddresses = new Set();
     this.relaxed = false;        // a folder page closed in one window: that window lacks tabs until it is filled again
     this.violations = [];
     this.x = null;
@@ -81,7 +82,11 @@ class World {
   // You closed `t`, or are about to.
   async closing(t) {
     const key = this.value(t, "syncKey") ?? this.x.js("syncKeyByTab").get(t.id), all = await this.read("getSynced()");
-    if (!key) return;
+    if (!key) {
+      // Just being registered, perhaps: then it is only known by its address.
+      this.closedAddresses.add(t.url);
+      return;
+    }
     const e = all[key];
     const inFolder = inFolderOf(all, key);
     const unloaded = t.discarded || isPlaceholder(t.url);
@@ -482,7 +487,7 @@ async function check(W, phase, { strong }) {
   const addresses = new Set([...Object.values(all).flatMap(e => [e.url, e.saved?.url].filter(Boolean)), ...W.essentials.values()]);
   for (const [key, k] of W.known) {
     if (W.excused.has(key) || all[key] || (k.group && !W.alone)) continue;
-    if ([...k.urls].some(u => addresses.has(u))) continue;
+    if ([...k.urls].some(u => addresses.has(u) || W.closedAddresses.has(u))) continue;
     bad("lost", `${key} (${[...k.urls].join(" ")}${k.saved ? ", saved" : ""}${k.group ? ", folder" : ""}) is gone`);
   }
   const listed = new Set(list.map(e => e.key));

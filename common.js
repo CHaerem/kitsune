@@ -53,6 +53,9 @@ async function readAlone() {
   const local = await browser.storage.local.get("tidierAlone");
   tidierAlone = !!(managed.tidierAlone ?? local.tidierAlone);
 }
+// First in the queue: Tidier starts a moment after its page loads, and a job in that moment
+// (a tab you pinned, say) would otherwise work as if Sidebery were there.
+serial(readAlone);
 
 // Something you should know and would otherwise not see, such as a live folder that
 // has stopped: shown on Tidier's button (in the Extensions menu) and in its sidebar.
