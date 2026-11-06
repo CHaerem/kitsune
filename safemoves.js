@@ -103,13 +103,16 @@ async function spaceRemoved(space) {
   const rules = await rulesList.get();
   const left = rules.filter(r => r.space !== space);
   if (left.length !== rules.length) { rulesList.set(left); setNotice("rule", null); }
-  // A window in that space goes to the first other one before its tabs close: left there,
-  // every link is refused (intoSpace) and the tabs of the space it falls on stay hidden.
+  // A window in that space goes to the first other one, before its tabs close: left there,
+  // every link is refused (intoSpace) and the other spaces' tabs stay hidden. Nothing else
+  // would tell it: on Firefox's settings page, where this is done, the selected tab is in
+  // no space, so its selection does not change. And that tab stays selected.
   const next = (await spaceList(new Set()))[0]?.id;
   for (const [windowId, active] of activeSpace) {
     if (active !== space) continue;
-    if (next) await switchSpace(windowId, next).catch(noteError);
-    else activeSpace.delete(windowId);
+    if (!next) { activeSpace.delete(windowId); continue; }
+    const [on] = await browser.tabs.query({ windowId, active: true });
+    await (on?.cookieStoreId === space ? switchSpace(windowId, next) : setSpace(windowId, next)).catch(noteError);
   }
   const all = await getSynced();
   for (const key of Object.keys(all).filter(k => all[k].cookieStoreId === space)) {

@@ -383,6 +383,19 @@ test("a tab that is not selected, moved to a space that is gone, stays loaded", 
   x.kill();
 });
 
+test("a new tab refused for any other reason: the original stays, with its record", async () => {
+  const ff = new FakeFirefox();
+  const { w, tab } = aWindow(ff);
+  const x = await alone(ff);
+  x.b.tabs.create = async () => { throw new Error("the window was closing"); };
+  await move(x, tab.id, B);
+  assert.ok(ff.tabs.has(tab.id));
+  assert.deepEqual(Object.keys(ff.synced).sort(), ["home", "moved"]);
+  assert.equal(ff.list(w.id).length, 2);
+  assert.equal(said(x).length, 1);
+  x.kill();
+});
+
 // A web app changes its address by itself: Firefox reports only the address, and the
 // record follows when a page finishes loading or its title changes.
 function pushState(ff, id, url) {
@@ -497,6 +510,44 @@ for (const order of ["only the container", "its tabs first, as Firefox's setting
     x.kill();
   });
 }
+
+test("the space you are in is removed: you land on the tab you used last in the next one", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = inRemovedSpace(ff);
+  const used = ff.addTab(w.id, { url: "https://used.example/", cookieStoreId: A, lastAccessed: 5000, hidden: true }, { syncKey: "used", syncRole: "live" });
+  ff.store.syncedTabs.used = { url: "https://used.example/", title: "Used", cookieStoreId: A, parentKey: null, group: false, added: 1 };
+  const x = await alone(ff);
+  ff.containers.delete(B);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  assert.equal(ff.tabs.get(used.id).active, true);
+  assert.equal(ff.tabs.get(a.id).active, false);
+  x.kill();
+});
+
+test("the space you are in is removed from Firefox's settings page: you stay on that page, and the window leaves the space", async () => {
+  const ff = new FakeFirefox();
+  const { w, a, b, b2 } = inRemovedSpace(ff);
+  ff.tabs.get(b.id).active = false;
+  const settings = ff.addTab(w.id, { url: "about:preferences#containers", active: true });
+  const x = await alone(ff);
+  x.js("activeSpace").set(w.id, B);
+  ff.containers.delete(B);
+  ff.rm(b.id); ff.rm(b2.id); // Firefox's settings close its tabs first, and no selection changes
+  await wait(50);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  assert.equal(ff.tabs.get(settings.id).active, true, "still on the settings page");
+  assert.equal(x.js("activeSpace").get(w.id), A);
+  assert.equal(ff.tabs.get(a.id).hidden, false, "the tabs of the space it is in now are shown");
+  const link = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(link));
+  ff.navigate(link.id, SITE + "?link");
+  await settled(x);
+  assert.deepEqual(ff.list(w.id).filter(y => y.url === SITE + "?link").map(y => y.cookieStoreId), [A], "a link lands in a space that exists");
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
 
 test("a new link without a container, after the space you were in is removed, lands in a space that exists", async () => {
   const ff = new FakeFirefox();
