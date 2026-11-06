@@ -228,7 +228,7 @@ LIB = r"""
   const roleOf = (w, t) => value(w, t, "syncRole");
   const essentialOf = (w, t) => value(w, t, "essentialKey");
   const url = t => { try { return t.linkedBrowser.currentURI.spec; } catch (e) { return ""; } };
-  const isGhost = t => url(t).includes("/ghost.html?") && !url(t).includes("kind=test");
+  const isGhost = t => url(t).includes("/ghost.html?") && !/kind=(test|soak)/.test(url(t));
   const isGroup = t => url(t).includes("/sidebery/group.html");
   const ctxName = c => c ? "firefox-container-" + c : "firefox-default";
 
@@ -257,7 +257,12 @@ LIB = r"""
 SETUP = LIB + r"""
   // The control page: a popup window, which Tidier leaves out of everything, so the
   // test can ask Tidier things without opening tabs among the ones it is checking.
-  for (const b of browsers()) if (!b.toolbar.visible) b.close();  // an earlier one, after an update or a restart
+  // An earlier one is gone after an update. After a restart Firefox brings it back, not
+  // always as a popup: it is the test's own, and goes.
+  for (const b of browsers()) {
+    if (!b.toolbar.visible) { b.close(); continue; }
+    for (const t of [...b.gBrowser.tabs]) if (url(t).includes("kind=soak")) { if (b.gBrowser.tabs.length > 1) b.gBrowser.removeTab(t); else b.close(); }
+  }
   await wait(300);
   const w = normal()[0];
   const helper = w.gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[EXT] + "/ghost.html?kind=test", {inBackground: true});
@@ -316,7 +321,7 @@ ACTIONS = r"""
   };
   const anyWindow = () => pick(normal());
   const otherWindow = w => pick(normal().filter(x => x !== w));
-  const usable = t => !t.closing && t.linkedBrowser && !url(t).includes("kind=test");
+  const usable = t => !t.closing && t.linkedBrowser && !/kind=(test|soak)/.test(url(t));
   const plainTabs = w => [...w.gBrowser.tabs].filter(t => usable(t) && !t.pinned);
   const syncedTabs = w => plainTabs(w).filter(t => keyOf(w, t) && !isGroup(t));
   const pins = w => [...w.gBrowser.tabs].filter(t => usable(t) && t.pinned);
@@ -924,6 +929,7 @@ class Soak:
         self.may_double = []
         self.prev = None
         self.restarts = self.segment = 0
+        self.raw, self.offset = {}, {}
         self.violations = {}    # (kind, subject) -> the first detail, when
         self.known = {}         # the same for what Sidebery decides (SIDEBERY_SAYS)
         self.action_failures = {}
@@ -1051,9 +1057,15 @@ class Soak:
             self.violation("an error inside Tidier", problem)
         self.problems_seen = len(stats["problems"])
         prev = self.samples[-1] if self.samples else None
+        # Counted from the start of the run: an update or a restart starts Tidier's counts over.
+        now = {"cpu": proc["cpuS"], "jobs": stats["jobs"], "queue": stats["queueMs"] / 1000, "lookups": stats["lookups"], "views": stats["views"], "errors": stats["errors"]}
+        for k, v in now.items():
+            if v < self.raw.get(k, 0):
+                self.offset[k] = self.offset.get(k, 0) + self.raw[k]
+            self.raw[k] = v
         row = {
-            "t": time.time() - self.t0, "settle": settle_s, **r["counts"], "mb": proc["mb"], "heap": proc["heap"], "ghosts": proc["ghostWindows"], "cpu": proc["cpuS"],
-            "jobs": stats["jobs"], "queue": stats["queueMs"] / 1000, "lookups": stats["lookups"], "views": stats["views"], "errors": stats["errors"],
+            "t": time.time() - self.t0, "settle": settle_s, **r["counts"], "mb": proc["mb"], "heap": proc["heap"], "ghosts": proc["ghostWindows"],
+            **{k: v + self.offset.get(k, 0) for k, v in now.items()},
             "actions": sum(self.count.values()), "biggest": max(sizes.items(), key=lambda kv: kv[1]),
         }
         self.samples.append(row)
