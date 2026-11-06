@@ -1270,3 +1270,20 @@ test("an essential reopened after you unpinned it is an essential again", async 
   assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "the other window has it");
   x.kill();
 });
+
+test("an essential's copy closed in the moment it is created comes back", async () => {
+  for (const delay of [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 30]) {
+    const { ff, x, windows: [a, b] } = await chaosStart({ seed: delay });
+    x.js("tidierAlone = true"); // created pinned, so it can be closed at once
+    const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+    await ff.clock.run(3000);
+    ff.pinTab(t);
+    while (!ff.list(b.id).some(y => y.pinned)) await ff.clock.step();
+    await ff.clock.run(delay);
+    const copy = ff.list(b.id).find(y => y.pinned);
+    if (copy) ff.closeTab(copy.id);
+    await ff.clock.idle(60000);
+    assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, `closed after ${delay} ms`);
+    x.kill();
+  }
+});

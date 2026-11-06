@@ -87,7 +87,7 @@ async function switchSpace(windowId, space) {
   await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {});
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
   else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space }).catch(ifGone);
-  await setSpace(windowId, space);
+  if (activeSpace.has(windowId)) await setSpace(windowId, space); // else closed meanwhile
 }
 
 // The n-th space on the bar (⌃1, ⌃2, ...).

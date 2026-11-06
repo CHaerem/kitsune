@@ -86,6 +86,7 @@ async function initList() {
 // sidebar there first (see fillWindow), so it is passed in.
 async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
   const tabs = [];
+  let closedAlready = false;
   try {
     for (const { entry, index } of items) {
       // Refused if its container was removed while Tidier was not running. One bad
@@ -99,8 +100,11 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
       busy.add(tab.id);
       tabs.push({ tab, entry });
       await tagTab(tab.id, entry.key);
+      // Closed by you before it could be told apart: nothing brought it back.
+      if (!keyByTab.has(tab.id)) closedAlready = true;
       await sleep(CREATE_GAP_MS);
     }
+    if (closedAlready) await ensureWindow(windowId, settle);
     if (!tabs.length) return;
     if (!tidierAlone) {
       await settle(tabs);
@@ -465,10 +469,10 @@ async function essentialShown(tab) {
     const entry = (await getList()).find(e => e.key === key);
     await createEssentials(loaded.windowId, [{ entry, index: loaded.index + 1 }], () => Promise.resolve());
   }
-  // Moved into the placeholder's place; onAttached then removes the
-  // placeholder, and onDetached gives the old window one.
+  // Moved into the placeholder's place; onDetached gives the old window one.
   await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index }).catch(ifGone);
   await browser.tabs.update(loaded.id, { active: true }).catch(() => {});
+  await dropDoubleCopies(loaded.id, tab.windowId); // here, in case its arrival was not looked at
   return false;
 }
 
