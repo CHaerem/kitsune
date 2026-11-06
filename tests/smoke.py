@@ -1568,7 +1568,8 @@ DRAG_TOOLS = """
   const end = el => el.dispatchEvent(ev("dragend", el));
   const over = (el, x, y) => [!el.dispatchEvent(ev("dragover", el, x, y)), ...marked()];
   const drop = (el, x, y) => !el.dispatchEvent(ev("drop", el, x, y));
-  const until = async (test, ms = 8000) => { for (let t = 0; t < ms && !test(); t += 50) await wait(50); return !!test(); };
+  // By the clock: this page is a background tab here, where each wait can take a second.
+  const until = async (test, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms && !test();) await wait(50); return !!test(); };
   const ids = els => [...els].map(e => Number(e.dataset.tab));
   const tileEls = () => [...doc.querySelectorAll("#essentials .tile")];
 """
@@ -1847,7 +1848,7 @@ def alone_drag_details(m):
     def here(script):
         return m.cmd("WebDriver:ExecuteAsyncScript", {"sandbox": "system", "script": """
           const done = arguments[arguments.length - 1], wait = ms => new Promise(r => setTimeout(r, ms));
-          const until = async (test, ms = 8000) => { for (let t = 0; t < ms && !test(); t += 50) await wait(50); return !!test(); };
+          const until = async (test, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms && !test();) await wait(50); return !!test(); };
           const rows = () => [...document.querySelectorAll("#tabs > .tab")].filter(r => r.querySelector(".title").textContent !== "Tidier");
           const list = document.getElementById("tabs");
           (async () => { """ + script + """ })().then(r => done(r ?? null), e => done({error: String(e)}));""", "args": []})
