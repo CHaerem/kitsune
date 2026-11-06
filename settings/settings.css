@@ -1,11 +1,99 @@
-:root { color-scheme: light dark; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
-body { max-width: 640px; margin: 32px auto; padding: 0 16px; }
-h1 { font-size: 22px; margin-bottom: 24px; }
-h2 { font-size: 15px; margin: 0 0 8px; }
-section { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); }
-.hint { color: color-mix(in srgb, CanvasText 60%, transparent); margin: 0 0 10px; }
-.notice { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, orange 18%, transparent); margin-bottom: 10px; }
-.line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
-.line input[type=text] { flex: 1; min-width: 0; }
-button, input, select { font: inherit; }
+/* The settings page, in the sidebar's manner (tokens.css): a printed page. Section
+ * names hang in the margin as the sidebar's icons do, whitespace separates, and a
+ * field is a line to write on, not a box. */
+:root { --margin: 208px; font-size: 14px; line-height: 21px; }
+html { background: var(--paper); }
+body { max-width: 780px; margin: 0 auto; padding: 56px 32px 72px; color: var(--awake); box-sizing: border-box; }
+h1 { margin: 0 0 40px; font-size: 22px; line-height: 28px; font-weight: 500; letter-spacing: -.012em; color: var(--text); }
+#notices:empty { display: none; }
+#notices { margin-bottom: 32px; padding-left: var(--margin); }
+
+/* The margin. Hung from each section rather than made a grid of it, so that what is in a
+ * section flows as text does and buttons stand side by side. */
+section { display: flow-root; padding: 0 0 44px var(--margin); }
+section > h2 { float: left; width: calc(var(--margin) - 32px); margin: 0 0 0 calc(-1 * var(--margin)); font-size: var(--size); line-height: 21px; font-weight: 600; color: var(--text); }
+#version { margin: 0; padding-left: var(--margin); color: var(--muted); font-size: var(--size-small); }
+@media (max-width: 640px) {
+  :root { --margin: 0px; }
+  section > h2 { float: none; width: auto; margin: 0 0 8px; }
+}
+
+p { margin: 0 0 12px; }
+p:empty { display: none; }
+section > :last-child { margin-bottom: 0; }
+.hint { margin: 0 0 12px; color: var(--muted); }
+ul, ol { margin: 0 0 12px; padding-left: 18px; }
+li { margin-bottom: 6px; }
+li::marker { color: var(--faint); }
+code { font: .92em ui-monospace, Menlo, monospace; color: var(--muted); }
+.notice { margin: 0 0 8px; color: var(--text); }
+.notice::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 8px 1.5px -14px; border-radius: 50%; background: #e0912f; }
 [hidden] { display: none !important; }
+
+.line { display: flex; gap: 12px; align-items: center; }
+#rules .line { flex-wrap: wrap; column-gap: 12px; }
+button, input, select { font: inherit; color: var(--text); }
+
+/* A field: a line to write on, that shows as you near it. */
+input[type=text], input[type=number], select {
+  appearance: none; height: 30px; box-sizing: border-box; padding: 0; border: 0; border-radius: 0; outline: 0;
+  background: none; box-shadow: inset 0 -1px 0 transparent;
+  transition: box-shadow var(--quick) ease;
+}
+.line:hover input[type=text], .line:hover select, input[type=number] { box-shadow: inset 0 -1px 0 var(--hairline); }
+input[type=number]:hover { box-shadow: inset 0 -1px 0 var(--faint); }
+input[type=text]:focus, input[type=number]:focus, select:focus { box-shadow: inset 0 -1.5px 0 var(--text) !important; }
+input::placeholder { color: var(--faint); }
+.line input[type=text] { flex: 1 1 160px; min-width: 0; }
+input[type=number] { width: 2.6em; height: 21px; margin: 0 3px; text-align: center; appearance: textfield; }
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { appearance: none; margin: 0; }
+select {
+  flex: none; width: 112px; padding-right: 18px; color: var(--awake);
+  background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.5l3 3 3-3'/></svg>") right center / 14px no-repeat;
+}
+select option { color: CanvasText; background: Canvas; }
+
+/* A space: its dot, drawn rather than typed, hanging left of the name, so the names keep
+ * to the text's edge. */
+#spaces .line > span { flex: none; width: 8px; height: 8px; margin: 0 -2px 0 -18px; border-radius: 50%; background: currentColor; font-size: 0; }
+
+/* A button: words you can press, like the sidebar's New tab. */
+button:not(.line > button) {
+  min-height: 26px; padding: 0; margin: 0 20px 0 0; border: 0; background: none; color: var(--text); text-align: left;
+  text-decoration: underline 1px var(--faint); text-underline-offset: 4px;
+  transition: text-decoration-color var(--quick) ease;
+}
+button:not(.line > button):hover { text-decoration-color: currentColor; }
+#rules + button { margin-top: 6px; }
+button + p { margin-top: 8px; }
+/* The ones that stand alone between paragraphs, and what holds one. */
+#allow-hiding { display: block; margin-bottom: 12px; }
+#move, #move-back { margin-bottom: 12px; }
+#move-back > p { margin-bottom: 6px; }
+.line > button {
+  position: relative; flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-small); background: none; font-size: 0;
+  color: var(--muted); opacity: 0; transition: opacity var(--quick) ease;
+}
+.line > button::before { content: ""; position: absolute; inset: 0; margin: auto; width: 16px; height: 16px; background: currentColor; mask: var(--glyph-close) center / contain no-repeat; }
+.line:hover > button, .line > button:focus-visible { opacity: 1; }
+.line > button:hover { background: var(--hover); color: var(--text); }
+:focus-visible:not(input, select) { outline: 1.5px solid var(--muted); outline-offset: 2px; }
+
+/* Choosing a file: the sentence is what you press. The field Firefox draws for it (a
+ * button and "No file selected") is still there for the keyboard, out of sight. */
+label:has(input[type=file]) {
+  color: var(--text); text-decoration: underline 1px var(--faint); text-underline-offset: 4px;
+  transition: text-decoration-color var(--quick) ease;
+}
+label:has(input[type=file]):hover { text-decoration-color: currentColor; }
+label:has(input[type=file]:focus-visible) { outline: 1.5px solid var(--muted); outline-offset: 2px; }
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+#merge { margin: 12px 0; }
+#merge-spaces { margin-bottom: 8px; }
+#merge-spaces .line { gap: 10px; padding: 3px 0; }
+/* A box to tick, soft and thin; ticked, only the tick is left, as nothing here has a box. */
+input[type=checkbox] {
+  appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--faint);
+}
+input[type=checkbox]:checked { box-shadow: none; background: var(--text); mask: var(--glyph-tick) center / contain no-repeat; }

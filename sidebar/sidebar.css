@@ -1,117 +1,246 @@
-/* Tidier's sidebar: calm and plain, like Zen and Arc. The window's own
- * background (userChrome.css in dotfiles) shows through, so the sidebar and
- * the window are one surface; the active space's colour is the accent. */
+/* Tidier's sidebar: a page of type, lit from where you are (tokens.css says why).
+ * No row, tile or bar has a box at rest. The window's own colour shows through, so
+ * the sidebar and the window are one surface; the space's colour appears only as the
+ * dot that says where you are. */
 
-:root {
-  color-scheme: light dark;
-  --text: light-dark(#1d1d1f, #ececf0);
-  --muted: light-dark(#6e6e73, #a1a1a6);
-  --hover: light-dark(rgba(0, 0, 0, .05), rgba(255, 255, 255, .07));
-  --selected: light-dark(rgba(255, 255, 255, .85), rgba(255, 255, 255, .12));
-  --tile: light-dark(rgba(0, 0, 0, .045), rgba(255, 255, 255, .06));
-  --accent: #7a7a80; /* the active space's colour, set by sidebar.js */
-  --radius: 8px;
-  --row: 32px;
-  font: 13px/1.3 system-ui, -apple-system, sans-serif;
-}
-
-/* The window's own colour (userChrome.css's --zen-frame); a sidebar cannot be
- * transparent, so your tidier.css (dotfiles) sets it per space. */
-html { --frame: light-dark(#ececf0, #1f1f23); background: var(--frame); transition: background-color .25s ease; }
+html { background: var(--frame); transition: background-color var(--calm) ease; }
 html, body { height: 100%; margin: 0; }
 body {
   display: flex; flex-direction: column;
   background: transparent; color: var(--text);
-  padding: 4px 8px 0; box-sizing: border-box;
+  padding: 0 var(--edge); box-sizing: border-box;
   user-select: none; overflow: hidden;
 }
+button { padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: default; }
+:focus-visible { outline: 1.5px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: -1.5px; }
 
-/* Essentials: a grid of tiles, as in Zen and Arc. */
+/* --- Essentials: icons on the grid, like a dock. Most sites' icons bring a tile of
+ * their own, so a box behind them would be a box in a box. Fixed columns from the
+ * left edge, not columns that stretch: the spacing stays the same at every width, the
+ * first icon stands over the column of icons below, and the dots of the spaces at the
+ * bottom keep the same beat. */
 #essentials {
-  display: grid; gap: 6px; padding: 4px 0 10px;
-  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  display: grid; padding: 4px 0 0;
+  grid-template-columns: repeat(auto-fill, var(--cell));
 }
 #essentials:empty { display: none; }
 .tile {
-  height: 40px; border-radius: var(--radius); background: var(--tile);
+  position: relative; height: var(--cell); border-radius: var(--radius);
   display: grid; place-items: center; cursor: default;
 }
-.tile:hover { background: var(--hover); }
-.tile.active { background: var(--selected); box-shadow: 0 0 0 1.5px var(--accent) inset; }
-.tile img, .tile .letter { width: 18px; height: 18px; }
-.tile.unloaded img { opacity: .55; }
+.tile img, .tile .letter { width: 20px; height: 20px; }
+.tile .letter { font-size: 12px; }
+.tile img { transition: scale var(--quick) var(--ease), filter var(--quick) ease, opacity var(--quick) ease; }
+.tile:hover img { scale: 1.08; }
+.tile:active img { scale: .94; }
 
-/* Folders and tabs. */
-#tabs { flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }
-.row {
-  height: var(--row); display: flex; align-items: center; gap: 8px;
-  padding: 0 8px; border-radius: var(--radius); cursor: default;
+/* The icons have the same three levels of light as the text. Awake: its colour, held
+ * back a little, or a list of bright favicons would outshine the tab you are on.
+ * Asleep: grey, in a narrow range of tones, so a white icon and a black one both come
+ * out as pencil. Where you are, and under the mouse: all its colour. The halo keeps
+ * an all-black or all-white icon visible on the window's colour. */
+.row, .tile { --icon-grey: 0; --icon-colour: .8; --icon-tone: 1; --icon-light: .94; }
+.unloaded { --icon-grey: 1; --icon-colour: 1; --icon-tone: .62; --icon-light: var(--asleep); }
+.active, .row:hover, .tile:hover { --icon-grey: 0; --icon-colour: 1; --icon-tone: 1; --icon-light: 1; }
+.row img, .tile img {
+  filter: grayscale(var(--icon-grey)) saturate(var(--icon-colour)) contrast(var(--icon-tone)) drop-shadow(0 0 .5px var(--icon-halo));
+  opacity: var(--icon-light);
 }
-.row:hover { background: var(--hover); }
-.row.active { background: var(--selected); }
-.row img, .row .letter { width: 16px; height: 16px; flex: none; }
-.row .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row.unloaded .title { color: var(--muted); }
-.row.unloaded img { opacity: .55; }
-.row .close {
-  visibility: hidden; border: 0; background: none; color: var(--muted);
-  width: 20px; height: 20px; border-radius: 5px; font-size: 14px; line-height: 1;
-}
-.row:hover .close { visibility: visible; }
-.row .close:hover { background: var(--hover); color: var(--text); }
+.row img { transition: filter var(--quick) ease, opacity var(--quick) ease; }
+/* A tab with no icon gets its first letter: a quiet stand-in, not a coloured badge. */
 .letter {
-  display: grid; place-items: center; border-radius: 4px;
-  background: var(--accent); color: white; font-size: 10px; font-weight: 600;
+  display: grid; place-items: center; border-radius: 5px;
+  background: var(--tile); color: var(--muted); font-size: 10px; font-weight: 600;
+}
+.unloaded .letter { color: var(--faint); }
+.active .letter { color: var(--text); }
+
+/* You are here: under an essential, as in the Dock. It grows in. */
+.tile::after {
+  content: ""; position: absolute; left: 50%; bottom: 0; width: 4px; height: 4px; margin-left: -2px;
+  border-radius: 50%; background: var(--accent);
+  scale: 0; transition: scale var(--calm) var(--ease);
+}
+.tile.active::after, .tile.cursor::after { scale: 1; }
+
+/* --- The space's name: the one large thing on the page, its title. */
+#space-name:empty { display: none; }
+#space-name {
+  padding: 14px 0 5px var(--text-edge);
+  font-size: var(--size-title); font-weight: 500; letter-spacing: -.012em; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-.folder > .row .chevron { width: 16px; text-align: center; color: var(--muted); transition: transform .15s ease; }
-.folder.collapsed > .row .chevron { transform: rotate(-90deg); }
-.folder > .children { padding-left: 14px; }
+/* --- New tab and new folder: a line in the list, and a mark that is only there while
+ * the mouse is near. */
+#actions { display: none; }
+.alone #actions { display: flex; position: relative; }
+#new-tab {
+  flex: 1; min-width: 0; height: var(--row); padding-left: var(--pad); border-radius: var(--radius);
+  display: flex; align-items: center; gap: var(--icon-gap); text-align: left;
+  color: var(--muted); transition: color var(--quick) ease;
+}
+#new-tab:hover { color: var(--text); }
+#new-tab .glyph { flex: none; width: var(--icon); height: var(--icon); background: currentColor; mask: var(--glyph-plus) center / contain no-repeat; }
+#new-folder {
+  position: absolute; right: 4px; top: 4px; width: 22px; height: 22px; border-radius: var(--radius-small);
+  color: var(--muted); opacity: 0; transition: opacity var(--quick) ease;
+}
+#new-folder::before { content: ""; position: absolute; inset: 0; margin: auto; width: var(--icon); height: var(--icon); background: currentColor; mask: var(--glyph-folder) center / contain no-repeat; }
+#actions:hover #new-folder, #new-folder:focus-visible { opacity: 1; }
+#new-folder:hover { color: var(--text); background: var(--hover); }
+
+/* --- The list. It dissolves at both ends instead of being cut off by an edge. */
+#tabs {
+  flex: 1; min-height: 0; overflow: hidden auto; padding: 8px 0 18px;
+  scrollbar-width: thin; scrollbar-color: var(--faint) transparent;
+  mask-image: linear-gradient(transparent, #000 14px, #000 calc(100% - 18px), transparent);
+}
+#tabs:empty::before { content: "Nothing open"; display: block; padding: 6px 0 0 var(--text-edge); color: var(--muted); }
+.row {
+  position: relative; height: var(--row); display: flex; align-items: center; gap: var(--icon-gap);
+  padding: 0 var(--pad); border-radius: var(--radius); cursor: default;
+  color: var(--awake); transition: color var(--quick) ease;
+}
+.row:hover { color: var(--text); }
+.row img, .row .letter { flex: none; width: var(--icon); height: var(--icon); }
+/* A long title fades out instead of ending in dots, which are one more thing to read.
+ * The box always reaches the row's end, so a short title is not touched. */
+.row .title {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 20px), transparent);
+}
+.row:hover:not(:has(.sound)) .title { mask-image: linear-gradient(90deg, #000 calc(100% - 44px), transparent calc(100% - 22px)); }
+
+/* How much light a tab gives: asleep, awake, or the one you are on. */
+.row.tab.unloaded { color: var(--muted); }
+.row.tab.unloaded:hover { color: var(--text); }
+.row.tab.active { color: var(--text); font-weight: 500; }
+.row.tab::before, .row.head::before {
+  content: ""; position: absolute; left: 0; top: 50%; width: 5px; height: 5px; margin-top: -2.5px;
+  border-radius: 50%; background: var(--accent);
+  scale: 0; transition: scale var(--calm) var(--ease);
+}
+.row.tab.active::before, .row.cursor::before { scale: 1; }
+
+/* The close button lies over the title's fading end, so the title does not move when
+ * it appears, and the marks at rest can sit right at the row's end. */
+.row .close, .row .sound {
+  width: 22px; height: 22px; font-size: 0;
+  color: var(--muted); border-radius: var(--radius-small);
+}
+/* Placed by hand: Firefox does not quite centre what is inside a button. */
+.row .close::before, .row .sound::before {
+  content: ""; position: absolute; inset: 0; margin: auto; width: 15px; height: 15px;
+  background: currentColor; mask: var(--glyph-close) center / contain no-repeat;
+}
+.row .close { position: absolute; right: 4px; top: 0; bottom: 0; margin-block: auto; opacity: 0; }
+.row:hover .close { opacity: 1; }
+.row .close:hover, .row .sound:hover { background: var(--hover); color: var(--text); }
+.row .sound { position: relative; flex: none; margin-right: -4px; }
+.row .sound::before { mask-image: var(--glyph-sound); }
+.row .sound[title="Unmute"] { color: var(--faint); }
+.row .sound[title="Unmute"]::before { mask-image: var(--glyph-muted); }
+.row:hover .sound { margin-right: 18px; }
+
+/* --- Folders: a small heading that belongs to the tabs under it. No indent: the text
+ * keeps its one edge, and the space above a heading says where a group begins. Its name
+ * and what is said about it (how many, that it fills itself) are read together, told
+ * apart by weight alone. */
+.folder { position: relative; }
+.folder > .children { padding-bottom: 12px; }
 .folder.collapsed > .children { display: none; }
-.folder > .row .title { font-weight: 500; }
-
-/* A thin line between the folders (the kept part) and the other tabs. */
-.divider { height: 1px; margin: 8px 8px; background: var(--hover); }
-
-/* Spaces, at the bottom. */
-#spaces {
-  display: flex; justify-content: center; gap: 4px;
-  padding: 6px 0 8px; border-top: 1px solid var(--hover);
+/* What an opened folder holds settles in. Only with the mouse in the sidebar, so the
+ * list does not flicker in when the sidebar itself is drawn. */
+.folder > .children { transition: opacity var(--calm) ease, translate var(--calm) var(--ease); }
+@starting-style { body:hover .folder:not(.collapsed) > .children { opacity: 0; translate: 0 -3px; } }
+.folder > .row.head { height: 26px; color: var(--muted); }
+.folder.collapsed > .row.head { height: var(--row); }
+.folder > .row.head:hover, .folder > .row.head.drop-into { color: var(--text); }
+.folder > .row .title {
+  flex: 0 1 auto; mask-image: none !important; text-overflow: ellipsis;
+  font-size: var(--size-small); font-weight: 600; letter-spacing: .005em;
 }
+.folder > .row .chevron {
+  flex: none; width: var(--icon); height: var(--icon); font-size: 0; background: currentColor; opacity: 0;
+  mask: var(--glyph-chevron) center / contain no-repeat;
+  transition: rotate var(--calm) var(--ease), opacity var(--quick) ease;
+}
+.folder > .row:hover .chevron { opacity: .8; }
+.folder.collapsed > .row .chevron { rotate: -90deg; opacity: .75; }
+.row .count { flex: none; margin-left: -5px; font-size: var(--size-small); font-variant-numeric: tabular-nums; }
+.row .count:empty { display: none; }
+/* In words: this folder fills itself. */
+.folder.live > .row .title::after { content: "live"; margin-left: 6px; font-weight: 400; }
+.row .rename {
+  flex: 1; min-width: 0; height: 20px; padding: 0; border: 0; border-radius: 0; outline: 0; background: none;
+  font: inherit; font-size: var(--size-small); font-weight: 600; color: var(--text);
+  box-shadow: 0 1px 0 var(--accent);
+}
+
+/* Between the kept part and the other tabs: a short rule, as between a book's sections. */
+.divider { width: var(--icon); height: 1px; margin: 4px 0 10px var(--pad); background: var(--hairline); }
+.folder.collapsed + .divider { margin-top: 10px; }
+
+/* --- Spaces, at the bottom: grey but for the one you are in. Under the mouse a dot
+ * shows its own colour. */
+#spaces { display: flex; flex: none; padding: 0 0 6px; }
 .space {
-  width: 30px; height: 30px; border-radius: var(--radius); border: 0;
-  background: none; display: grid; place-items: center; cursor: default;
+  width: var(--cell); height: var(--cell); border-radius: var(--radius);
+  display: grid; place-items: center;
 }
-.space:hover { background: var(--hover); }
-.space .dot { width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--color) 45%, transparent); }
-.space.active .dot { background: var(--color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color) 30%, transparent); }
+.space .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--muted) 78%, transparent); /* about 3 : 1 */
+  transition: background-color var(--quick) ease, scale var(--calm) var(--ease);
+}
+.space:hover .dot { background: var(--color); }
+.space.active .dot { background: var(--color); scale: 1.5; }
 
-/* Tidier alone: the rest of what makes it the sidebar. */
-#space-name:empty, #actions { display: none; }
-#space-name { padding: 2px 8px 6px; font-weight: 600; color: var(--muted); font-size: 12px; }
-.alone #actions { display: flex; gap: 4px; padding-bottom: 6px; }
-#actions button {
-  border: 0; background: none; color: var(--muted); height: 28px; border-radius: var(--radius);
-  padding: 0 8px; font: inherit; text-align: left; cursor: default;
-}
-#actions button:hover { background: var(--hover); color: var(--text); }
-#new-tab { flex: 1; }
-#new-folder { flex: none; width: 28px; text-align: center !important; padding: 0 !important; }
-.notice { padding: 6px 8px; margin-bottom: 6px; border-radius: var(--radius); background: var(--tile); color: var(--muted); font-size: 12px; }
+/* --- What Tidier has to tell you: words on the page, like everything else. */
+.notice { flex: none; padding: 8px 0 6px var(--text-edge); color: var(--muted); font-size: var(--size-small); }
 .notice[hidden], #menu[hidden] { display: none; }
-.notice button { width: 100%; border: 0; background: var(--selected); color: var(--text); padding: 6px; border-radius: 6px; font: inherit; }
-.row .sound { border: 0; background: none; width: 20px; height: 20px; padding: 0; font-size: 11px; line-height: 1; border-radius: 5px; }
-.row .sound:hover { background: var(--hover); }
-.row .count { color: var(--muted); font-size: 11px; }
-.row .rename { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--selected); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 4px; }
-.folder.live > .row .title::after { content: " ⟳"; color: var(--muted); }
-#menu {
-  position: fixed; z-index: 10; min-width: 140px; padding: 4px; border-radius: var(--radius);
-  background: Canvas; color: CanvasText; box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+.notice button {
+  display: block; text-align: left; color: var(--text);
+  text-decoration: underline 1px var(--faint); text-underline-offset: 2.5px;
 }
-#menu .item { display: block; width: 100%; border: 0; background: none; color: inherit; padding: 5px 8px; border-radius: 5px; text-align: left; font: inherit; }
+.notice button:hover { text-decoration-color: currentColor; }
+
+/* --- The small menu: the one thing that floats, so it may have a surface. */
+#menu {
+  position: fixed; z-index: 10; min-width: 150px; padding: 4px; border-radius: 10px;
+  background: var(--surface); color: var(--text);
+  box-shadow: 0 0 0 .5px light-dark(rgb(0 0 0 / .14), rgb(255 255 255 / .14)), 0 10px 30px light-dark(rgb(0 0 0 / .16), rgb(0 0 0 / .5));
+}
+#menu .item {
+  display: block; width: 100%; height: 26px; padding: 0 8px; border-radius: var(--radius-small);
+  text-align: left; white-space: nowrap;
+}
 #menu .item:hover { background: var(--hover); }
-.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
-.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
-.drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
-.cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+
+/* --- Dragging. The mark again, with a line from it along the text's edge; between
+ * essentials a plain line, upright. Over what takes a tab in, a wash of the space's colour. */
+.row.drop-before::after, .row.drop-after::after, .folder.drop-before::after, .folder.drop-after::after {
+  content: ""; position: absolute; z-index: 1; left: calc(var(--text-edge) - 6px); right: 2px; height: 6px;
+  background:
+    radial-gradient(circle 3px at 3px 3px, var(--accent) 94%, transparent),
+    linear-gradient(var(--accent), var(--accent)) 0 center / 100% 2px no-repeat;
+  border-radius: 3px; pointer-events: none;
+}
+.row.drop-before::after, .folder.drop-before::after { top: -3px; }
+.row.drop-after::after, .folder.drop-after::after { bottom: -3px; }
+.tile.drop-before::before {
+  content: ""; position: absolute; left: -1px; top: 6px; bottom: 6px; width: 2px;
+  border-radius: 1px; background: var(--accent); pointer-events: none;
+}
+.drop-into { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius); }
+.row.drop-into { color: var(--text); }
+.space.drop-into { background: none; }
+.space.drop-into .dot { background: var(--color); scale: 2; }
+
+/* The keyboard's place: a wash, and the mark as a ring. */
+.row.cursor, .tile.cursor { background: var(--hover); }
+.row.cursor:not(.active)::before, .tile.cursor:not(.active)::after { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
