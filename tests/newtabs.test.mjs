@@ -2,6 +2,8 @@
 // What Firefox really does with them is checked in the smoke test (alone_new_tab).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { FakeFirefox, wait } from "./fake_firefox.mjs";
 
 const C1 = "firefox-container-1", C2 = "firefox-container-2", NONE = "firefox-default";
@@ -280,5 +282,106 @@ test("a tab about to be opened again is not drawn, so it does not jump; a page t
   assert.ok(!(await drawn()).includes(blank.id));
   await wait(3200);
   assert.ok((await drawn()).includes(blank.id));
+  x.kill();
+});
+
+// The double click (sidebar/newtab.js), on a small stand-in for the sidebar page.
+function sidebarPage({ alone = true } = {}) {
+  const on = {}, sent = [], list = { addEventListener: (type, f) => { on[`list:${type}`] = f; } };
+  const ctx = vm.createContext({
+    view: { alone, space: C1 }, send: m => sent.push({ ...m }),
+    document: { getElementById: () => list }, addEventListener: (type, f, capture) => { on[`window:${type}:${!!capture}`] = f; },
+  });
+  vm.runInContext(readFileSync(new URL("../sidebar/newtab.js", import.meta.url), "utf8"), ctx);
+  // A click, as Firefox delivers it: the window first (capture), the list only if it is on the list.
+  const press = (target, detail) => { on["window:mousedown:true"]?.({ target, detail }); if (target === list) on["list:mousedown"]?.({ target, detail }); };
+  const twice = (first, second = first) => { press(first, 1); press(second, 2); if (second === list) on["list:dblclick"]({ target: second }); return sent; };
+  return { list, twice, sent };
+}
+
+test("a double click on the empty part opens a tab; only there, and only with the setting on", () => {
+  const empty = sidebarPage();
+  assert.deepEqual(empty.twice(empty.list), [{ type: "newTab", space: C1 }]);
+  const row = sidebarPage();
+  assert.deepEqual(row.twice({ className: "row" }, row.list), [], "the first click was on a row, which went from under the pointer");
+  const off = sidebarPage({ alone: false });
+  assert.deepEqual(off.twice(off.list), [], "with the setting off a double click does nothing");
+});
+
+test("a double click that began outside the list opens nothing, whatever a click long ago was on", () => {
+  const p = sidebarPage();
+  p.twice(p.list);
+  p.sent.length = 0;
+  // An essential's tile, say: what is under the pointer moves between the two clicks.
+  p.twice({ className: "tile" }, p.list);
+  assert.deepEqual(p.sent, []);
+});
+
+// A link from a tab drawn apart (Firefox puts it next to that tab, which says nothing in
+// today's list). `opener` is one of the tabs of the window; the link opens as Firefox opens it.
+async function linkFrom(ff, x, w, opener, url) {
+  const link = ff.addTab(w.id, { url: "about:blank", cookieStoreId: opener.cookieStoreId, openerTabId: opener.id, index: Math.max(ff.index(opener) + 1, ff.list(w.id).filter(t => t.pinned).length) });
+  x.b.tabs.onCreated.fire(ff.snap(link));
+  await wait(50);
+  ff.navigate(link.id, url);
+  await wait(3000); // a new tab is registered once it has settled (SETTLE_MS)
+  return link;
+}
+
+test("a link from a tab in a folder takes the one place, in every window; it is not next to a tab drawn apart", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: folder() };
+  const w = ff.addWindow({ focused: true }), v = ff.addWindow();
+  // A tab moved into a folder lies last in the window (moveTab), so next to it is out of sight.
+  const [a, , kept] = fill(ff, w, [["a"], ["b"], ["kept", C1, { parentKey: "F" }], ["c"]]);
+  a.active = true;
+  fill(ff, v, [["a"], ["b"], ["kept"], ["c"]], "ghost");
+  const x = await start(ff);
+  const link = await linkFrom(ff, x, w, kept, "https://from-folder.example/");
+  const key = ff.values.get(link.id).syncKey;
+  assert.equal(await firstDrawn(x, w.id), link.id);
+  assert.deepEqual(keysIn(ff, w.id), [key, "a", "b", "kept", "c"]);
+  assert.deepEqual(keysIn(ff, v.id), [key, "a", "b", "kept", "c"]);
+  assert.equal(ff.synced[key].parentKey, null, "it is an ordinary tab");
+  x.kill();
+});
+
+test("every link from an essential takes the one place, not only the first", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const essential = ff.addTab(w.id, { pinned: true, url: "https://essential.example/", cookieStoreId: C1, active: true });
+  fill(ff, w, [["a"], ["b"]]);
+  const x = await start(ff);
+  const first = await linkFrom(ff, x, w, essential, "https://one.example/");
+  // Firefox puts the next one after the last link from the same tab.
+  const second = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1, openerTabId: essential.id, index: ff.index(first) + 1 });
+  x.b.tabs.onCreated.fire(ff.snap(second));
+  await wait(100);
+  assert.equal(await firstDrawn(x, w.id), second.id);
+  x.kill();
+});
+
+test("a link from a tab in another space's folder stays next to it: that tab is drawn in today's list", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F2: folder(C2) };
+  const w = ff.addWindow({ focused: true });
+  const [a, strayed] = fill(ff, w, [["a"], ["strayed", C1, { parentKey: "F2" }], ["b"]]);
+  a.active = true;
+  const x = await start(ff);
+  const link = await linkFrom(ff, x, w, strayed, "https://next.example/");
+  assert.equal(ff.index(link), ff.index(strayed) + 1);
+  x.kill();
+});
+
+test("with the setting off a link from a tab is never moved, wherever its opener is", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: { group: true, url: "moz-extension://sidebery/group.html#Kept", title: "Kept", cookieStoreId: C1, parentKey: null, added: 1 } };
+  const w = ff.addWindow({ focused: true });
+  const [a, , kept] = fill(ff, w, [["a"], ["b"], ["kept", C1, { parentKey: "F" }]]);
+  a.active = true;
+  const x = await start(ff, { alone: false });
+  const link = await linkFrom(ff, x, w, kept, "https://from-folder.example/");
+  assert.equal(ff.index(link), ff.index(kept) + 1);
+  assert.ok(!ff.log.some(([what, id]) => what === "move" && id === link.id));
   x.kill();
 });

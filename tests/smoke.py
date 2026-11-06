@@ -1520,9 +1520,11 @@ def alone_new_tab(m):
 
     # A link from another app: an address, without a container.
     before = r["after"]
-    # (A moment from now, once the views are being kept. Its row must never show at the end. Whether
-    # it would depends on how soon Firefox reports the address; the unit test checks what is drawn.)
-    m.js(H + """sT(() => main().gBrowser.addTrustedTab("https://example.org/?smoke-newtab-link", {inBackground: false}), 3000); return 1;""")
+    # (A moment from now, once the views are being kept. Its row must never show at the end. A link
+    # is created on about:blank, and its address comes later: how much later is made sure here, or
+    # the check would depend on how fast Firefox is.)
+    m.js(H + """sT(() => { const t = main().gBrowser.addTrustedTab("about:blank", {inBackground: false});
+      sT(() => t.linkedBrowser.loadURI(Services.io.newURI("https://example.org/?smoke-newtab-link"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()}), 800); }, 3000); return 1;""")
     r = sidebar_page(m, new_first, before)
     check("a link without a container opens first among today's tabs, selected", r["after"][1:] == r["before"] and r["active"], str(r))
     check("its row never shows anywhere else first", r["jumped"] == 0, str(r))
@@ -1538,6 +1540,21 @@ def alone_new_tab(m):
       """ + both_orders.replace("return {", "return {beside: first.gBrowser.tabs.indexOf(t) === first.gBrowser.tabs.indexOf(from) + 1, opener: key(first, from), "))
     check("a link opened from a tab stays next to it", s["beside"] and s["main"][s["main"].index(s["opener"]) + 1] == s["me"], str(s))
     check("and the other window has it there too", s["main"] == s["other"], str(s))
+
+    # A link from a tab drawn apart has nothing to stay next to. Next to the folder's tab would be the end of
+    # the list (moveTab puts it last in the window). A moment from now again, once the views are being kept.
+    before = sidebar_page(m, rows + "return ids();")
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.at(-1);
+      sT(() => w.gBrowser.addTrustedTab("https://example.org/?smoke-newtab-from-folder", {relatedToCurrent: true, inBackground: true}), 3000); return 1;""")
+    r = sidebar_page(m, new_first, before)
+    check("a link from a tab in a folder opens first among today's tabs", r["after"][1:] == r["before"], str(r))
+    s = m.js(H + settled + "const t = main().gBrowser.tabs.find(x => url(x).includes('smoke-newtab-from-folder'));" + both_orders)
+    check("and the other window has it there too (a folder's tab)", s["me"] and s["main"] == s["other"], str(s))
+    before = r["after"]
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => t.pinned && t.userContextId === args[0]);
+      sT(() => w.gBrowser.addTrustedTab("https://example.org/?smoke-newtab-from-essential", {relatedToCurrent: true, inBackground: true}), 3000); return 1;""", s["ctx"])
+    r = sidebar_page(m, new_first, before)
+    check("a link from an essential opens first among today's tabs", r["after"][1:] == r["before"], str(r))
 
     # A double click on the empty part of the list; on a row it is only a click.
     r = sidebar_page(m, rows + """
