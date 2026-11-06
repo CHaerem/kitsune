@@ -1753,18 +1753,21 @@ def alone_drag_details(m):
     check("a tab dropped on the right half of the last tile is the last essential", r["placed"] is True and r["order"] == r["want"], str(r))
 
     # A move, and at once a drop on a tile: tab sync still counts the tab as moved by itself.
-    counts = """return wins().map(w => [w.gBrowser.tabs.filter(t => t.pinned).length, w.gBrowser.tabs.filter(t => !t.pinned).length]);"""
-    before = m.js(H + counts)
+    row = sidebar_page(m, "return Number(plainTabs()[0].dataset.tab);")
+    sync_key = m.js(H + """const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const ids = ExtensionParent.apiManager.global.tabTracker;
+      for (const w of wins()) for (const t of w.gBrowser.tabs) if (ids.getId(t) === args[0]) return key(w, t);""", row)
     r = sidebar_page(m, DRAG_TOOLS + """
       const [row, next] = plainTabs(), id = Number(row.dataset.tab);
       start(row); const moved = drop(next, .5, .8); end(row);
       start(row); const pinned = drop(tileEls()[0], .25); end(row);
       await until(() => tileEls().some(t => Number(t.dataset.tab) === id));
-      await wait(1500);
       return {moved, pinned, id};""")
-    after = m.js(H + counts)
+    left = m.js(H + """for (let i = 0; i < 100 && find(args[0]).flat().length; i++) await wait(50);
+      await wait(2000); // a placeholder that comes back would do it by now
+      return {left: find(args[0]), copies: wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).length)};""", sync_key)
     check("a tab moved and at once dropped on a tile is an essential in every window, and no longer a tab in any",
-          r["moved"] is True and r["pinned"] is True and [[a[0] - b[0], a[1] - b[1]] for a, b in zip(after, before)] == [[1, -1]] * len(before), f"{r} {before} -> {after}")
+          sync_key and r["moved"] is True and r["pinned"] is True and r["id"] == row and all(not x for x in left["left"]) and len(set(left["copies"])) == 1, f"{sync_key} {r} {left}")
     sidebar_page(m, DRAG_TOOLS + """
       const tile = tileEls().find(t => Number(t.dataset.tab) === args[0]);
       start(tile); drop(list); end(tile);
