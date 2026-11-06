@@ -3,15 +3,16 @@
 // one click, so that it does not end up in your list just because someone sent it.
 //
 // How such a link is told apart, measured in Firefox 158. Container and focus do not do it:
-//   - Firefox gives a link from another app the container of the selected tab, so "no
-//     container" says nothing: it has one nearly always. Only a bookmark has none.
+//   - Firefox gives a link from another app the container of the selected tab, so it has
+//     one nearly always, and it is a bookmark that has none.
 //   - On a Mac the app comes to the front around the time the link arrives, in either
 //     order, so "Firefox is in the background" misses some links, and it would catch
 //     anything else that happens to open while you are away.
-//   - What does tell: a link from outside is loaded with Firefox's own mark for that
-//     (LOAD_FLAGS_FROM_EXTERNAL), which ends the new tab's first about:blank early. So
-//     a new tab reports that about:blank as an address before its real one. A bookmark,
-//     an address typed with ⌥⏎, a page's own new tab and tabs.create do not.
+//   - What does tell, in every try in Firefox 158 and 160, in front or behind: such a new
+//     tab reports its first about:blank as an address, before its real one. Going by
+//     Firefox's code, that is its load for a link from outside (LOAD_FLAGS_FROM_EXTERNAL)
+//     ending that about:blank early. A bookmark, an address typed with ⌥⏎, a page's own
+//     new tab, ⌘⇧T and tabs.create do not.
 // That is a detail of Firefox's, not a promise. Should it go, links simply open as
 // ordinary tabs again, and the smoke test, which also runs on Developer Edition a month
 // ahead, says so.
@@ -61,6 +62,16 @@ function littleTakes(tabId, url) {
     if (!opened) await byRule(tabId, url); // what any new tab gets: off, or the rule's space is gone
   });
   return true;
+}
+
+// isolation.js stops a request that would go out in the wrong container and opens the page
+// in the right one itself, so the tab never gets its address here. Firefox's mark comes
+// just after the request, while the new tab is still being made: asked with both tabs once
+// the new one is there, before the old one is closed. A mark that comes later still means
+// an ordinary tab, which loses nothing.
+async function littleAfterReopen(oldTab, tab) {
+  if (!newBlanks.get(oldTab.id) || !tab?.id || !await littleSetting.get()) return;
+  await openLittle(oldTab.windowId, { tabId: tab.id }, tab.cookieStoreId, oldTab.width).catch(noteError);
 }
 
 // The rule's space, else the space you are in.

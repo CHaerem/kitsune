@@ -162,6 +162,25 @@ test("a rule decides its space", async () => {
   x.kill();
 });
 
+test("a link another part of Tidier opened again goes on to a small window, the new tab itself", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const blank = ff.addTab(w.id, { url: "about:blank", cookieStoreId: NONE, active: true });
+  x.b.tabs.onCreated.fire(ff.snap(blank));
+  x.b.tabs.onUpdated.fire(blank.id, { status: "complete", url: "about:blank" }, ff.snap(blank));
+  const made = await x.b.tabs.create({ windowId: w.id, url: LINK, cookieStoreId: C1, active: true });
+  await x.ctx.littleAfterReopen(ff.snap(blank), made);
+  assert.equal(tabOf(popups(ff)[0]), made.id);
+  // A tab without the mark is left where it was opened.
+  const plain = ff.addTab(w.id, { url: "about:blank", cookieStoreId: NONE });
+  x.b.tabs.onCreated.fire(ff.snap(plain));
+  const other = await x.b.tabs.create({ windowId: w.id, url: "https://b.example/", cookieStoreId: C1 });
+  await x.ctx.littleAfterReopen(ff.snap(plain), other);
+  assert.equal(ff.tabs.get(other.id).windowId, w.id);
+  x.kill();
+});
+
 test("a tab opened any other way is what it always was", async () => {
   const ff = new FakeFirefox();
   const { w } = session(ff);

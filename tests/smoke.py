@@ -45,6 +45,9 @@ is reported as failed. It checks that:
   - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
   - the extension starts again after being disabled and enabled;
+  - with Tidier alone, a link from another app opens in a small window, which can be
+    kept into your list in every window or closed leaving nothing, and nothing else
+    opens one; a link's menu opens one or another space, and ⌥-click with the access;
   - a tab opened without a container, as links from other apps are, lands in
     the active space's container (spaces switched with ⌃1/⌃2/⌃3), so logins
     never mix between spaces;
@@ -1477,14 +1480,21 @@ LITTLE = H + """
 """ % EXT_ID
 
 
-def little_menu(m, handle_part, selector, item):
-    """Right-click `selector` in the page of a tab with this address, for real, and choose `item` in Firefox's menu."""
+def little_page(m, handle_part, selector):
+    """The element `selector` in the page of a tab with this address, that tab selected. Only that
+    tab: selecting each tab on the way would take the window through all its spaces."""
     m.cmd("Marionette:SetContext", {"value": "content"})
     for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
         if handle_part in m.cmd("WebDriver:GetCurrentURL"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
             break
-    found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": selector})
+    return m.cmd("WebDriver:FindElement", {"using": "css selector", "value": selector})
+
+
+def little_menu(m, handle_part, selector, item):
+    """Right-click `selector` in the page of a tab with this address, for real, and choose `item` in Firefox's menu."""
+    found = little_page(m, handle_part, selector)
     m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "little", "parameters": {"pointerType": "mouse"}, "actions": [
         {"type": "pointerMove", "x": 0, "y": 0, "origin": {"element-6066-11e4-a52e-4f735466cecf": list(found.values())[0]}},
         {"type": "pointerDown", "button": 2}, {"type": "pointerUp", "button": 2}]}]})
@@ -1505,12 +1515,7 @@ def little_menu(m, handle_part, selector, item):
 
 def little_alt_click(m, handle_part, selector):
     """⌥-click `selector` for real, in the page of a tab with this address."""
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
-        if handle_part in m.cmd("WebDriver:GetCurrentURL"):
-            break
-    found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": selector})
+    found = little_page(m, handle_part, selector)
     alt = "\ue00a"
     m.cmd("WebDriver:PerformActions", {"actions": [
         {"type": "key", "id": "little-keys", "actions": [{"type": "keyDown", "value": alt}, {"type": "pause"}, {"type": "pause"}, {"type": "pause"}, {"type": "keyUp", "value": alt}]},
