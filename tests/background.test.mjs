@@ -766,3 +766,25 @@ test("a link put in its space is not in Recently Closed, so ⌘⇧T does not ope
   assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["yours", "yours too"]);
   x.kill();
 });
+
+test("a tab closed in the middle of its pull does not leave its ghost behind", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow();
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(here.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // ⌘W comes as the tab arrives, before the bookkeeping is done: its values are refused.
+  const update = x.b.tabs.update;
+  x.b.tabs.update = async (id, p) => { const r = await update(id, p); if (id === live.id && p.active) ff.rm(live.id); return r; };
+  ff.select(ghost.id);
+  await wait(3000);
+  assert.deepEqual(ff.synced, {}, "it is closed");
+  assert.equal(ff.list(here.id).filter(t => t.url.startsWith("moz-extension")).length, 0, "and no placeholder is left of it");
+  assert.equal(x.js("syncKeyByTab.size"), 0, "and Tidier does not remember it");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});

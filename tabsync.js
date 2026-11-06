@@ -539,19 +539,26 @@ async function pull(ghostId) {
         oldTabs.find(t => t.id !== live.id);
       if (calm) await browser.tabs.update(calm.id, { active: true });
     }
-    await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index });
-    await browser.tabs.update(live.id, { active: true });
-
-    // Bookkeeping. A tab moved before it was ever loaded (a live folder's pull
-    // request) can arrive without its sessions values, so they are set again.
+    // Bookkeeping too. A tab moved before it was ever loaded (a live folder's pull
+    // request) can arrive without its sessions values, so they are set again. Any of
+    // it is refused if you close the tab or the window meanwhile: ⌘W right after a
+    // click. The ghost then stays what it was, for closing that tab to deal with: it
+    // would otherwise be left behind, unknown to Tidier, as a tab you closed coming back.
+    const moved = await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index })
+      .then(() => browser.tabs.update(live.id, { active: true }))
+      .then(() => setRole(live.id, key, "live"))
+      .then(() => true, () => false);
+    if (!moved) {
+      if (!(await browser.tabs.get(live.id).catch(() => null))) forget(live.id); // setRole notes it first
+      return;
+    }
     forget(ghostId);
-    await setRole(live.id, key, "live");
     const all = await getSynced();
     const entry = all[key];
     const tabsHere = await browser.tabs.query({ windowId: ghost.windowId });
     const parentId = entry?.parentKey ? repMap(tabsHere).get(entry.parentKey) : undefined;
     await Promise.all([
-      browser.tabs.remove(ghostId),
+      browser.tabs.remove(ghostId).catch(() => {}),
       parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
     ]);
     await forgetClosedPlaceholders("ghost", [key]);
