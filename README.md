@@ -51,6 +51,9 @@ below, the spaces at the bottom. In order:
 6. Removing what exists only because of Sidebery (folders first, its tree
    rules, waiting for its sidebar), and Sidebery itself.
 
+All the features worth having from Zen, Arc and Sidebery, and where Tidier
+stands with each, are listed in [FEATURES.md](FEATURES.md).
+
 Until then, what Sidebery does (the tab list, folders, the space bar, its
 container rules) is left to it and set up in the dotfiles.
 
