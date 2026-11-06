@@ -84,7 +84,7 @@ function tile(item) {
   }, item, t => {
     t.className = "tile" + (item.active ? " active" : "") + (item.loaded ? "" : " unloaded");
     t.title = item.title;
-    t.replaceChildren(icon(item));
+    t.replaceChildren(icon(item), ...(view.alone ? soundMark(item) : []));
   });
 }
 
@@ -103,12 +103,7 @@ function row(item, folderKey) {
     e.className = "row tab" + (item.active ? " active" : "") + (item.loaded ? "" : " unloaded");
     e.title = item.title;
     const parts = [icon(item), el("span", "title", item.title)];
-    if (item.audible || item.muted) {
-      const sound = el("button", "sound", item.muted ? "🔇" : "🔊");
-      sound.title = item.muted ? "Unmute" : "Mute";
-      sound.onclick = ev => { ev.stopPropagation(); send({ type: "mute", tabId: item.id, muted: !item.muted }); };
-      parts.push(sound);
-    }
+    parts.push(...soundMark(item));
     const close = el("button", "close", "×");
     close.title = "Close";
     close.onclick = ev => { ev.stopPropagation(); send({ type: "close", tabId: item.id }); };
@@ -140,12 +135,12 @@ function folder(f) {
     head.ondragstart = e => startDrag(e, { kind: "folder", key: f.key });
     b.append(head, el("div", "children"));
     return b;
-  }, { name: f.name, closed, live: f.live, n: f.tabs.length }, b => {
+  }, { name: f.name, closed, live: f.live, n: f.tabs.length, sound: f.sound, soundTabId: f.soundTabId }, b => {
     b.classList.toggle("collapsed", closed);
     b.classList.toggle("live", !!f.live);
     b.dataset.key = f.key;
     b.firstChild.title = f.name;
-    b.firstChild.replaceChildren(el("span", "chevron", "▾"), el("span", "title", f.name), el("span", "count", closed && f.tabs.length ? String(f.tabs.length) : ""));
+    b.firstChild.replaceChildren(el("span", "chevron", "▾"), el("span", "title", f.name), ...soundMark(f), el("span", "count", closed && f.tabs.length ? String(f.tabs.length) : ""));
   });
   place(box.lastChild, f.tabs.map(t => row(t, f.key)));
   return box;
@@ -215,6 +210,7 @@ function render(next) {
     b.classList.toggle("active", s.id === view.space);
     b.title = s.name;
     b.style.setProperty("--color", s.color);
+    spaceSound(b, s);
   })));
 
   for (const id of kept.keys()) if (!drawn.has(id)) kept.delete(id);

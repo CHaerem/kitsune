@@ -18,7 +18,8 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 // page's (see ghost.js); an essential shows its short name if it has one.
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
-  active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
+  active: t.active, loaded: !t.discarded && !isGhostUrl(t.url),
+  sound: ownSound(t), soundTabId: t.id, // with Tidier alone, the real page's (addSounds)
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
@@ -51,6 +52,7 @@ async function viewFor(windowId) {
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
     (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
   }
+  if (tidierAlone) await addSounds({ essentials, folders, tabs: loose, spaces }, tabs);
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
 }
 
@@ -110,6 +112,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
+  else if (msg.type === "goToSound") await goToSound(windowId, msg.tabId);
   viewSoon(windowId);
 }
 

@@ -100,8 +100,6 @@ body {
 .notice { padding: 6px 8px; margin-bottom: 6px; border-radius: var(--radius); background: var(--tile); color: var(--muted); font-size: 12px; }
 .notice[hidden], #menu[hidden] { display: none; }
 .notice button { width: 100%; border: 0; background: var(--selected); color: var(--text); padding: 6px; border-radius: 6px; font: inherit; }
-.row .sound { border: 0; background: none; width: 20px; height: 20px; padding: 0; font-size: 11px; line-height: 1; border-radius: 5px; }
-.row .sound:hover { background: var(--hover); }
 .row .count { color: var(--muted); font-size: 11px; }
 .row .rename { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--selected); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 4px; }
 .folder.live > .row .title::after { content: " ⟳"; color: var(--muted); }
@@ -115,3 +113,19 @@ body {
 .drop-after { box-shadow: 0 2px 0 0 var(--accent); }
 .drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
 .cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+
+/* Where the sound is coming from: one small speaker in the text colour, only while
+ * something plays or is muted, at a fixed place, so nothing moves when it comes or goes.
+ * On a row and a closed folder it sits before the end; on a tile and a space's dot it
+ * lies over the lower corner (the upper one is for a page's news). */
+.speaker { display: block; width: 12px; height: 12px; fill: currentColor; stroke: currentColor; }
+.sound { display: grid; place-items: center; border: 0; background: none; padding: 0; color: var(--text); border-radius: 5px; cursor: default; }
+.sound.muted { color: var(--muted); }
+.sound:hover { background: var(--hover); }
+.row .sound { flex: none; width: 20px; height: 20px; }
+.head .sound + .count { min-width: 20px; text-align: right; } /* in line with the rows' speakers */
+.tile, .space { position: relative; }
+.tile .sound { position: absolute; bottom: 1px; right: 1px; width: 16px; height: 16px; }
+.tile .speaker { width: 11px; height: 11px; }
+.space .sound { position: absolute; bottom: 0; right: 0; width: 13px; height: 13px; }
+.space .speaker { width: 9px; height: 9px; }
