@@ -379,6 +379,26 @@ test("choosing an essential selects this window's copy", async () => {
   x.kill();
 });
 
+test("pages in no record can be found and gone to, but no empty new tab or placeholder without a record", async () => {
+  const ff = new FakeFirefox();
+  const { w, v } = world(ff);
+  const settings = ff.addTab(w.id, { url: "about:preferences", title: "Settings" });
+  ff.addTab(w.id, { url: "moz-extension://tidier/settings/settings.html", title: "Tidier settings" });
+  ff.addTab(w.id, { url: "about:newtab", title: "New Tab" });
+  const x = await started(ff);
+  const page = await openBar(ff, x, v.id);
+  const pages = page.sent[0].items.filter(i => String(i.id).startsWith("page:"));
+  assert.deepEqual(Array.from(pages, i => i.title).sort(), ["Settings", "Tidier settings"]);
+  assert.equal(pages.find(i => i.title === "Tidier settings").url, undefined, "an extension's address is nothing to search or show");
+  // In a new tab there is no such thing: it goes to the page, also from another window.
+  await page.tell({ type: "choose", inNewTab: true, row: { kind: "tab", tabId: settings.id, url: "about:preferences" } });
+  await wait(300);
+  assert.equal(ff.focused, w.id);
+  assert.ok(ff.tabs.get(settings.id).active);
+  assert.ok(!x.js("problems").length);
+  x.kill();
+});
+
 test("a tab that has gone since the bar opened opens its address instead", async () => {
   const ff = new FakeFirefox();
   const { w } = world(ff);

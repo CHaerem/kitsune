@@ -1904,6 +1904,21 @@ def alone_command_bar(m):
       const u = url(w.gBrowser.selectedTab); w.gBrowser.removeTab(w.gBrowser.selectedTab); await wait(800); return u;""")
     check("Settings opens Tidier's settings", "/settings/settings.html" in r, str(r))
 
+    # What you selected in the sidebar is what the commands act on. Its page in a tab stands
+    # in for the sidebar, which is closed meanwhile: only one must answer, and a page's own
+    # code can be given a stand-in for the selection only from a function of that page.
+    m.js(H + "await main().SidebarController.hide(); await wait(300); return 1;")
+    ids = sidebar_page(m, """await wait(500); const ids = [...doc.querySelectorAll("#tabs .tab")].slice(0, 2).map(r => Number(r.dataset.tab));
+      page.selectedTabs = page.JSON.parse.bind(page.JSON, JSON.stringify(ids)); return ids;""")
+    bar_open(m)
+    bar_keys(m, "close")
+    rows = bar_rows_until(m, lambda rows: any(x["kind"] == "command" for x in rows))
+    check("commands act on what is selected in the sidebar", len(ids) == 2 and any(x["title"] == "Close 2 tabs" for x in rows), f"{ids} {rows}")
+    bar_keys(m, [ESC])
+    wait_for_bar(m, False)
+    m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t);
+      await w.SidebarController.show("_6844a953-9931-4334-9ff6-257c246485cb_-sidebar-action"); await wait(500); return 1;""")
+
     # ⌘T: Firefox's own until it lets go of it (customKeys.json), and then the bar's.
     r = m.js(H + """const w = main(); w.focus(); for (let i = 0; i < 100 && Services.focus.activeWindow !== w; i++) await wait(50);
       return {freed: !w.document.getElementById("key_newNavigatorTab")?.getAttribute("key"), tabs: w.gBrowser.tabs.length};""")

@@ -254,12 +254,13 @@ async function barTabItems(ctx) {
       current: copies.some(t => t.id === ctx.tab?.id),
     });
   }
-  // Pages that are in no record (settings, about: pages), but not an empty new tab.
+  // Pages that are in no record (settings, about: pages), but not an empty new tab. An
+  // extension page's address is a meaningless number, nothing to find it by or to show.
   for (const t of tabs) {
     if (t.pinned || syncKeyByTab.has(t.id) || isGhostUrl(t.url) || NEW_TAB_PAGES.has(t.url)) continue;
     const space = t.cookieStoreId === NO_CONTAINER ? null : t.cookieStoreId;
     items.push({
-      kind: "tab", id: `page:${t.id}`, tabId: t.id, title: t.title || t.url, url: t.url, icon: t.favIconUrl || null,
+      kind: "tab", id: `page:${t.id}`, tabId: t.id, title: t.title || t.url, url: t.url.startsWith("moz-extension:") ? undefined : t.url, icon: t.favIconUrl || null,
       space, here: !space || here(space), lastUsed: t.lastAccessed || 0, current: t.id === ctx.tab?.id,
     });
   }
@@ -376,7 +377,7 @@ async function barCarryOut(ctx, { row, inNewTab, value }) {
   if (row.kind === "folder") return serial(() => barGoToFolder(ctx, row.key));
   if (row.kind === "closed") return barReopenClosed(ctx, row);
   if (row.kind === "archived") return barReopenArchived(ctx, row);
-  if (row.kind === "tab" || row.kind === "essential") return inNewTab && row.url ? barOpenTab(ctx, row.url) : barGoToTab(ctx, row);
+  if (row.kind === "tab" || row.kind === "essential") return inNewTab && isWeb(row.url) ? barOpenTab(ctx, row.url) : barGoToTab(ctx, row); // Firefox opens no about: page for an extension
   if (row.url) return barOpenTab(ctx, row.url); // an address, a bookmark, something from history
 }
 
