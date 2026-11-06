@@ -406,6 +406,10 @@ async function register(tabId) {
 // still there, unloaded. The reopened tab becomes the live tab, and its
 // placeholder in this window is removed, so it is not there twice.
 async function reopenedSaved(tab, all) {
+  // Dragged to another window meanwhile: that arrival looked like nothing of ours, and the
+  // ghosts just went by the window it was in.
+  const now = await browser.tabs.get(tab.id).catch(() => null);
+  if (now && now.windowId !== tab.windowId) await reconcileAll();
   const key = await browser.sessions.getTabValue(tab.id, SYNC_KEY).catch(() => undefined);
   const entry = key && all[key];
   if (!entry || entry.group) return false;
@@ -516,7 +520,10 @@ async function dropIfUnused(key) {
 // The live tab's window is closing: a ghost in another window takes over.
 async function handOver(key, closingWindowId) {
   const reps = repsOf(key, await browser.tabs.query({})).filter(t => t.windowId !== closingWindowId);
-  if (reps.length) await setRole(reps[0].id, key, "live");
+  if (reps.length) { await setRole(reps[0].id, key, "live"); return; }
+  // No other window has it yet (one still being filled, say). It was the only copy now, so
+  // they must get it, or the next start takes it for a tab you closed.
+  for (const w of await normalWindows()) if (w.id !== closingWindowId) await fillIfOpen(w.id);
 }
 
 // Pull the live tab for `ghostId` into the ghost's window. The part you see

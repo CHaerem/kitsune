@@ -1099,3 +1099,29 @@ test("a copy unpinned just after it appeared becomes an ordinary tab", async () 
   assert.ok(!ff.list(b.id).some(y => y.url.includes("ghost.html") && !ff.values.get(y.id)?.syncKey), "no placeholder stands for nothing");
   x.kill();
 });
+
+test("a tab whose only copy is in a closing window goes to the windows still being filled", async () => {
+  const { ff, x, windows: [a] } = await chaosStart({ windows: 1 });
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  const { window: fresh } = ff.openWindow();
+  ff.closeWindow(a.id); // before Tidier starts on the new window
+  await ff.clock.idle(60000);
+  assert.ok(ff.synced[key], "it is in the record");
+  assert.ok(ff.list(fresh.id).some(y => ff.values.get(y.id)?.syncKey === key), "and in the window left");
+  x.kill();
+});
+
+test("a tab dragged to another window while it is being registered gets its ghost right", async () => {
+  for (const delay of [1490, 1500, 1503, 1506, 1509, 1512, 1515, 1520, 1525, 1530]) {
+    const { ff, x, windows: [a, b] } = await chaosStart();
+    const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+    await ff.clock.run(delay);
+    ff.moveTabs([t.id], { windowId: b.id, index: -1 });
+    await ff.clock.idle(60000);
+    const key = ff.values.get(t.id).syncKey;
+    for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1, `after ${delay} ms, one in window ${w.id}`);
+    x.kill();
+  }
+});
