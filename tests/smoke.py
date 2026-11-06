@@ -1470,6 +1470,7 @@ def alone_news(m):
     name = "smoke-news-"
     page = lambda which: f"{m.pages}/titled?{name}{which}"
     spaces = sidebar_page(m, "return spaces();")
+    remembered = extension_message(m, {"type": "stats"})["sizes"]["newsSeen"]
     here = next(s["id"] for s in spaces if s["active"])
     there = next(s["id"] for s in spaces if not s["active"] and s["id"] != "firefox-container-4")
     number = lambda space: int(space.rsplit("-", 1)[1])
@@ -1675,7 +1676,7 @@ def alone_news(m):
       await removeWhere((x, t) => url(t).includes(args[0]));
       return 1;""", name)
     stats = extension_message(m, {"type": "stats"})
-    check("no mark stays once its pages are gone", stats["sizes"]["newsMarks"] == 0, str(stats["sizes"]))
+    check("no mark stays once its pages are gone, and nothing is kept of them", stats["sizes"]["newsMarks"] == 0 and stats["sizes"]["newsSeen"] <= remembered, f"{remembered} -> {stats['sizes']}")
 
 
 def alone_idle(m):
