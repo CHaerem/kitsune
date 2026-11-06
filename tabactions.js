@@ -146,12 +146,17 @@ async function stepAwayFrom(tab, leaving) {
 // them the copy would count as the same tab: it would take over a saved tab's record once
 // the original is closed, and be an essential's copy after a restart. Nor is the copy a
 // tab's first page: a rule must not send it to another space.
+//
+// The queue does not wait for this: Firefox answers when the copy starts to restore, and
+// never if the copy is closed first, which would stop everything for minutes. The answer
+// still comes before the copy's address is reported, and long before it is registered.
 async function duplicateReal(r) {
   if (!r.address) return;
   if (r.loaded) {
-    const copy = await browser.tabs.duplicate(r.tab.id, { active: false, index: r.tab.index + 1 });
-    firstPage.delete(copy.id);
-    await Promise.all([SYNC_KEY, SYNC_ROLE, TAB_KEY].map(name => browser.sessions.removeTabValue(copy.id, name).catch(() => {})));
+    browser.tabs.duplicate(r.tab.id, { active: false, index: r.tab.index + 1 }).then(copy => {
+      firstPage.delete(copy.id);
+      return Promise.all([SYNC_KEY, SYNC_ROLE, TAB_KEY].map(name => browser.sessions.removeTabValue(copy.id, name).catch(() => {})));
+    }).catch(noteError);
     return;
   }
   const props = { windowId: r.own.windowId, cookieStoreId: r.space, url: r.address, active: false, index: r.own.index + 1 };

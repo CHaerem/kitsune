@@ -1559,9 +1559,23 @@ def alone_tab_menu(m):
           const closed = menu.hidden, left = row.classList.contains("menu-for");
           const tile = doc.querySelector("#essentials .tile"), tileLabels = await rightClick(tile);
           menu.hidden = true;
-          return {labels, about, closed, left, tileLabels};""", a)
+          // The keys: ↑ from the top is the last item, → opens a list with its first item ready, ← goes back.
+          await rightClick(row);
+          const key = k => doc.activeElement.dispatchEvent(new page.KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));
+          const at = () => doc.activeElement.textContent;
+          const inMenu = doc.activeElement === menu;
+          key("ArrowDown"); const first = at();
+          key("ArrowUp"); const last = at();
+          const more = [...menu.querySelectorAll(".item")].find(x => x.textContent === "Move to space"); more.focus();
+          key("ArrowRight"); const sub = {top: menu.firstChild.textContent, focus: doc.activeElement.classList.contains("back"), at: at()};
+          key("ArrowLeft"); const back = menu.querySelectorAll(".back").length;
+          menu.hidden = true;
+          return {labels, about, closed, left, tileLabels, keys: {inMenu, first, last, sub, back}};""", a)
         check("a right click on a row shows Tidier's menu, in its order", r["labels"] == ROW_MENU, str(r))
         check("the menu marks the row it is about, and Esc closes it", r["about"] and r["closed"] and not r["left"], str(r))
+        k = r["keys"]
+        check("the arrow keys go through the menu, and into a list and back", k["inMenu"] and k["first"] == "Reload" and k["last"] == "Close" and k["sub"]["top"] == "Move to space"
+              and not k["sub"]["focus"] and k["sub"]["at"] and k["back"] == 0, str(k))
         tile_rest = ["Duplicate", "Copy address", "|", "Remove from essentials"]
         check("a right click on a tile offers no folder, space or rule", r["tileLabels"] in (tile_rest, ["Reload", "Mute", "Unload", "|", *tile_rest, "|", "Close"]), str(r))
 

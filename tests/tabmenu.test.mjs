@@ -30,12 +30,13 @@ const act = async (x, windowId, action, tabIds, more = {}) => {
 
 // --- Which items it offers ----------------------------------------------------------
 function menu({ folders = [], spaces = [{ id: C1, name: "One" }, { id: C2, name: "Two", color: "#123" }], renameKept } = {}) {
-  const sent = [];
-  const ctx = vm.createContext({ view: { folders, spaces, space: C1 }, send: m => sent.push(m), window: renameKept ? { renameKept } : {}, renameNext: false, document: {}, browser: {}, navigator: {}, console });
+  const sent = [], copied = [];
+  const clipboard = { writeText: async text => { copied.push(text); } };
+  const ctx = vm.createContext({ view: { folders, spaces, space: C1 }, send: m => sent.push(m), window: renameKept ? { renameKept } : {}, renameNext: false, document: {}, browser: {}, navigator: { clipboard }, console });
   vm.runInContext(readFileSync(new URL("../sidebar/tabmenu.js", import.meta.url), "utf8"), ctx);
   const items = vm.runInContext("tabMenuItems", ctx);
   // Arrays from another context compare as different: these are made here.
-  return { sent, ctx, items, labels: tabs => Array.from(items(tabs), i => (i ? i[0] : "|")) };
+  return { sent, copied, ctx, items, labels: tabs => Array.from(items(tabs), i => (i ? i[0] : "|")) };
 }
 const row = (more = {}) => ({ id: 1, tile: false, kept: false, loaded: true, muted: false, address: "https://a.example/", folder: null, liveFolder: false, space: C1, ruled: false, ...more });
 const tile = (more = {}) => row({ tile: true, kept: true, ...more });
@@ -52,6 +53,10 @@ test("a muted page offers Unmute, and a new tab only Close", () => {
   assert.ok(menu().labels([row({ muted: true })]).includes("Unmute"));
   assert.ok(!menu().labels([row({ muted: true })]).includes("Mute"));
   assert.deepEqual(menu().labels([row({ loaded: false, address: null })]), ["Close"]);
+});
+
+test("a page of Firefox's own can be reloaded and closed, not unloaded or moved", () => {
+  assert.deepEqual(menu().labels([row({ address: null })]), ["Reload", "Mute", "|", "Close"]);
 });
 
 test("a tile has no folder, space or rule, and can be taken out of the essentials", () => {
@@ -104,6 +109,14 @@ test("the lists in place: other folders and spaces, and New folder last", () => 
   assert.deepEqual(sub([row()], "Move to space"), ["Two"]);
   const only = menu({ spaces: [{ id: C1, name: "One" }] });
   assert.ok(!only.labels([row()]).includes("Move to space"), "nowhere to go");
+});
+
+test("Copy takes one address per line, on the click", () => {
+  const m = menu();
+  m.items([row()]).find(i => i?.[0] === "Copy address")[1]();
+  m.items([row({ id: 1, address: "https://a.example/x" }), row({ id: 2, address: "https://b.example/y" })]).find(i => i?.[0] === "Copy 2 addresses")[1]();
+  assert.deepEqual(m.copied, ["https://a.example/", "https://a.example/x\nhttps://b.example/y"]);
+  assert.deepEqual(m.sent, [], "nothing to ask the background");
 });
 
 test("items send one list, and Close one message per tab", () => {
@@ -371,6 +384,15 @@ test("Duplicate of an essential is an ordinary tab, loaded or not", async () => 
   await wait(2500);
   assert.equal(ff.store.essentials?.length ?? 1, 1);
   assert.equal(Object.values(ff.synced).filter(e => e.url === "https://e.example/inbox").length, 1, "a tab of its own");
+  x.kill();
+});
+
+test("a copy closed before it starts is no reason to stop the queue", async () => {
+  const ff = new FakeFirefox();
+  const { x, here, live } = await twoWindows(ff);
+  x.b.tabs.duplicate = () => new Promise(() => {}); // as Firefox does then: no answer, ever
+  await act(x, here.id, "duplicate", [live.id]);
+  assert.equal(await x.js("serial")(() => "free"), "free");
   x.kill();
 });
 

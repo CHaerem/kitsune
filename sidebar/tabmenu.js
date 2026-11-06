@@ -31,12 +31,13 @@ const TAB_MENU = [
     when: tabs => tabs.every(t => t.loaded) && tabs.some(t => !t.muted), run: tabs => tabAct("mute", tabs) },
   { id: "unmute", group: 1, many: true, label: n => tabsWord(n, "Unmute", "Unmute # tabs"),
     when: eachTab(t => t.loaded && t.muted), run: tabs => tabAct("unmute", tabs) },
+  // Firefox cannot unload its own pages (about:), and would refuse without a word.
   { id: "unload", group: 1, many: true, label: n => tabsWord(n, "Unload", "Unload # tabs"),
-    when: eachTab(t => t.loaded), run: tabs => tabAct("unload", tabs) },
+    when: eachTab(t => t.loaded && !!t.address), run: tabs => tabAct("unload", tabs) },
 
   { id: "duplicate", group: 2, label: () => "Duplicate",
     when: eachTab(t => !!t.address), run: tabs => tabAct("duplicate", tabs) },
-  // Here, on the click, since the sidebar can write to the clipboard without the queue.
+  // Here, on the click: the addresses are at hand, and a copy need not wait for the queue.
   { id: "copy", group: 2, many: true, label: n => tabsWord(n, "Copy address", "Copy # addresses"),
     when: eachTab(t => !!t.address), run: tabs => navigator.clipboard.writeText(tabs.map(t => t.address).join("\n")).catch(err => console.error("Tidier: copy", err)) },
 
