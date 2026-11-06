@@ -1517,6 +1517,7 @@ def alone_touches(m):
       // Where to take the pointer, below.
       const warm = await until(() => rowOf("/icon?warm"));
       const at = e => { const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; };
+      out.warmId = Number(warm.dataset.tab);
       const closeBox = warm.getBoundingClientRect();
       const tile = await until(async () => { const t = (await page.browser.tabs.query({windowId: here.id, pinned: true})).find(x => x.url.includes("/icon?tile"));
         const e = t && doc.querySelector(`#essentials .tile[data-tab="${t.id}"]`); return e?.querySelector(icon) && !e.matches(".unloaded") && e; });
@@ -1591,7 +1592,7 @@ def alone_touches(m):
     check("a page on another site with no icon has a letter, not the old site's icon, and the new address", (r.get("cross") or {}).get("letter") is True and r["cross"]["image"] is False and r["cross"]["tip"].endswith("localhost:" + m.pages.rsplit(":", 1)[1] + "/no-icon"), str(r))
     check("a slow load shows nothing at first, and on the icon after half a second", r.get("quietBefore") is True and r.get("shown") is True and r.get("shownAfter", 0) >= 500, str(r))
     a = r.get("animation") or {}
-    check("the sign breathes, and comes to rest by itself", a.get("name") == "slow-load" and a.get("state") == "running" and 0 < a.get("iterations", 0) < 100, str(r))
+    check("the sign breathes, and comes to rest by itself", a.get("name") == "slow-load" and a.get("state") == "running" and 0 < (a.get("iterations") or 0) < 100, str(r))
     fade = r.get("brightening") or [0]
     check("the sign goes softly when the page is there", r.get("gone") is True and r.get("fading") == [300] and fade == sorted(fade) and fade[-1] == 1, str(r))
     check("a load does not replace the icon", r.get("sameIcon") is True, str(r))
@@ -1610,6 +1611,22 @@ def alone_touches(m):
     pointer_over(m, p["title"], p["close"], p["ghost"], p["title"], p["showing"], p["close"], p["nothing"], p["title"], p["ghostTile"], p["tile"], p["tile"])
     warmed = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 5; i++) await wait(50); await wait(200); return main().__warmed;")
     check("a tab is warmed once for each time the pointer comes to it, and only a loaded one", len(warmed) == 5 and all("/icon?warm" in u for u in warmed[:4]) and "?tile" in warmed[4], str(warmed))
+
+    # The sidebar panel itself, as in use: the page above is the same page, opened in a tab, since
+    # a test can take a real pointer only there. Here a pointer's event is sent to a row instead.
+    r2 = sidebar_page(m, until + """
+      const panel = page.browser.extension.getViews({type: "sidebar", windowId: here.id})[0];
+      if (!panel) return {panel: false};
+      const rowThere = id => panel.document.querySelector(`#tabs .tab[data-tab="${id}"]`), slow = rowThere(arguments[0]);
+      const out = {panel: true, tip: slow?.title};
+      rowThere(arguments[1])?.dispatchEvent(new panel.MouseEvent("mouseover", {bubbles: true}));
+      await page.browser.tabs.reload(arguments[0]);
+      out.sign = !!(await until(() => slow.querySelector(".slow-load"), 6000));
+      out.ended = !!(await until(() => !slow.querySelector(".slow-load"), 6000));
+      return out;""", r.get("slowId"), r.get("warmId"))
+    warmed_there = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 6; i++) await wait(50); return main().__warmed;")
+    check("in the sidebar panel itself, the tooltip, the sign and the warm-up are the same",
+          r2.get("panel") is True and "/slow" in (r2.get("tip") or "") and r2.get("sign") is True and r2.get("ended") is True and len(warmed_there) == 6 and "/icon?warm" in warmed_there[5], f"{r2} {warmed_there}")
 
     # Asked for less motion: the sign is a still dim, and what moved in the sidebar stands still.
     m.js('Services.prefs.setIntPref("ui.prefersReducedMotion", 1); return 1;')
