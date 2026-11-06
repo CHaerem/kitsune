@@ -77,7 +77,8 @@ async function moveTab(windowId, tabId, beforeTabId, folderKey) {
     for (const w of await normalWindows()) {
       const tabs = await browser.tabs.query({ windowId: w.id });
       const reps = repMap(tabs);
-      if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : null);
+      // A tab with no record (a new tab page) is in this window only: its id is the place here.
+      if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : beforeTabId);
     }
   } else {
     await moveInWindow(await browser.tabs.query({ windowId }), tabId, beforeTabId);
