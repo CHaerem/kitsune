@@ -769,7 +769,10 @@ def restart(m):
     check("after a restart, both windows have the same essentials and tabs as before",
           len(aw) == len(bw) == 2 and all(w["essentials"] and w["keys"] for w in bw) and [w["essentials"] for w in aw] == [w["essentials"] for w in bw]
           and [w["keys"] for w in aw] == [w["keys"] for w in bw] and after["synced"] == before["synced"],
-          f"before {[(len(w['essentials']), len(w['keys'])) for w in bw]} {before['synced']}, after {[(len(w['essentials']), len(w['keys'])) for w in aw]} {after['synced']}")
+          f"before {[(len(w['essentials']), len(w['keys'])) for w in bw]} {before['synced']}, after {[(len(w['essentials']), len(w['keys'])) for w in aw]} {after['synced']}; "
+          f"same essentials {[a['essentials'] == b['essentials'] for a, b in zip(aw, bw)]}, same tabs {[a['keys'] == b['keys'] for a, b in zip(aw, bw)]}, "
+          f"essentials before {[w['essentials'] for w in bw]}, after {[w['essentials'] for w in aw]}, "
+          f"tabs gone {[sorted(set(b['keys']) - set(a['keys'])) for a, b in zip(aw, bw)]}, new {[sorted(set(a['keys']) - set(b['keys'])) for a, b in zip(aw, bw)]}")
     lives = sorted(k for w in aw for k in w["live"])
     check("after a restart, every tab is live in one window only, and no other tab came or went",
           len(lives) == len(set(lives)) and sorted(w["untagged"] for w in aw) == sorted(w["untagged"] for w in bw),
