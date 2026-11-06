@@ -1490,16 +1490,19 @@ def alone_archived(m):
     # The sidebar page in front, as a sidebar always is: a page behind others is not drawn.
     m.js(H + """const w = main(); w.focus(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
 
-    def mouse(x, y, click=True):
-        """Firefox's own mouse, on the sidebar page in front."""
+    def mouse(x, y, click=True, double=False):
+        """Firefox's own mouse, on the sidebar page in front. A double click has the slide's time between its clicks."""
         m.cmd("Marionette:SetContext", {"value": "content"})
         for h in m.cmd("WebDriver:GetWindowHandles"):
             m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
             if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
                 break
         acts = [{"type": "pointerMove", "x": round(x), "y": round(y), "duration": 0}]
+        press = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
         if click:
-            acts += [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
+            acts += press
+        if double:
+            acts += [{"type": "pause", "duration": 350}] + press
         m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": acts}]})
         m.cmd("WebDriver:ReleaseActions")
         m.chrome()
@@ -1659,6 +1662,97 @@ def alone_archived(m):
     c = m.js(H + """return {left: wins().flatMap(w => w.gBrowser.tabs.filter(t => key(w, t) === JSON.stringify(args[0]))).length,
               recently: wins().flatMap(w => w.SessionStore.getClosedTabDataForWindow(w).map(c => c.state.entries.at(-1)?.url)).filter(u => u?.includes("ghost.html") && u.includes(encodeURIComponent(args[0]))).length};""", h["key"])
     check("nothing of it is left, in the tabs or as a placeholder in Recently Closed", c == {"left": 0, "recently": 0}, str(c))
+
+    # A double click is one click: what comes under the pointer after the first does not get
+    # the second. Three rows of their own, with the sidebar page in front again.
+    urls = m.js(H + settled + """const w = main(), [pages, ctx] = args;
+      const made = ["a", "b", "c"].map(q => w.gBrowser.addTrustedTab(pages + "/titled?smoke-archived-twice-" + q, {userContextId: ctx, inBackground: true}));
+      await settled(() => made.every(t => key(w, t) && t.label === %s));
+      const urls = made.map(url);
+      for (const t of made) { w.gBrowser.removeTab(t); await wait(150); }
+      w.focus(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500);
+      return urls;""" % json.dumps(TITLE), m.pages, ctx)
+    tab_count = """return main().gBrowser.tabs.length;"""
+    opened_view = box + """page.openArchived(); await settled(() => open() && rowsHere().length >= args[0]); await settled(() => box.getBoundingClientRect().left === 0);"""
+    r = sidebar_page(m, opened_view + """const row = rowsHere()[0]; return {x: row.getBoundingClientRect().right - 16, y: middle(row).y, n: rowsHere().length};""", 3)
+    n0 = m.js(H + tab_count)
+    mouse(r["x"], r["y"], double=True)
+    t = sidebar_page(m, box + """await settled(() => rowsHere().length < args[0]); await wait(500); return {n: rowsHere().length, open: open(), first: rowsHere()[0]?.title};""", r["n"])
+    check("a double click on × forgets one row, and opens nothing", t.get("n") == r["n"] - 1 and t.get("open") and m.js(H + tab_count) == n0 and urls[1] in t.get("first", ""), str(t))
+    b = sidebar_page(m, box + """return middle(box.querySelector(".back"));""")
+    mouse(b["x"], b["y"], double=True)
+    t = sidebar_page(m, box + """await settled(() => !open()); await wait(500); return {open: open()};""")
+    check("a double click on the back row goes back, and presses nothing under it", t.get("open") is False and m.js(H + tab_count) == n0, f"{t} {n0} -> {m.js(H + tab_count)}")
+    # A row selects its tab, and then this page is behind it and gets no real mouse here, so the
+    # second click is the same event Firefox would send to the row of the list come into sight.
+    r = sidebar_page(m, opened_view + """
+      const under = doc.querySelector("#tabs > .tab"), row = rowsHere()[0], tip = row.title;
+      const click = (e, detail) => e.dispatchEvent(new page.MouseEvent("click", {bubbles: true, cancelable: true, detail}));
+      click(row, 1);
+      const closed = !open();
+      await wait(300);
+      click(under, 2);
+      await wait(800);
+      return {closed, tip};""", 2)
+    t = m.js(H + settled + """const w = main(); await settled(() => url(w.gBrowser.selectedTab) === args[0], 5000); return url(w.gBrowser.selectedTab);""", urls[1])
+    check("a double click on a row opens that tab, and the list under it does not get the second click", r.get("closed") and t == urls[1], f"{r} {t}")
+
+    # With the view closed nothing of it is kept, and it opens again at the top.
+    m.js(H + """const w = main(); w.focus(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
+    r = sidebar_page(m, opened_view + """
+      const scroller = box.querySelector(".rows");
+      scroller.style.maxHeight = "20px"; scroller.scrollTop = 20;
+      const scrolled = scroller.scrollTop;
+      key("Escape");
+      await settled(() => !rowsHere().length, 3000);
+      const left = rowsHere().length;
+      scroller.style.maxHeight = "";
+      page.openArchived();
+      await settled(() => open() && rowsHere().length);
+      return {scrolled, left, top: scroller.scrollTop};""", 1)
+    check("a closed view keeps no rows, and opens again at the top", r.get("scrolled") and r.get("left") == 0 and r.get("top") == 0, str(r))
+
+    # The age changes with the minute, and only the age: a row redrawn under a click would take
+    # the click from its × (the row then opens instead of forgets), and fetch its icon again.
+    r = sidebar_page(m, box + """
+      await settled(() => open() && rowsHere().length);
+      const row = rowsHere()[0], close = row.querySelector(".close"), title = row.querySelector(".title"), now = page.Date.now;
+      page.Date.now = page.Function.prototype.bind.call(page.Number, null, Date.now() + 5 * 3600e3 + 60000);
+      await page.refreshArchived();
+      page.Date.now = now;
+      return {same: row.isConnected && row.querySelector(".close") === close && row.querySelector(".title") === title, age: row.querySelector(".age").textContent};""")
+    check("when only time has passed a row shows its new age, and nothing else of it is drawn again", r.get("same") and r.get("age") == "5 h", str(r))
+
+    # A key or a link can change the space under the view: it was about the space you were in.
+    r = sidebar_page(m, box + """
+      await settled(() => open());
+      const away = spaces().find(s => !s.active).id;
+      send({type: "space", space: away});
+      await settled(() => spaces().find(s => s.active).id === away);
+      await settled(() => !open(), 3000);
+      const closed = !open();
+      send({type: "space", space: args[0]});
+      await settled(() => spaces().find(s => s.active).id === args[0]);
+      return {closed};""", space)
+    check("a space changed by a key closes the view", r.get("closed"), str(r))
+
+    # A container removed in Firefox's settings: its tabs close first, each one lands in the
+    # list, and then the container goes. Neither its rows nor a view of them are left.
+    c = m.js(H + settled + """const w = main(), C = w.ContextualIdentityService, made = C.create("Smoke gone", "circle", "blue");
+      const t = w.gBrowser.addTrustedTab(args[0] + "/titled?smoke-archived-gone", {userContextId: made.userContextId, inBackground: true});
+      await settled(() => key(w, t) && t.label === %s);
+      return {id: made.userContextId, url: url(t)};""" % json.dumps(TITLE), m.pages)
+    gone = "firefox-container-%d" % c["id"]
+    r = sidebar_page(m, box + """await settled(() => doc.querySelector(`#spaces .space[data-space="${args[0]}"]`));
+      page.openArchived(args[0]); await settled(() => open()); return open();""", gone)
+    m.js(H + settled + """const C = main().ContextualIdentityService; await C.closeContainerTabs(args[0]); C.remove(args[0]); return 1;""", c["id"])
+    r = sidebar_page(m, box + """await settled(() => !open(), 5000);
+      await settled(() => !doc.querySelector(`#spaces .space[data-space="${args[0]}"]`), 5000);
+      await wait(1000);
+      const every = await page.browser.runtime.sendMessage({type: "archivedTabs"}).then(l => JSON.parse(JSON.stringify(l)));
+      const stored = await page.browser.storage.local.get("archivedTabs").then(l => JSON.parse(JSON.stringify(l)));
+      return {open: open(), every: every.filter(x => x.space === args[0]), stored: Object.keys(stored.archivedTabs || {}).includes(args[0])};""", gone)
+    check("a removed container's rows and its open view go with it", r.get("open") is False and r.get("every") == [], str(r))
 
     # What this group added goes again.
     m.js(H + settled + """const a = main(), ours = (w, t) => url(t).includes("smoke-archived") || String(t.label) === %s;

@@ -19,6 +19,7 @@ archivedBox.append(archivedBack, archivedRows);
 document.body.append(archivedBox);
 
 let archivedSpace = null; // the space whose list is open, or null
+const ARCHIVED_SLIDE_MS = 300; // longer than its slide, in archived.css
 const archivedEmpty = el("div", "empty", "Nothing here. Tabs you close, and tabs left unused, stay here for 30 days.");
 
 // Age in words, as of when it is drawn: it is not worth a timer that ticks.
@@ -44,7 +45,9 @@ function forgetRow(item, row) {
 }
 
 // Rows are kept, as in the list, and redrawn only if they changed: a view can arrive
-// at any moment, and replacing a row would lose a click that is under way.
+// at any moment, and replacing a row would lose a click that is under way. The age alone
+// is written at each draw: it changes every minute, and a × replaced under a click gives
+// the click to the row, which opens the tab instead of forgetting it.
 const archivedKept = new Map(); // "space address" -> its row
 function archivedRow(item) {
   const id = item.space + " " + item.url;
@@ -55,7 +58,7 @@ function archivedRow(item) {
     row.onauxclick = e => { if (e.button === 1) forgetRow(item, row); };
     archivedKept.set(id, row);
   }
-  const age = archivedAge(item.when), state = JSON.stringify([item.title, item.icon, age]);
+  const state = JSON.stringify([item.title, item.icon, item.when, item.why]);
   if (row.dataset.state !== state) {
     row.dataset.state = state;
     row.title = `${item.title}\n${item.url}\n${item.why === "archived" ? "Archived" : "Closed"} ${new Date(item.when).toLocaleString()}`;
@@ -65,8 +68,9 @@ function archivedRow(item) {
     // Up to 200 pictures from as many sites: only those that come into sight are fetched.
     const picture = icon(item);
     if (picture.tagName === "IMG") picture.loading = "lazy";
-    row.replaceChildren(picture, el("span", "title", item.title), el("span", "age", age), forget);
+    row.replaceChildren(picture, el("span", "title", item.title), el("span", "age"), forget);
   }
+  row.querySelector(".age").textContent = archivedAge(item.when);
   return row;
 }
 
@@ -89,7 +93,15 @@ async function refreshArchived() {
   const items = await browser.runtime.sendMessage({ type: "archivedTabs", space: archivedSpace }).catch(() => null);
   if (items && asked === archivedAsked && archivedSpace) drawArchived(items);
 }
-port.onMessage.addListener(refreshArchived); // something closed or came back while it is open
+// A view has arrived: something closed or came back while it is open, so it looks again.
+// Unless you are in another space by now (a key, a link from another app), or the space it
+// shows is gone: it was about where you were, and the list under it is not that any more.
+let archivedFrom = null; // the space you were in when it opened
+port.onMessage.addListener(() => {
+  if (!archivedSpace) return;
+  if (view.space !== archivedFrom || !view.spaces.some(s => s.id === archivedSpace)) closeArchived();
+  else refreshArchived();
+});
 
 // Over the actions and the list, whatever their size (a window resized, essentials added):
 // the essentials, the space's name and the bar stay in sight. A plain box in the page's
@@ -108,6 +120,7 @@ async function openArchived(space = view?.space) {
   if (!view?.alone || !space) return;
   closeMenu();
   archivedSpace = space;
+  archivedFrom = view.space;
   fitArchived();
   archivedFit.observe(document.getElementById("tabs"));
   await refreshArchived(); // drawn first, so it does not slide in with an old list
@@ -120,12 +133,32 @@ function closeArchived() {
   archivedFit.disconnect();
   moveArchivedCursor(null);
   archivedBox.classList.remove("open");
+  // Once it has slid away nothing of it is kept: up to 200 rows with their pictures, and
+  // the next time it opens at the top, with what is new.
+  setTimeout(() => {
+    if (archivedSpace) return;
+    archivedRows.replaceChildren();
+    archivedKept.clear();
+  }, ARCHIVED_SLIDE_MS);
 }
 
 archivedBack.onclick = closeArchived;
 archivedBox.oncontextmenu = e => e.preventDefault(); // Firefox's menu for a page has nothing to offer here
+// A double click in the view is one click. The first closes the view or removes a row, and
+// the second would land on what has come under the pointer: another tab selected, "New tab"
+// pressed, the next row forgotten or opened, a folder renamed by the double click itself.
+let archivedClickIn = false; // the last single click was in the view
+const secondClick = e => {
+  if (!archivedClickIn || e.detail < 2) return false;
+  e.stopPropagation();
+  e.preventDefault();
+  return true;
+};
+addEventListener("dblclick", secondClick, true);
 addEventListener("click", e => {
-  if (archivedSpace && !archivedBox.contains(e.target) && !e.target.closest?.("#menu")) closeArchived();
+  if (secondClick(e)) return;
+  archivedClickIn = archivedBox.contains(e.target);
+  if (archivedSpace && !archivedClickIn && !e.target.closest?.("#menu")) closeArchived();
 }, true);
 
 // The list's keys work here too, and must not reach the list under it (keys.js): ↑ and ↓
