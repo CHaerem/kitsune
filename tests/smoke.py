@@ -1527,7 +1527,7 @@ def little_alt_click(m, handle_part, selector):
 
 
 def alone_little_window(m):
-    base = m.pages + "/ticking?little-"
+    base = m.pages + "/links?little-"
     # Two windows, as tabs show in both. (alone_second_window may have opened one.)
     opened = m.js(H + """if (other()) return false;
       const w = main().OpenBrowserWindow(); w.__smoke = true;
@@ -1567,8 +1567,7 @@ def alone_little_window(m):
     r = m.js(LITTLE + "return {front: Services.focus.activeWindow === popups()[0]};")
     check("a click on the row brings the small window back", r["front"], str(r))
 
-    r = m.js(LITTLE + """const p = popups()[0]; return {ticks: Number(p.gBrowser.selectedBrowser.contentTitle) || 0};""")
-    ticks = r["ticks"]
+    page = m.js(LITTLE + "return popups()[0].gBrowser.selectedBrowser.innerWindowID;")
     r = sidebar_page(m, """
       doc.querySelector("#little .keep").click();
       for (let i = 0; i < 100 && doc.querySelector("#little .little"); i++) await wait(100);
@@ -1582,14 +1581,14 @@ def alone_little_window(m):
       if (!t) return {none: true, popups: popups().length};
       const k = key(w, t), there = o.gBrowser.tabs.filter(x => key(o, x) === k);
       const rows = x => x.gBrowser.tabs.filter(y => !y.pinned && key(x, y) && y.userContextId === t.userContextId && !value(x, y, "folder"));
-      return {popups: popups().length, selected: w.gBrowser.selectedTab === t, space: t.userContextId, ticks: Number(t.linkedBrowser.contentTitle) || 0, role: role(w, t),
+      return {popups: popups().length, selected: w.gBrowser.selectedTab === t, space: t.userContextId, page: t.linkedBrowser.innerWindowID, role: role(w, t),
               there: there.length, thereRole: there[0] && role(o, there[0]), firstHere: key(w, rows(w)[0]) === k, firstThere: key(o, rows(o)[0]) === k,
               recorded: (await record()).some(e => (e.url || "").includes("little-one"))};""")
     check("the small window closes with it", r.get("popups") == 0, str(r))
     check("it is your tab now: live here, a placeholder in the other window, in the record",
           r.get("role") == "live" and r.get("there") == 1 and r.get("thereRole") == "ghost" and r.get("recorded"), str(r))
     check("in the same place in both windows", r.get("firstHere") and r.get("firstThere"), str(r))
-    check("the page was not loaded again", r.get("ticks", 0) >= ticks > 0, f"{ticks} then {r}")
+    check("the page was not loaded again", page and r.get("page") == page, f"{page} then {r}")
 
     # Closing it leaves nothing.
     r = m.js(LITTLE + """await onSpaceTab(); const before = (await record()).length;
@@ -1703,10 +1702,10 @@ def alone_little_window(m):
     access = """const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
       const id = args[0], ext = WebExtensionPolicy.getByID(id).extension;
       await ExtensionPermissions.%s(id, {permissions: [], origins: ["<all_urls>"]}, ext); await wait(800); return 1;"""
-    page = """const w = main(); w.focus(); await removeWhere((x, y) => url(y).includes("little-from-a-link") || url(y).includes("little-page")); const t = w.gBrowser.addTrustedTab(args[0], {userContextId: 1}); w.gBrowser.selectedTab = t; await wait(1500); return 1;"""
+    open_page = """const w = main(); w.focus(); await removeWhere((x, y) => url(y).includes("little-from-a-link") || url(y).includes("little-page")); const t = w.gBrowser.addTrustedTab(args[0], {userContextId: 1}); w.gBrowser.selectedTab = t; await wait(1500); return 1;"""
     state = LITTLE + """await wait(1500); return {popups: popups().length, spaces: popups().map(p => p.gBrowser.selectedTab.userContextId), stayed: url(main().gBrowser.selectedTab).includes("little-page")};"""
     m.js(H + access % "add", EXT_ID)
-    m.js(H + page, m.pages + "/links?little-page")
+    m.js(H + open_page, m.pages + "/links?little-page")
     little_alt_click(m, "little-page", "#a")
     r = m.js(state)
     check("with the access given, ⌥-click opens a link in a small window, in the page's space", r["popups"] == 1 and r["spaces"] == [1] and r["stayed"], str(r))
@@ -1722,7 +1721,7 @@ def alone_little_window(m):
     r = m.js(state)
     check("a page cannot open one by sending itself the click", r["popups"] == 0, str(r))
     m.js(H + access % "remove", EXT_ID)
-    m.js(H + page, m.pages + "/links?little-page")
+    m.js(H + open_page, m.pages + "/links?little-page")
     little_alt_click(m, "little-page", "#a")
     r = m.js(state)
     check("without the access, there is no script and ⌥-click is Firefox's", r["popups"] == 0, str(r))
@@ -1785,7 +1784,7 @@ def alone_little_restart(m):
     if not m.can_restart:
         print("SKIP  alone_little_restart (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
         return
-    m.js(LITTLE + """await onSpaceTab(); external(args[0]); const p = await until(() => popups()[0]); await until(() => url(p.gBrowser.selectedTab).includes("little-restart")); await wait(2500); return 1;""", m.pages + "/ticking?little-restart")
+    m.js(LITTLE + """await onSpaceTab(); external(args[0]); const p = await until(() => popups()[0]); await until(() => url(p.gBrowser.selectedTab).includes("little-restart")); await wait(2500); return 1;""", m.pages + "/links?little-restart")
     m.restart()
     r = m.js(LITTLE + """const p = await until(() => popups()[0], 30000); await wait(12000);
       await removeWhere((x, y) => url(y).includes("sidebar/sidebar.html") || url(y).includes("settings/settings.html")); // restored, and not loaded
