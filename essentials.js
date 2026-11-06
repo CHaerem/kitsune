@@ -86,7 +86,7 @@ async function initList() {
 // sidebar there first (see fillWindow), so it is passed in.
 async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
   const tabs = [];
-  let closedAlready = false;
+  const closedAlready = [];
   try {
     for (const { entry, index } of items) {
       // Refused if its container was removed while Tidier was not running. One bad
@@ -101,10 +101,13 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
       tabs.push({ tab, entry });
       await tagTab(tab.id, entry.key);
       // Closed by you before it could be told apart: nothing brought it back.
-      if (!keyByTab.has(tab.id)) closedAlready = true;
+      if (!keyByTab.has(tab.id)) closedAlready.push(entry.key);
       await sleep(CREATE_GAP_MS);
     }
-    if (closedAlready) await ensureWindow(windowId, settle);
+    if (closedAlready.length) {
+      await ensureWindow(windowId, settle);
+      await forgetClosedPlaceholders("essential", closedAlready);
+    }
     if (!tabs.length) return;
     if (!tidierAlone) {
       await settle(tabs);
@@ -372,8 +375,8 @@ browser.tabs.onDetached.addListener((tabId, info) => {
   serial(() => ensureWindow(info.oldWindowId));
 });
 browser.tabs.onAttached.addListener((tabId, info) => {
-  if (!keyByTab.has(tabId) || busy.has(tabId)) return;
-  serial(() => dropDoubleCopies(tabId, info.newWindowId));
+  // (Busy or not: a copy that just appeared can be dragged too.)
+  if (keyByTab.has(tabId)) serial(() => dropDoubleCopies(tabId, info.newWindowId));
 });
 
 // An essential reopened with ⌘⇧T: Firefox brings it back pinned, with its key,
@@ -386,17 +389,16 @@ browser.tabs.onCreated.addListener(tab => {
 
 async function reopenedEssential(tab) {
   const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
-  if (!key || busy.has(tab.id)) return;
-  if (!(await getList()).some(e => e.key === key)) {
+  if (busy.has(tab.id)) return;
+  // Closed right after it was pinned, it can still have what it had as a synced tab.
+  await clearRole(tab.id);
+  if (!key || !(await getList()).some(e => e.key === key)) {
     // Reopened after you unpinned it: pinned again, so an essential again, like any other.
     const now = await browser.tabs.get(tab.id).catch(() => null);
-    keyByTab.delete(tab.id);
-    if (now?.pinned && isWeb(now.url)) await onPinned(now);
+    if (now?.pinned && isWeb(now.url)) { keyByTab.delete(tab.id); await onPinned(now); }
     return;
   }
   keyByTab.set(tab.id, key);
-  // Closed right after it was pinned, it can still have what it had as a synced tab.
-  await clearRole(tab.id);
   await dropDoubleCopies(tab.id, tab.windowId);
   await oneLoaded(key); // its load began before it was known as this essential
 }
@@ -552,4 +554,6 @@ async function essentialsAgree() {
   for (const t of await browser.tabs.query({ pinned: false })) {
     if (placeholderOf(t.url).kind === "essential") await onUnpinned(t);
   }
+  // And a move in the moment a copy appeared is not looked at (see onMoved): the list decides.
+  for (const w of await normalWindows()) await sortEssentials(w.id, await getList());
 }

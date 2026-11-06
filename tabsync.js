@@ -981,7 +981,11 @@ async function adoptRestored(windowId) {
     ]).catch(() => []);
     if (!key || !role) continue;
     found = true;
-    if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
+    if (all[key]) {
+      syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role);
+      if (t.pinned) await leaveSync(t.id, key); // pinned the moment it came back: not a synced tab any more
+      continue;
+    }
     if (isGhostUrl(t.url)) { removed.push(key); await removeTabs([t.id], syncBusy); }
     else await clearRole(t.id);
   }
@@ -1048,13 +1052,6 @@ async function seeUnseenTabs() {
       if (t.pinned) serial(async () => { await onPinned(t); await leaveSync(t.id, key); });
     } else if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
   }
-}
-let startRequested = false, firefoxStarting = false;
-function requestStart(delayMs) {
-  if (startRequested) return;
-  startRequested = true;
-  start(delayMs);
-}
   // A window opened meanwhile is empty for the same reason. (Nothing is added to the others.)
   serial(async () => {
     for (const w of await normalWindows()) {
@@ -1062,6 +1059,13 @@ function requestStart(delayMs) {
       if (tidierAlone) await startSpaceIn(w.id);
     }
   });
+}
+let startRequested = false, firefoxStarting = false;
+function requestStart(delayMs) {
+  if (startRequested) return;
+  startRequested = true;
+  start(delayMs);
+}
 browser.runtime.onStartup.addListener(() => { firefoxStarting = true; requestStart(5000); });
 browser.runtime.onInstalled.addListener(() => requestStart(1000));
 // Enabled again after being disabled: neither event fires, so start anyway.

@@ -1287,3 +1287,33 @@ test("an essential's copy closed in the moment it is created comes back", async 
     x.kill();
   }
 });
+
+test("an essential's copy dragged just after it appeared is not there twice", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  while (!ff.list(b.id).some(y => y.pinned)) await ff.clock.step();
+  await ff.clock.run(100);
+  ff.moveTabs([ff.list(b.id).find(y => y.pinned).id], { windowId: a.id, index: 1 });
+  await ff.clock.idle(60000);
+  for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => y.pinned).length, 1, `one in window ${w.id}`);
+  x.kill();
+});
+
+test("a tab pinned the moment its window comes back is not also a synced tab", async () => {
+  const { ff, x, windows: [a] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  ff.closeWindow(a.id);
+  await ff.clock.run(1000);
+  const back = ff.reopenLast();
+  const again = ff.list(back.id).find(y => ff.values.get(y.id)?.syncKey === key && y.url === "https://a.example/");
+  ff.pinTab(ff.tabs.get(again.id));
+  await ff.clock.idle(60000);
+  assert.ok(!(key in ff.synced));
+  assert.equal(ff.values.get(again.id)?.syncKey, undefined);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://a.example/"]);
+  x.kill();
+});
