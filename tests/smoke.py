@@ -1483,6 +1483,20 @@ def alone_quiet_undo(m):
       const [inside, also] = plainTabs().map(r => Number(r.dataset.tab));
       send({type: "moveTab", tabId: inside, folder: head().dataset.folderHead, before: null});
       send({type: "moveTab", tabId: also, folder: head().dataset.folderHead, before: null});
+      // A placeholder with no page anywhere: into a folder, unloaded there, and out again.
+      const third = plainTabs()[2], thirdId = Number(third.dataset.tab);
+      send({type: "moveTab", tabId: thirdId, folder: head().dataset.folderHead, before: null});
+      for (let i = 0; i < 60 && folders().find(f => f.name === "Quiet").tabs.length < 3; i++) await wait(100);
+      await wait(800);
+      doc.querySelector(`#tabs .folder .tab[data-tab="${thirdId}"] .close`).click();
+      for (let i = 0; i < 60 && !doc.querySelector("#tabs .folder .tab.unloaded"); i++) await wait(100);
+      await wait(1500);
+      const placeholder = doc.querySelector("#tabs .folder .tab.unloaded");
+      send({type: "moveTab", tabId: Number(placeholder.dataset.tab), folder: null, before: null});
+      for (let i = 0; i < 60 && folders().find(f => f.name === "Quiet").tabs.length > 2; i++) await wait(100);
+      // A page with unsaved input.
+      await page.browser.tabs.create(page.JSON.parse(JSON.stringify({url: args[0] + "/unsaved", cookieStoreId: space, active: false})));
+      for (let i = 0; i < 60 && !rows().includes("Unsaved"); i++) await wait(100);
       // A tab that has never been loaded, as a link opened in the background can be.
       await page.browser.tabs.create(page.JSON.parse(JSON.stringify({url: "https://example.org/?smoke-quiet-never", title: "Never loaded", cookieStoreId: space, discarded: true, active: false})));
       for (let i = 0; i < 60 && folders().find(f => f.name === "Quiet").tabs.length < 2; i++) await wait(100);
@@ -1496,32 +1510,41 @@ def alone_quiet_undo(m):
       const here = plainTabs()[0];
       here.click();
       await wait(1500);
-      return {space, key: head().dataset.folderHead, here: Number(here.dataset.tab), rows: rows(), folders: folders()};""")
+      return {space, key: head().dataset.folderHead, here: Number(here.dataset.tab), rows: rows(), folders: folders()};""", m.pages)
     space = setup["space"]
     before = m.js(LIST, space)
     check("a tab that was never loaded is on today's list, for Clear to take", "Never loaded" in setup["rows"], str(setup))
+    # Placeholders of today's tabs with no page anywhere, in this window.
+    NO_PAGE = H + """const ctx = Number(args[0].split("-").pop()), all = (await storage("%s", ["syncedTabs"])).syncedTabs, w = main();
+      return w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === ctx && url(t).includes("ghost.html") && key(w, t) && !all[JSON.parse(key(w, t))]?.parentKey
+        && !wins().some(o => o.gBrowser.tabs.some(x => key(o, x) === key(w, t) && role(o, x) === "live"))).map(t => key(w, t));""" % EXT_ID
+    no_page = m.js(NO_PAGE, space)
+    check("a tab with no page anywhere is on today's list, as a placeholder", len(no_page) == 1, str(no_page))
 
     r = sidebar_page(m, """
       const out = {};
       const button = doc.querySelector("#tabs .divider .clear"), box = button.parentElement.getBoundingClientRect();
       out.reach = box.height; out.divider = doc.querySelector("#tabs .divider").getBoundingClientRect().height;
       out.faded = page.getComputedStyle(button).opacity;
-      const closing = plainTabs().length - 1;
+      const closing = plainTabs().length - 2; // the one you are on, and the page with unsaved input
       button.click();
       for (let i = 0; i < 100 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(100);
       out.closing = closing;
       out.shown = doc.getElementById("note").classList.contains("shown");
       out.line = doc.querySelector("#note .text").textContent;
-      out.rows = plainTabs().map(r => Number(r.dataset.tab));
+      out.rows = plainTabs().filter(r => r.querySelector(".title").textContent !== "Unsaved").map(r => Number(r.dataset.tab));
+      out.stayed = rows().includes("Unsaved");
+      out.asked = !!page.browser.tabs && (await page.browser.tabs.query({active: true, currentWindow: true}))[0].title;
       out.folders = folders();
       out.tiles = tiles().length;
       return out;""", setup["here"])
     check("Clear shows only near the line, in an area that takes no room", r["reach"] >= 18 and r["divider"] <= 2 and r["faded"] == "0", str(r))
     check("Clear by a real click closes today's tabs, except the one you are on", r["rows"] == [setup["here"]], str(r))
     check("Clear leaves the folders", r["folders"] == setup["folders"], str(r))
-    check("the line says how many", r["shown"] and r["line"] == f"{r['closing']} tabs closed", str(r))
+    check("the line says how many went, and how many stayed", r["shown"] and r["line"] == f"{r['closing']} tabs closed, 1 stayed", str(r))
+    check("a page with unsaved input stays, without asking", r["stayed"] and r["asked"] != "Unsaved", str(r))
     after = m.js(LIST, space)
-    check("Clear closes them in the other window too", len(after) == 2 and after[0] == after[1] and len(after[0][0]) == 1 and after[0][1] == before[0][1], f"{before} -> {after}")
+    check("Clear closes them in the other window too", len(after) == 2 and after[0] == after[1] and len(after[0][0]) == 2 and after[0][1] == before[0][1], f"{before} -> {after}")
 
     r = sidebar_page(m, """
       const selected = async () => (await page.browser.tabs.query({active: true, currentWindow: true}))[0].id;
@@ -1539,6 +1562,10 @@ def alone_quiet_undo(m):
     loaded = m.js(H + """await wait(1500); const w = main(), ctx = Number(args[0].split("-").pop());
       return wins().flatMap(w => w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === ctx && t.linkedPanel && !t.selected && key(w, t)).map(t => t.label));""", space)
     check("nothing loads because of Clear and Undo but what was loaded and not cleared", not [x for x in loaded if x == "Never loaded" or "smoke-quiet" in x], str(loaded))
+
+    again = m.js(NO_PAGE, space)
+    check("a tab with no page anywhere comes back as a placeholder, unloaded, under its own key", again == no_page, f"{no_page} -> {again}")
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => x.label === "Unsaved"); if (t) w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(1500); return 1;""")
 
     # The page's history is back, once it is selected and loads.
     h = m.js(H + """const w = main(), was = w.gBrowser.selectedTab, t = w.gBrowser.tabs.find(x => url(x).includes("smoke-quiet-two"));

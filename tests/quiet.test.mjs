@@ -196,6 +196,24 @@ test("undo brings tabs back in their place in every window, with no new key and 
   x.kill();
 });
 
+test("closed from another window's list, a page comes back in its own window", async () => {
+  const ff = new FakeFirefox();
+  const { w, other } = twoWindows(ff, ["a", "b", "c", "d"], { active: "a" });
+  const x = await alone(ff);
+  const port = sidebar(x, other.id);
+  const before = keysOf(ff, other.id);
+  for (const k of ["b", "c"]) port.send({ type: "close", tabId: tabOf(ff, other.id, k).id });
+  await wait(1000);
+  assert.deepEqual(keysOf(ff, w.id), ["a", "d"], "the row's real tab went too");
+  await undoOf(x, other.id);
+  await wait(1000);
+  assert.deepEqual(keysOf(ff, other.id), before);
+  assert.deepEqual(keysOf(ff, w.id), before);
+  assert.equal(ff.values.get(tabOf(ff, w.id, "b").id).syncRole, "live");
+  assert.equal(tabOf(ff, other.id, "b").url, GHOST("ghost", "b"));
+  x.kill();
+});
+
 test("what a page says for a moment while it comes back does not rewrite its title", async () => {
   const ff = new FakeFirefox();
   const { w } = twoWindows(ff, ["a", "b", "c"]);
