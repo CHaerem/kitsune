@@ -238,12 +238,13 @@ test("a placeholder that takes long to finish loading still unloads", async () =
 
 test("a placeholder waits for its icon, but not for ever", async () => {
   const ff = new FakeFirefox();
-  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
   const w = ff.addWindow({ focused: true });
   ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
   const other = ff.addWindow();
   const shows = ff.addTab(other.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
-  const never = ff.addTab(other.id, { url: GHOST("ghost", "b"), cookieStoreId: C1 });
+  const never = ff.addTab(other.id, { url: GHOST("ghost", "b"), cookieStoreId: C1 }, { syncKey: "b", syncRole: "ghost" });
   const x = await run(ff);
   await placeholderReady(ff, x, shows, true);
   await placeholderReady(ff, x, never, true);
@@ -948,4 +949,33 @@ test("a tab whose last copy Firefox closes at an update comes back, saved or not
   assert.ok(ff.synced[key], "it is still in the record");
   assert.ok(ff.list(b.id).some(y => ff.values.get(y.id)?.syncKey === key), "and in the window");
   first.kill(); x.kill();
+});
+
+test("a placeholder whose values were lost is taken back at a start, not doubled", async () => {
+  const { ff, x: first, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  const ghost = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key);
+  ff.values.delete(ghost.id); // as Firefox does for an unloaded tab moved to another window
+  first.kill();
+  const x = ff.update();
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(b.id).filter(y => y.url === GHOST("ghost", key)).length, 1);
+  assert.equal(ff.values.get(ghost.id)?.syncKey, key);
+  assert.equal(ff.values.get(ghost.id)?.syncRole, "ghost");
+  x.kill();
+});
+
+test("an essential's placeholder whose value was lost is known by its address", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(w.id).filter(t => t.pinned).length, 1);
+  x.kill();
 });

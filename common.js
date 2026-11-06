@@ -85,6 +85,13 @@ const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/
 // Placeholder page for ghosts and essential copies (see ghost.js).
 const ghostUrl = (kind, key) => browser.runtime.getURL(`ghost.html?kind=${kind}&key=${encodeURIComponent(key)}`);
 const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.html"));
+// What a placeholder stands for, from its own address: a tab's session values can be lost
+// (Firefox loses them for an unloaded tab moved to another window), this cannot.
+const placeholderOf = url => {
+  if (!isGhostUrl(url)) return {};
+  const params = new URL(url).searchParams;
+  return { kind: params.get("kind"), key: params.get("key") };
+};
 
 // Placeholders we close ourselves would show up in Recently Closed Tabs, and
 // ⌘⇧T would bring one back instead of the tab you closed. Only real pages

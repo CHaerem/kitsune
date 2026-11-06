@@ -99,7 +99,12 @@ async function loadRoles() {
       browser.sessions.getTabValue(t.id, SYNC_KEY),
       browser.sessions.getTabValue(t.id, SYNC_ROLE),
     ]).catch(() => []);
-    if (key && role) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); }
+    if (key && role) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); return; }
+    // A value that did not get written, or was lost. Left unknown, a placeholder stays for
+    // good beside the new one the window then gets, and a page is not synced.
+    const shown = placeholderOf(t.url);
+    if (shown.kind === "ghost" && !t.pinned) await setRole(t.id, shown.key, "ghost").catch(noteError);
+    else if (key) await setRole(t.id, key, isGhostUrl(t.url) ? "ghost" : isSideberyGroup(t.url) ? "copy" : "live").catch(noteError);
   }));
 }
 
