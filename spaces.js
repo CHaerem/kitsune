@@ -54,16 +54,17 @@ async function setSpace(windowId, space) {
   viewSoon(windowId); // sidebar-view.js
 }
 
-// Show the active space's tabs and hide the others'. A tab without a container is
-// shown wherever you are (it is about to be opened in the space, see below, or is a
-// page that cannot be: about:, extensions' pages). Firefox cannot hide a pinned tab
-// or the selected one.
+// Show the active space's tabs and hide the others', and those in a closed folder
+// (foldrest.js). A tab without a container is shown wherever you are (it is about to be
+// opened in the space, see below, or is a page that cannot be: about:, extensions'
+// pages). Firefox cannot hide a pinned tab or the selected one.
 async function showSpace(windowId) {
   if (!tidierAlone) return;
   const space = activeSpace.get(windowId);
   if (!space) return;
   const tabs = await browser.tabs.query({ windowId, pinned: false }).catch(() => []);
-  const visible = t => t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER;
+  const all = await getSynced();
+  const visible = t => (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER) && !restsInFolder(all, syncKeyByTab.get(t.id));
   const show = tabs.filter(t => t.hidden && visible(t)).map(t => t.id);
   const hide = tabs.filter(t => !t.hidden && !visible(t) && !t.active).map(t => t.id);
   if (show.length) await browser.tabs.show(show).catch(() => {});

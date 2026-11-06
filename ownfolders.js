@@ -34,6 +34,7 @@ async function foldFolder(key, collapsed) {
   if (!isOwnFolder(all[key])) return;
   all[key].collapsed = !!collapsed;
   saveSynced(all);
+  await foldChanged(key); // foldrest.js
 }
 
 // Deleting a folder loses nothing: its tabs become ordinary tabs, which archiving
@@ -49,6 +50,7 @@ async function deleteFolder(key) {
   delete all[key];
   noteSaved(all);
   saveSynced(all);
+  await foldChanged(key); // a closed folder's tabs were hidden
 }
 
 // A folder moved among its space's folders (`beforeKey` null: last).
@@ -79,6 +81,7 @@ async function moveTab(windowId, tabId, beforeTabId, folderKey) {
       const reps = repMap(tabs);
       if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : null);
     }
+    await restMoved(key); // foldrest.js
   } else {
     await moveInWindow(await browser.tabs.query({ windowId }), tabId, beforeTabId);
   }

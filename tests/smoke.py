@@ -1620,6 +1620,187 @@ def alone_end(m):
     no_problems(m, "with Tidier alone")
 
 
+# A folder's tabs as Firefox itself has them, in each window: hidden or not, and loaded
+# or not (an unloaded tab has no linkedPanel). `k` is a tab's key as it is stored.
+REST = H + """
+  const until = async (test, ms = 12000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(50)) if (test()) return true; return false; };
+  const state = k => wins().map(w => w.gBrowser.tabs.filter(t => key(w, t) === JSON.stringify(k)).map(t => (t.hidden ? "hidden" : "shown") + (t.linkedPanel ? "/loaded" : "/unloaded")).join());
+  const rep = (w, k) => w.gBrowser.tabs.find(t => key(w, t) === JSON.stringify(k));
+  const resting = (ks, wanted = ["hidden/unloaded", "hidden/unloaded"]) => ks.every(k => JSON.stringify(state(k)) === JSON.stringify(wanted));
+  const each = ks => Object.fromEntries(ks.map(k => [k, state(k)]));
+"""
+
+
+def alone_folds_rest(m):
+    # A closed folder rests, with real clicks and drags on the real sidebar, and read from
+    # Firefox itself rather than from what Tidier thinks. In two windows, since a fold is
+    # the same in every window and a tab is only loaded in one.
+    m.js(H + """if (other()) return 1;
+      const a = main(), want = a.gBrowser.tabs.filter(t => !t.pinned && role(a, t)).length, w = a.OpenBrowserWindow(); w.__smoke = true;
+      for (let i = 0; i < 200 && !(w.gBrowser && w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length >= want); i++) await wait(50);
+      await wait(2000); a.focus(); await wait(500); return 1;""")
+    more_tabs_here(m, "rest")
+    more_tabs_here(m, "drop")
+    s = sidebar_page(m, """
+      const space = spaces().find(s => s.active).id;
+      send({type: "newFolder", space, name: "Resting"});
+      await wait(1000);
+      const key = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Resting").dataset.folderHead;
+      const tabs = [...await page.browser.tabs.query({})];
+      const rest = tabs.filter(t => t.url.includes("smoke-rest-")).map(t => t.id);
+      for (const tabId of rest) { send({type: "moveTab", tabId, folder: key, before: null}); await wait(200); }
+      await wait(1500);
+      return {space, key, ctx: Number(space.split("-").pop()), rest, drop: tabs.filter(t => t.url.includes("smoke-drop-")).map(t => t.id)};""")
+    ctx = s["ctx"]
+    keys = m.js(REST + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
+      return Object.keys(all).filter(k => all[k].parentKey === args[0]);""" % EXT_ID, s["key"])
+    click_head = lambda name="Resting": sidebar_page(m, """
+      [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === args[0]).click();
+      await wait(50); return 1;""", name)
+    first, second, selected = keys
+
+    # Closed: hidden in both windows, and the real tabs unloaded, on the address they had.
+    before = m.js(REST + """await until(() => args[0].every(k => rep(main(), k).linkedPanel)); return each(args[0]);""", keys)
+    click_head()
+    r = m.js(REST + """const ok = await until(() => resting(args[0]));
+      return {ok, tabs: each(args[0]), urls: args[0].map(k => url(rep(main(), k))), selected: url(main().gBrowser.selectedTab)};""", keys)
+    check("a folder's tabs are loaded and shown before it closes", all(v[0] == "shown/loaded" and v[1] == "shown/unloaded" for v in before.values()), str(before))
+    check("closing a folder hides its tabs in both windows and unloads them", r["ok"], str(r))
+    check("a tab that rests keeps the address it was on", all("smoke-rest-" in u for u in r["urls"]), str(r))
+    r = sidebar_page(m, """const f = folders().find(f => f.name === "Resting"), head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Resting");
+      return {collapsed: f.collapsed, count: head.querySelector(".count").textContent, height: head.parentElement.querySelector(".children").offsetHeight};""")
+    check("the closed folder shows how many tabs it holds, and no rows", r["collapsed"] and r["count"] == "3" and r["height"] == 0, str(r))
+
+    # Opened: shown again, and nothing loads by itself.
+    click_head()
+    r = m.js(REST + """const ok = await until(() => resting(args[0], ["shown/unloaded", "shown/unloaded"])); await wait(1500); return {ok, tabs: each(args[0]), still: resting(args[0], ["shown/unloaded", "shown/unloaded"])};""", keys)
+    check("opening a folder shows its tabs and loads nothing", r["ok"] and r["still"], str(r))
+
+    # The selected tab stays until you leave it, then rests too.
+    r = m.js(REST + """const w = main(), t = rep(w, args[0]); w.__beforeRest = w.gBrowser.selectedTab;
+      w.gBrowser.selectedTab = t; return await until(() => t.linkedPanel && !url(t).includes("ghost.html"));""", selected)
+    check("a tab in a folder is selected and loaded", r, str(r))
+    click_head()
+    r = m.js(REST + """const ok = await until(() => resting(args[0])); await wait(500);
+      const w = main(), during = state(args[1]);
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("smoke-drop-3"));
+      const left = await until(() => resting([args[1]]));
+      return {ok, during, left, after: state(args[1])};""", [first, second], selected)
+    check("the selected tab stays shown and loaded when its folder closes", r["ok"] and r["during"] == ["shown/loaded", "hidden/unloaded"], str(r))
+    check("leaving a tab in a closed folder hides and unloads it", r["left"], str(r))
+
+    # Selected again, Firefox shows and loads it; left again, it rests again.
+    r = m.js(REST + """const w = main(), t = rep(w, args[0]), back = w.gBrowser.selectedTab;
+      w.gBrowser.selectedTab = t;
+      const shown = await until(() => !t.hidden && t.linkedPanel && t.linkedBrowser.browsingContext?.currentWindowContext); await wait(500);
+      const during = state(args[0]), folder = args[1].map(state);
+      w.gBrowser.selectedTab = back;
+      return {shown, during, folder, left: await until(() => resting([args[0]])), after: state(args[0])};""", selected, [first, second])
+    check("selecting a resting tab shows and loads it, and only it", r["shown"] and r["during"][0] == "shown/loaded" and all(x == ["hidden/unloaded", "hidden/unloaded"] for x in r["folder"]), str(r))
+    check("left again, it rests again", r["left"], str(r))
+
+    # Selected in the other window: the real tab comes along, loaded; left there, it rests there.
+    r = m.js(REST + """const w = other(), back = w.gBrowser.selectedTab, ghost = rep(w, args[0]); w.focus(); await wait(800);
+      w.gBrowser.selectedTab = ghost;
+      const came = await until(() => { const t = rep(w, args[0]); return t && t.selected && t.linkedPanel && !url(t).includes("ghost.html"); });
+      await wait(1500);
+      const during = state(args[0]), roles = find(JSON.stringify(args[0]));
+      w.gBrowser.selectedTab = back;
+      const left = await until(() => resting([args[0]]));
+      main().focus(); await wait(800);
+      return {came, during, roles, left, after: state(args[0])};""", first)
+    check("a resting tab selected in another window comes loaded, and its placeholder is hidden", r["came"] and r["during"] == ["hidden/unloaded", "shown/loaded"] and r["roles"] == [["ghost/unloaded"], ["live/loaded"]], str(r))
+    check("left in that window, it rests there", r["left"], str(r))
+
+    # Dropped on the closed folder's head, with a real drag: it rests, and the folder stays closed.
+    drop = sidebar_page(m, """
+      const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Resting");
+      const from = doc.querySelector(`#tabs .tab[data-tab="${args[0]}"]`);
+      const data = new page.DataTransfer(), box = head.getBoundingClientRect();
+      const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5, dataTransfer: data};
+      from.dispatchEvent(new page.DragEvent("dragstart", at));
+      head.dispatchEvent(new page.DragEvent("dragover", at));
+      head.dispatchEvent(new page.DragEvent("drop", at));
+      from.dispatchEvent(new page.DragEvent("dragend", at));
+      await wait(50);
+      return 1;""", s["drop"][0])
+    r = m.js(REST + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs, k = () => Object.keys(all).find(k => !args[1].includes(k) && all[k].parentKey === args[0]);
+      let dropped; await until(() => { for (const w of wins()) for (const t of w.gBrowser.tabs) if (url(t).includes("smoke-drop-1")) dropped = JSON.parse(key(w, t)); return dropped; });
+      const ok = await until(() => resting([dropped]));
+      return {ok, dropped, tabs: state(dropped), url: url(rep(main(), dropped))};""" % EXT_ID, s["key"], keys)
+    check("a tab dropped on a closed folder's head is hidden and unloaded, in both windows", r["ok"], str(r))
+    dropped = r["dropped"]
+    r = sidebar_page(m, """await wait(500); const f = folders().find(f => f.name === "Resting"), head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Resting");
+      return {collapsed: f.collapsed, count: head.querySelector(".count").textContent};""")
+    check("the folder stays closed, and counts the tab", r == {"collapsed": True, "count": "4"}, str(r))
+
+    # What keeps working stays loaded: a page with unsaved input refuses, without asking,
+    # and a tab playing sound is left alone. Hidden, both.
+    r = m.js(REST + """const w = main(), selected = w.gBrowser.selectedTab;
+      const typed = w.gBrowser.addTrustedTab(args[0] + "/unsaved", {userContextId: args[1], inBackground: true});
+      await until(() => key(w, typed) && typed.linkedPanel);
+      await wait(800);
+      const loud = w.gBrowser.tabs.find(t => url(t).includes("smoke-drop-2"));
+      loud.setAttribute("soundplaying", "true");
+      return {typed: JSON.parse(key(w, typed)), loud: JSON.parse(key(w, loud))};""", m.pages, ctx)
+    ids = sidebar_page(m, """const tabs = [...await page.browser.tabs.query({})];
+      const typed = tabs.find(t => t.url.includes("/unsaved")), loud = tabs.find(t => t.url.includes("smoke-drop-2"));
+      send({type: "moveTab", tabId: typed.id, folder: args[0], before: null}); await wait(300);
+      send({type: "moveTab", tabId: loud.id, folder: args[0], before: null}); await wait(300);
+      return {typed: typed.id, loud: loud.id, audible: loud.audible};""", s["key"])
+    t = m.js(REST + """const w = main(), selected = w.gBrowser.selectedTab, was = url(selected);
+      const ok = await until(() => state(args[0])[0].startsWith("hidden") && state(args[1])[0].startsWith("hidden"));
+      await wait(1500);
+      return {ok, typed: state(args[0]), loud: state(args[1]), selected: url(w.gBrowser.selectedTab) === was};""", r["typed"], r["loud"])
+    check("Firefox reports the test's tab as playing sound", ids["audible"] is True, str(ids))
+    check("a page with unsaved input is hidden and stays loaded, without asking", t["ok"] and t["typed"] == ["hidden/loaded", "hidden/unloaded"] and t["selected"], str(t))
+    check("a tab playing sound is hidden and stays loaded", t["loud"] == ["hidden/loaded", "hidden/unloaded"], str(t))
+    # Out again, and gone: shown again everywhere, and still as it was.
+    sidebar_page(m, """send({type: "moveTab", tabId: args[0], folder: null, before: null}); await wait(300);
+      send({type: "moveTab", tabId: args[1], folder: null, before: null}); await wait(300); return 1;""", ids["typed"], ids["loud"])
+    o = m.js(REST + """const shown = await until(() => [args[0], args[1]].every(k => state(k)[0] === "shown/loaded" && state(k)[1] === "shown/unloaded"));
+      const during = each([args[0], args[1]]);
+      for (const w of wins()) { const t = rep(w, args[0]); if (t) w.gBrowser.removeTab(t, {skipPermitUnload: true}); break; }
+      await until(() => !rep(main(), args[0]) && !rep(other(), args[0]));
+      rep(main(), args[1]).removeAttribute("soundplaying");
+      return {shown, during};""", r["typed"], r["loud"])
+    check("a tab moved out of a closed folder is shown again", o["shown"], str(o))
+
+    # Deleting a closed folder gives its tabs back, shown and unloaded.
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(50); return 1;""", s["key"])
+    gone = keys + [dropped]
+    r = m.js(REST + """const ok = await until(() => resting(args[0], ["shown/unloaded", "shown/unloaded"])); return {ok, tabs: each(args[0])};""", gone)
+    check("deleting a closed folder shows its tabs again, unloaded", r["ok"], str(r))
+    m.js(REST + """const w = main(); if (w.__beforeRest && !w.__beforeRest.closing) w.gBrowser.selectedTab = w.__beforeRest; await wait(300);
+      for (const k of args[0]) { const t = rep(w, k); if (t) w.gBrowser.removeTab(t); await wait(100); }
+      await until(() => args[0].every(k => !rep(w, k) && !rep(other(), k))); return 1;""", gone)
+
+    # Left closed, for the checks after an update and a restart (alone_folds_rest_kept).
+    s = sidebar_page(m, """
+      send({type: "newFolder", space: args[0], name: "Resting still"}); await wait(1000);
+      const key = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Resting still").dataset.folderHead;
+      const tab = [...await page.browser.tabs.query({})].find(t => t.url.includes("smoke-drop-2"));
+      send({type: "moveTab", tabId: tab.id, folder: key, before: null}); await wait(1200);
+      return {key};""", s["space"])
+    click_head("Resting still")
+    r = m.js(REST + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs, k = Object.keys(all).find(k => all[k].parentKey === args[0]);
+      return {ok: await until(() => resting([k])), tabs: state(k)};""" % EXT_ID, s["key"])
+    check("another folder closes the same way, to stay closed", r["ok"], str(r))
+    no_problems(m, "with closed folders")
+
+
+def alone_folds_rest_kept(m):
+    # Firefox shows every hidden tab again at an update, and a start only hides (nothing is
+    # unloaded then): a closed folder's tabs are hidden again by the time Tidier has started.
+    r = m.js(REST + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs, f = Object.keys(all).find(k => all[k].name === "Resting still");
+      const ks = Object.keys(all).filter(k => f && all[k].parentKey === f);
+      return {f, ok: await until(() => ks.length && resting(ks), 15000), tabs: each(ks), collapsed: f && all[f].collapsed};""" % EXT_ID)
+    if not r["f"]:
+        print("SKIP  alone_folds_rest_kept (needs alone_folds_rest before it)", flush=True)
+        return
+    check("a closed folder stays closed and its tabs hidden, also after an update and a restart", r["collapsed"] and r["ok"], str(r))
+
+
 # Each window's tabs and space, and the folders.
 SNAP_ALONE = H + """
   const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
@@ -1632,7 +1813,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_folds_rest, alone_idle, alone_update, alone_folds_rest_kept, alone_end, alone_restart, alone_folds_rest_kept)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
