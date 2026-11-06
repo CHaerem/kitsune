@@ -32,7 +32,7 @@
 // Tree structure is read from `openerTabId`, which Sidebery keeps equal to
 // the parent in its tree.
 
-const syncedList = storedValue("syncedTabs", () => ({})); // { [key]: { url, title, icon, cookieStoreId, parentKey, group, added, saved: { url, title, icon } } }
+const syncedList = storedValue("syncedTabs", () => ({})); // { [key]: { url, title, icon, cookieStoreId, parentKey, group, added, saved: { url, title, icon }, name? } }
 const SYNC_KEY = "syncKey";   // sessions value: key of the logical tab
 const SYNC_ROLE = "syncRole"; // sessions value: "live" | "ghost" | "copy"
 const SETTLE_MS = 1500;       // wait for redirects / container reopen before registering

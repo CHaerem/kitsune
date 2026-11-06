@@ -246,6 +246,7 @@ function noteSaved(all, keys = Object.keys(all)) {
     if (!e) continue;
     if (e.group || e.liveFolder || !storedInFolder(all, key)) delete e.saved;
     else if (!e.saved && isWeb(e.url)) e.saved = { url: e.url, title: e.title, icon: e.icon };
+    if (!e.group && !e.saved) delete e.name; // an ordinary tab has no name (tabnames.js); a folder's is its own
   }
 }
 

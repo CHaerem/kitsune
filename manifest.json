@@ -54,6 +54,7 @@
       "spaces.js",
       "ownfolders.js",
       "copies.js",
+      "tabnames.js",
       "moveover.js",
       "sidebar-view.js",
       "archive.js",

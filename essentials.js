@@ -15,8 +15,8 @@
 // not change the list.
 
 const essentialsList = storedValue("essentials", () => []); // [{ key, url, cookieStoreId, title, icon, name? }]
-// `name` is an optional short name (e.g. "Jira") shown on unloaded copies in
-// place of the page title; set it in the extension storage.
+// `name` is an optional short name (e.g. "Jira") shown in place of the page title
+// (tabnames.js).
 const TAB_KEY = "essentialKey"; // sessions value on each essential tab
 
 // Tab IDs we create, pin, unpin or close ourselves. The listeners ignore
@@ -191,8 +191,8 @@ async function onPinned(tab) {
   const known = keyByTab.get(tab.id);
   if (known && (await getList()).some(e => e.key === known)) { await tagTab(tab.id, known); return; }
   let { url, title, favIconUrl: icon } = tab;
+  const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
   if (isGhostUrl(url)) {
-    const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
     if (!entry || !isWeb(entry.url)) return;
     ({ url, title, icon } = entry);
   }
@@ -200,7 +200,7 @@ async function onPinned(tab) {
   const list = await getList();
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
-  setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
+  setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon, ...(entry?.name ? { name: entry.name } : {}) }]);
   // The pinned placeholder becomes this essential's copy, still unloaded.
   if (isGhostUrl(tab.url)) {
     busy.add(tab.id);

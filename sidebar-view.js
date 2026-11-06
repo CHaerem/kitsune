@@ -15,7 +15,7 @@ const viewTimers = new Map(); // windowId -> timer for the next view
 const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
-// page's (see ghost.js); an essential shows its short name if it has one.
+// page's (see ghost.js); an essential or a saved tab shows its name if it has one (tabnames.js).
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
@@ -49,7 +49,8 @@ async function viewFor(windowId) {
   for (const t of here) {
     if (isSideberyGroup(t.url)) continue;
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
-    (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
+    const record = all[syncKeyByTab.get(t.id)];
+    (folder ? folder.tabs : loose).push(tabItem(t, record?.name || record?.title));
   }
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
 }
@@ -110,6 +111,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
+  else if (msg.type === "renameTab") await renameTab(msg.tabId, msg.name);
   viewSoon(windowId);
 }
 
