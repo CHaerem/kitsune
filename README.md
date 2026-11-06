@@ -331,9 +331,9 @@ show their first letter). No IP lookups, nothing else by itself.
 ## Isolation
 
 With Tidier alone every space is a Firefox container, so its logins, cookies and what
-sites store are its own, and it should be something nobody has to think about. `alone_isolation` checks
-it with a local server that records each request and its cookies, so what is checked is
-what really left the browser.
+sites store are its own, and it should be something nobody has to think about.
+`alone_isolation` checks it with a local server that records each request and its
+cookies, so what is checked is what really left the browser.
 
 Guaranteed, with the permission for it (`isolation.js`, `whereItBelongs`):
 

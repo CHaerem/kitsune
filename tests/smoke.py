@@ -1769,6 +1769,24 @@ def alone_isolation(m):
     extension_message(m, {"type": "flush"})
     sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", key)
 
+    # New space in the space's menu, where there is one: its name is then ready to change.
+    r = sidebar_page(m, """
+      const dot = doc.querySelector("#spaces .space"), box = dot.getBoundingClientRect();
+      dot.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5}));
+      await wait(300);
+      const menu = doc.getElementById("menu"), item = menu.hidden ? null : [...menu.querySelectorAll(".item")].find(i => i.textContent === "New space");
+      if (!item) return {item: false};
+      const before = spaces().map(s => s.id);
+      item.click();
+      await wait(1500);
+      const name = doc.querySelector(".space-box");
+      const out = {item: true, made: spaces().map(s => s.id).filter(id => !before.includes(id)), box: name?.value};
+      name?.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      return out;""")
+    if r.get("item"):
+        check("New space in a space's menu makes one, with its name ready to change", len(r["made"]) == 1 and r.get("box") == "New space", str(r))
+        m.js(H + """const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs"); c.remove(args[0]); await wait(1000); return 1;""", int(r["made"][0].rsplit("-", 1)[1]))
+
     # The same from the folder's menu, and a tab dropped on the bar for a new space.
     r = sidebar_page(m, """
       send({type: "newFolder", space: spaces().find(s => s.active).id, name: "By menu"});

@@ -782,6 +782,23 @@ test("the old path still runs without the permission for a link with no containe
   x.kill();
 });
 
+// --- The command bar's table ------------------------------------------------------------
+test("where the command bar is there, its table has clearing cookies and a copy in another space", async () => {
+  const ff = new FakeFirefox(); ff.granted = new Set(GUARD);
+  aWindow(ff);
+  const x = await run(ff);
+  if (x.js("typeof BAR_COMMANDS") !== "undefined") {
+    const table = x.js("BAR_COMMANDS");
+    const clear = table.find(c => c.name === "clear-site-cookies"), copy = table.find(c => c.name === "copy-to-space");
+    assert.ok(clear && copy);
+    const tab = { id: 1, cookieStoreId: A };
+    assert.equal(clear.when({ picked: [tab], tab }), true);
+    assert.equal(clear.when({ picked: [tab, { id: 2, cookieStoreId: A }], tab }), false, "one list: it cannot take many, so it is left out");
+    assert.deepEqual([...copy.list({ picked: [tab], spaces: [{ id: A, name: "A" }, { id: B, name: "B" }] })].map(i => i.value), [B]);
+  }
+  x.kill();
+});
+
 // --- The settings page ------------------------------------------------------------------
 test("no two scripts of the settings page define the same top-level name", () => {
   // Plain scripts sharing one scope: unlike a background script's function, a const there
