@@ -117,9 +117,9 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
     if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
-      if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
-      else await browser.tabs.create({ windowId, cookieStoreId: stay });
-      return;
+      if (last) { await browser.tabs.update(last.id, { active: true }).catch(() => {}); return; }
+      // Refused when the space has just been removed (safemoves.js): then this tab's space it is.
+      if (await browser.tabs.create({ windowId, cookieStoreId: stay }).catch(() => null)) return;
     }
     await setSpace(windowId, tab.cookieStoreId);
     await setSuccessor(tab);
@@ -201,8 +201,8 @@ async function byRule(tabId, url) {
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === rule.space || await exemptFromRules(tabId)) return intoSpace(tabId);
   newTabs.delete(tabId);
-  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(() => null);
-  if (!opened) { ruleFailed(rule); return intoSpace(tabId); } // safemoves.js: closing it now would lose the link
+  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(err => ruleFailed(rule, err));
+  if (!opened) return intoSpace(tabId); // closing it now would lose the link (safemoves.js)
   await browser.tabs.remove(tabId).catch(() => {});
 }
 

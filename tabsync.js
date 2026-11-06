@@ -453,7 +453,10 @@ async function unloadSaved(key, windowId, place) {
   let parentKey = entry.parentKey;
   while (parentKey && !here.has(parentKey)) parentKey = all[parentKey]?.parentKey;
   // Refused when its container has just been removed, which takes the entry away too (safemoves.js).
-  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined).catch(() => null);
+  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined).catch(async err => {
+    if (await spaceGone(entry.cookieStoreId)) return null;
+    throw err;
+  });
   if (!ghost || !place) return;
   if (!tidierAlone) await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
   await placeNextTo(windowId, ghost.id, place.before, place.after);

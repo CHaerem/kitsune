@@ -104,6 +104,12 @@ async function refreshLiveFolder(folder, res) {
     setNotice("live", `Live folder "${folder.name}" is not updating: ${res?.error || "no answer"}`);
     return;
   }
+  // The host's file still names a space that was removed, with its folder and tabs
+  // (safemoves.js): made again, they would be entries shown nowhere, refused at every start.
+  if (tidierAlone && await spaceGone(folder.cookieStoreId)) {
+    setNotice("live", `Live folder "${folder.name}" is set up for a space that is gone`);
+    return;
+  }
   const state = await folderState(folder.id);
   const groupKey = await ensureFolderGroup(folder, state);
   if (!groupKey) return;

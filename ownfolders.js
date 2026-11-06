@@ -100,15 +100,23 @@ async function moveInWindow(tabs, tabId, beforeId) {
 // opened again there and closed here, in every window. A page that may hold unsaved
 // input stays, and so does a tab that cannot be opened there; no rule sends it back,
 // since you moved it; and you stay where you are (safemoves.js).
+//
+// The address is the page's own while it is loaded: the record follows a page when it
+// finishes loading or its title changes, and a web app changes its address without
+// either. A placeholder's own address says nothing, so then it is the record's.
 async function moveToSpace(tabId, space) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === space || tab.pinned) return;
-  const key = syncKeyByTab.get(tabId);
-  const url = key ? (await getSynced())[key]?.url : tab.url;
+  const key = syncKeyByTab.get(tabId), live = await pageTab(tab, key);
+  const url = isWeb(live?.url) ? live.url : (await getSynced())[key]?.url;
   if (!isWeb(url)) return;
-  if (!(await leavesQuietly(tab, key))) return sayStayed(tab.windowId);
+  const noSpace = () => void globalThis.say?.(tab.windowId, "That space could not be opened, so the tab stayed here");
+  // Asked first, since leaving unloads the tab and selects another one. (Only a window
+  // closing or a space removed this very moment can still refuse the new tab below.)
+  if (await spaceGone(space)) return noSpace();
+  if (!(await leavesQuietly(live, key))) return sayStayed(tab.windowId);
   const opened = await openUnruled({ windowId: tab.windowId, cookieStoreId: space, url, active: false }).catch(() => null);
-  if (!opened) return void globalThis.say?.(tab.windowId, "That space could not be opened, so the tab stayed here");
+  if (!opened) return noSpace();
   // (A live folder's pull request counts as closed, or the next search brings it back.)
   if (key) await closeEverywhere(key);
   else await browser.tabs.remove(tabId).catch(() => {});

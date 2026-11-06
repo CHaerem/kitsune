@@ -40,6 +40,9 @@ function drawRules() {
 function ruleLine(rule, save) {
   const text = el("input", { type: "text", value: rule.url, placeholder: "address, or /regular expression/" });
   const space = el("select", {}, ...state.spaces.map(s => el("option", { value: s.id, textContent: s.name, selected: s.id === rule.space })));
+  // A rule whose space is gone: with no option of its own it would show the first space,
+  // and saving any rule would quietly send its addresses there, with other logins.
+  if (rule.space && !state.spaces.some(s => s.id === rule.space)) space.prepend(el("option", { value: rule.space, textContent: "A space that is gone", selected: true }));
   const remove = el("button", { textContent: "×", title: "Remove" });
   const line = el("div", { className: "line" }, text, space, remove);
   text.onchange = space.onchange = save;

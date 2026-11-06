@@ -23,7 +23,8 @@ function openUnruled(props) {
     if (!firstPage.delete(tab.id)) unruled.add(tab.id);
     return tab;
   });
-  openings = Promise.allSettled([openings, opened]);
+  // Settling with nothing: settled with their results, these would hold every tab ever opened.
+  openings = Promise.allSettled([openings, opened]).then(() => {});
   return opened;
 }
 browser.tabs.onRemoved.addListener(tabId => unruled.delete(tabId));
@@ -37,30 +38,41 @@ async function exemptFromRules(tabId) {
   return unruled.delete(tabId) || syncKeyByTab.has(tabId) || !!(await browser.sessions.getTabValue(tabId, SYNC_KEY).catch(() => undefined));
 }
 
+// Whether a container no longer exists. Asked, not concluded from a refused tab: Firefox
+// also refuses a tab for a window that is closing.
+const spaceGone = space => space === NO_CONTAINER ? Promise.resolve(false) : browser.contextualIdentities.get(space).then(() => false, () => true);
+
 // A rule that could not open its space: closing the tab now would lose the link, so it
-// stays, and you see which rule until the rules are changed in the settings. This is
-// a container removed while Tidier was not looking, or a rule that came from elsewhere:
-// one removed here takes its rules along (below).
-function ruleFailed(rule) {
-  setNotice("rule", `The rule for ${rule.url} points at a space that is gone, so the tab stayed here.`);
+// stays. If the space is gone you see which rule, until the rules are changed in the
+// settings. This is a container removed while Tidier was not looking, or a rule that came
+// from elsewhere: one removed here takes its rules along (below). Anything else passes,
+// and a lasting notice about it would not be true.
+async function ruleFailed(rule, err) {
+  if (await spaceGone(rule.space)) setNotice("rule", `The rule for ${rule.url} points at a space that is gone, so the tab stayed here.`);
+  else noteError(err);
 }
 
 // --- Leaving a space without losing input -----------------------------------------
+// The tab that holds a row's page: the row itself if it is not in the record yet, else
+// its live tab, which may be in another window; none if the page is not loaded anywhere.
+async function pageTab(tab, key) {
+  const id = key ? liveTabId(key) : tab.id;
+  return id === undefined ? null : browser.tabs.get(id).catch(() => null);
+}
+
 // Whether a tab can be closed without Firefox asking you anything. closesQuietly finds
 // out by unloading it, which a page with unsaved input refuses without asking, but
 // Firefox refuses to unload the selected tab whatever it holds. So you are first taken
 // to the tab you used last in that space, which is where closing it would take you
 // anyway, or to a new tab if it was the last one there, and you come back if the page
-// refuses. Which tab is real is read from the record: a row can be a placeholder, its
-// page loaded and selected in another window.
-async function leavesQuietly(tab, key) {
-  const liveId = key ? liveTabId(key) : tab.id;
-  const live = liveId === undefined ? null : await browser.tabs.get(liveId).catch(() => null);
-  if (!live?.active || live.discarded || isGhostUrl(live.url)) return closesQuietly(key, liveId);
+// refuses. `live` is the real tab (pageTab): a row can be a placeholder, its page loaded
+// and selected in another window.
+async function leavesQuietly(live, key) {
+  if (!live?.active || live.discarded || isGhostUrl(live.url)) return closesQuietly(key, live?.id);
   const last = await lastUsedIn(live.windowId, live.cookieStoreId, live.id);
   const step = last ?? await browser.tabs.create({ windowId: live.windowId, cookieStoreId: live.cookieStoreId, active: false });
   await browser.tabs.update(step.id, { active: true });
-  if (await closesQuietly(key, liveId)) return true;
+  if (await closesQuietly(key, live.id)) return true;
   await browser.tabs.update(live.id, { active: true });
   if (!last) await browser.tabs.remove(step.id).catch(() => {});
   return false;
@@ -83,15 +95,29 @@ function sayStayed(windowId) {
 // be refused at every start (Firefox has no such container any more). Removing a space
 // is the one thing besides your own hand that takes a folder away (ownfolders.js).
 // With Sidebery the record and the rules are not Tidier's to change like this.
+//
+// Firefox's settings close a container's tabs and then remove it; the extension call only
+// removes it, and its tabs stay, in no space. Tidier's own stay-in-the-space (spaces.js)
+// can even have opened a new tab in it in between, so what is left is closed here.
 async function spaceRemoved(space) {
   const rules = await rulesList.get();
   const left = rules.filter(r => r.space !== space);
   if (left.length !== rules.length) { rulesList.set(left); setNotice("rule", null); }
+  // A window in that space goes to the first other one before its tabs close: left there,
+  // every link is refused (intoSpace) and the tabs of the space it falls on stay hidden.
+  const next = (await spaceList(new Set()))[0]?.id;
+  for (const [windowId, active] of activeSpace) {
+    if (active !== space) continue;
+    if (next) await switchSpace(windowId, next).catch(noteError);
+    else activeSpace.delete(windowId);
+  }
   const all = await getSynced();
   for (const key of Object.keys(all).filter(k => all[k].cookieStoreId === space)) {
     if (isOwnFolder(all[key])) { delete all[key]; saveSynced(all); }
     else await closeEverywhere(key, { dismiss: false }).catch(() => {}); // Firefox may be closing these tabs itself right now
   }
+  const rest = await browser.tabs.query({ cookieStoreId: space }).catch(() => []);
+  await Promise.all(rest.map(t => browser.tabs.remove(t.id).catch(() => {})));
 }
 browser.contextualIdentities.onRemoved.addListener(({ contextualIdentity }) => {
   if (tidierAlone) serial(() => spaceRemoved(contextualIdentity.cookieStoreId));

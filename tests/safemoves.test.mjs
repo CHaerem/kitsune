@@ -350,6 +350,239 @@ test("with the setting off, a removed container changes no rule or record", asyn
   x.kill();
 });
 
+// --- Found by trying to break it ---------------------------------------------------
+test("opening tabs keeps nothing of them: every move would otherwise add to what stays in memory", async () => {
+  const ff = new FakeFirefox();
+  const { w } = aWindow(ff);
+  const x = await alone(ff);
+  await x.js("openUnruled")({ windowId: w.id, cookieStoreId: B, url: SITE + "?one" });
+  await x.js("openUnruled")({ windowId: w.id, cookieStoreId: B, url: SITE + "?two" });
+  assert.equal(await x.js("openings"), undefined);
+  x.kill();
+});
+
+test("the selected tab, moved to a space that is gone, stays selected and loaded, and nothing is added", async () => {
+  const ff = new FakeFirefox();
+  const { w, other, tab } = aWindow(ff, { selected: true });
+  const x = await alone(ff);
+  await move(x, tab.id, GONE);
+  assert.equal(ff.tabs.get(tab.id).active, true, "you stay on it");
+  assert.equal(ff.tabs.get(tab.id).discarded, false);
+  assert.equal(ff.tabs.get(other.id).active, false);
+  assert.equal(ff.list(w.id).length, 2);
+  assert.equal(said(x).length, 1);
+  x.kill();
+});
+
+test("a tab that is not selected, moved to a space that is gone, stays loaded", async () => {
+  const ff = new FakeFirefox();
+  const { tab } = aWindow(ff);
+  const x = await alone(ff);
+  await move(x, tab.id, GONE);
+  assert.equal(ff.tabs.get(tab.id).discarded, false);
+  x.kill();
+});
+
+// A web app changes its address by itself: Firefox reports only the address, and the
+// record follows when a page finishes loading or its title changes.
+function pushState(ff, id, url) {
+  const t = ff.tabs.get(id);
+  t.url = url;
+  ff.ext.b.tabs.onUpdated.fire(id, { url }, ff.snap(t));
+}
+
+test("a move takes the page the tab shows, not an older address in the record", async () => {
+  const ff = new FakeFirefox();
+  const { w, tab } = aWindow(ff);
+  const x = await alone(ff);
+  pushState(ff, tab.id, SITE + "/deeper");
+  await move(x, tab.id, B);
+  assert.deepEqual(ff.list(w.id).filter(t => t.cookieStoreId === B).map(t => t.url), [SITE + "/deeper"]);
+  x.kill();
+});
+
+test("moved from its placeholder, a tab takes the page it shows in the other window", async () => {
+  const ff = new FakeFirefox();
+  const { tab } = aWindow(ff);
+  const second = ff.addWindow();
+  const ghost = ff.addTab(second.id, { url: GHOST("ghost", "moved"), cookieStoreId: A, discarded: true }, { syncKey: "moved", syncRole: "ghost" });
+  ff.addTab(second.id, { url: GHOST("ghost", "home"), cookieStoreId: A, discarded: true }, { syncKey: "home", syncRole: "ghost" });
+  const x = await alone(ff);
+  pushState(ff, tab.id, SITE + "/deeper");
+  await move(x, ghost.id, B);
+  assert.deepEqual(ff.list(second.id).filter(t => t.cookieStoreId === B).map(t => t.url), [SITE + "/deeper"]);
+  x.kill();
+});
+
+test("a tab that is only a placeholder everywhere moves by the record's address", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://home.example/", active: true, cookieStoreId: A }, { syncKey: "home", syncRole: "live" });
+  const ghost = ff.addTab(w.id, { url: GHOST("ghost", "moved"), cookieStoreId: A, discarded: true }, { syncKey: "moved", syncRole: "ghost" });
+  ff.store.syncedTabs = {
+    home: { url: "https://home.example/", title: "Home", cookieStoreId: A, parentKey: null, group: false, added: 1 },
+    moved: { url: SITE, title: "Moved", cookieStoreId: A, parentKey: null, group: false, added: 1 },
+  };
+  const x = await alone(ff);
+  await move(x, ghost.id, B);
+  assert.deepEqual(ff.list(w.id).filter(t => t.cookieStoreId === B).map(t => t.url), [SITE]);
+  x.kill();
+});
+
+test("a rule that could not open a space that exists says nothing about it being gone", async () => {
+  const ff = new FakeFirefox();
+  ff.store.rules = [{ url: "work.example", space: A }];
+  const { w } = aWindow(ff);
+  const x = await alone(ff);
+  const create = x.b.tabs.create;
+  x.b.tabs.create = async p => { if (p.url === SITE + "?link") throw new Error("the window was closing"); return create(p); };
+  const t = ff.addTab(w.id, { url: "about:blank", cookieStoreId: B });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, SITE + "?link");
+  await wait(500);
+  assert.ok(ff.tabs.has(t.id), "the link is not lost");
+  assert.equal((await x.js("viewFor")(w.id)).problem, null, "no lasting notice of something untrue");
+  assert.ok([...x.js("problems")].some(p => /closing/.test(p)), "and the error is seen");
+  x.kill();
+});
+
+test("a saved tab's placeholder refused for another reason is still an error", async () => {
+  const ff = new FakeFirefox();
+  aWindow(ff);
+  ff.store.syncedTabs.F = { group: true, own: true, name: "Folder", cookieStoreId: A, parentKey: null, rank: 1, added: 1 };
+  Object.assign(ff.store.syncedTabs.moved, { parentKey: "F", saved: { url: SITE, title: "Moved" } });
+  const x = await alone(ff);
+  const second = ff.addWindow(); // no copy of it there yet, so one is made
+  x.b.tabs.create = async () => { throw new Error("the window was closing"); };
+  await x.js("serial")(() => x.js("unloadSaved")("moved", second.id, null)).catch(() => {});
+  await x.js("serial")(() => {});
+  assert.ok([...x.js("problems")].some(p => /closing/.test(p)));
+  x.kill();
+});
+
+// A window in the space that goes: B is shown, A's tabs are hidden.
+function inRemovedSpace(ff) {
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://home.example/", cookieStoreId: A, lastAccessed: 1000, hidden: true }, { syncKey: "home", syncRole: "live" });
+  const b = ff.addTab(w.id, { url: "https://there.example/", active: true, cookieStoreId: B, lastAccessed: 2000 }, { syncKey: "there", syncRole: "live" });
+  const b2 = ff.addTab(w.id, { url: "https://there.example/2", cookieStoreId: B, lastAccessed: 500 }, { syncKey: "there2", syncRole: "live" });
+  ff.store.syncedTabs = {
+    home: { url: "https://home.example/", title: "Home", cookieStoreId: A, parentKey: null, group: false, added: 1 },
+    there: { url: "https://there.example/", title: "There", cookieStoreId: B, parentKey: null, group: false, added: 1 },
+    there2: { url: "https://there.example/2", title: "There 2", cookieStoreId: B, parentKey: null, group: false, added: 1 },
+  };
+  return { w, a, b, b2 };
+}
+const settled = async x => { await x.js("serial")(() => {}); await wait(500); await x.js("serial")(() => {}); await wait(500); await x.js("flushWrites")(); };
+
+for (const order of ["only the container", "its tabs first, as Firefox's settings do it"]) {
+  test(`the space you are in is removed (${order}): you are in another space, with its tabs shown`, async () => {
+    const ff = new FakeFirefox();
+    const { w, a, b, b2 } = inRemovedSpace(ff);
+    const x = await alone(ff);
+    assert.equal(x.js("activeSpace").get(w.id), B);
+    if (order !== "only the container") {
+      ff.containers.delete(B);
+      ff.rm(b.id); ff.rm(b2.id);
+      await wait(50);
+    } else ff.containers.delete(B);
+    x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+    await settled(x);
+    assert.deepEqual(Object.keys(ff.synced), ["home"]);
+    assert.ok(![...ff.tabs.values()].some(t => t.cookieStoreId === B), "no tab left in it");
+    assert.notEqual(x.js("activeSpace").get(w.id), B, "the window is not left in a space that is gone");
+    assert.equal(ff.tabs.get(a.id).hidden, false, "the tabs of the space you are in are shown");
+    assert.equal(ff.tabs.get(a.id).active, true, "and you are on one");
+    assert.deepEqual([...x.js("problems")], []);
+    x.kill();
+  });
+}
+
+test("a new link without a container, after the space you were in is removed, lands in a space that exists", async () => {
+  const ff = new FakeFirefox();
+  const { w, b, b2 } = inRemovedSpace(ff);
+  const x = await alone(ff);
+  ff.containers.delete(B);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  const t = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, SITE + "?link");
+  await settled(x);
+  assert.ok(!ff.tabs.has(t.id));
+  assert.deepEqual(ff.list(w.id).filter(y => y.url === SITE + "?link").map(y => y.cookieStoreId), [A]);
+  assert.deepEqual([...x.js("problems")], []);
+  assert.ok(!ff.tabs.has(b.id) && !ff.tabs.has(b2.id));
+  x.kill();
+});
+
+test("a tab of the removed container that is not in the record goes too", async () => {
+  const ff = new FakeFirefox();
+  const { w, tab } = withSpace(ff);
+  const blank = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: B });
+  const x = await alone(ff);
+  ff.containers.delete(B);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  assert.ok(!ff.tabs.has(blank.id));
+  assert.ok(ff.tabs.has(tab.id));
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
+
+test("an essential of the removed container goes too, and does not come back", async () => {
+  const ff = new FakeFirefox();
+  const { w, tab } = withSpace(ff);
+  ff.store.essentials = [{ key: "ess", url: "https://ess.example/", cookieStoreId: B, title: "Ess" }];
+  const copy = ff.addTab(w.id, { url: "https://ess.example/", pinned: true, cookieStoreId: B }, { essentialKey: "ess" });
+  const x = await alone(ff);
+  const pinnedThere = () => [...ff.tabs.values()].filter(t => t.pinned && t.cookieStoreId === B);
+  assert.equal(pinnedThere().length, 1);
+  ff.containers.delete(B);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  await wait(2000);
+  assert.ok(!ff.tabs.has(copy.id));
+  assert.deepEqual(pinnedThere(), []);
+  assert.deepEqual(ff.store.essentials, []);
+  assert.ok(ff.tabs.has(tab.id));
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
+
+test("the last space removed: nothing to go to, and no error", async () => {
+  const ff = new FakeFirefox({ containers: ["firefox-default", A] });
+  const w = ff.addWindow({ focused: true });
+  const keep = ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: SITE, cookieStoreId: A }, { syncKey: "k", syncRole: "live" });
+  ff.store.syncedTabs = { k: { url: SITE, title: "T", cookieStoreId: A, parentKey: null, group: false, added: 1 } };
+  const x = await alone(ff);
+  x.js("activeSpace").set(w.id, A);
+  ff.containers.delete(A);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: A } });
+  await settled(x);
+  assert.ok(!ff.tabs.has(t.id));
+  assert.ok(ff.tabs.has(keep.id));
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
+
+test("a live folder set up for a removed space does not come back in the record, and says so", async () => {
+  const ff = new FakeFirefox();
+  const { w } = withSpace(ff);
+  const x = await alone(ff);
+  ff.containers.delete(B);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  const folder = { id: "prs", name: "Pull requests", cookieStoreId: B };
+  await x.js("serial")(() => x.js("refreshLiveFolder")(folder, { items: [{ url: "https://github.example/pr/1", repo: "r", number: 1, title: "T" }] }));
+  await settled(x);
+  assert.ok(!Object.values(ff.synced).some(e => e.cookieStoreId === B), "nothing in the record for a space that is gone");
+  assert.match((await x.js("viewFor")(w.id)).problem, /Pull requests/);
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
+
 // --- The sidebar comes back -------------------------------------------------------
 // reconnect.js on a stand-in for the sidebar page: what is under test is when it
 // reloads, and how often. The smoke test does it for real (alone_safe_moves).
