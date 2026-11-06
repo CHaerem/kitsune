@@ -47,7 +47,7 @@ const PIN_SETTLE_MS = 800;
 // RULE_SETTLE_MS for Sidebery to move each copy to its own space before
 // pinning it.
 const SIDEBAR_WAIT_MS = 4000;
-const RULE_SETTLE_MS = 600;
+const RULE_SETTLE_MS = 1200;
 const PROBE_MS = 500;
 
 // The focused window, tracked here so tab events need no round trip to ask.
