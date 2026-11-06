@@ -74,6 +74,9 @@ A first version of all of it works in the test Firefox, without Sidebery.
       you are, one place for new tabs, closed folders that rest, sound and news marks, honest
       dragging, safe moves. Sidebery has hundreds of options; each became one fixed
       behaviour or nothing.
+- [x] **Container session isolation**, as strong as Sidebery's: nothing goes out in the wrong
+      container, a space's own proxy and user agent, signing out, spaces made, changed and deleted in
+      Tidier, a vanished container brought back, a copy of a tab and a folder to another space.
 - [ ] **The command bar**, as in Arc: one key, one field, everything from it. Shortcuts as in Arc.
 - [ ] **Finding archived tabs**, a small window for links from other apps, and link preview.
 - [ ] **A refined design**: judged from screenshots, in light and dark, at every width.

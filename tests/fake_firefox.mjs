@@ -207,19 +207,19 @@ function addIsolationApis(ff, b) {
     remove: async ({ storeId, name, url }) => { ff.cookies = ff.cookies.filter(c => !(c.storeId === storeId && c.name === name && url.includes(c.domain.replace(/^\./, "")))); },
     set: async ({ storeId, name, value, url, domain }) => { ff.cookies.push({ storeId, name, value, domain: domain ?? new URL(url).hostname, path: "/", secure: url.startsWith("https"), hostOnly: !domain, firstPartyDomain: "" }); },
   };
-  ff.looks ??= {}; // container -> { name, color, icon }
-  const identity = id => ({ cookieStoreId: id, name: id, color: "blue", colorCode: "#000", icon: "circle", iconUrl: "x.svg", ...ff.looks[id] });
+  ff.identities ??= {}; // container -> { name, color, icon }
+  const identity = id => ({ cookieStoreId: id, name: id, color: "blue", colorCode: "#000", icon: "circle", iconUrl: "x.svg", ...ff.identities[id] });
   const ci = b.contextualIdentities;
   ci.query = async () => { if (ff.containersOff) throw new Error("Contextual identities are currently disabled"); return [...ff.containers].filter(c => c !== "firefox-default").map(identity); };
   ci.create = async ({ name, color, icon }) => {
-    if (ff.refuseLooks?.includes(color)) throw new Error(`Invalid color name ${color}`);
+    if (ff.badColors?.includes(color)) throw new Error(`Invalid color name ${color}`);
     ff.containerCount = Math.max(ff.containerCount || 0, ...[...ff.containers].map(c => Number(c.split("-").pop()) || 0)) + 1;
     const id = `firefox-container-${ff.containerCount}`;
     ff.containers.add(id);
-    ff.looks[id] = { name, color, icon };
+    ff.identities[id] = { name, color, icon };
     ci.onCreated.fire({ contextualIdentity: identity(id) });
     return identity(id);
   };
-  ci.update = async (id, changes) => { Object.assign((ff.looks[id] ??= {}), changes); ci.onUpdated.fire({ contextualIdentity: identity(id) }); return identity(id); };
+  ci.update = async (id, changes) => { Object.assign((ff.identities[id] ??= {}), changes); ci.onUpdated.fire({ contextualIdentity: identity(id) }); return identity(id); };
   ci.remove = async id => { const old = identity(id); ff.containers.delete(id); ci.onRemoved.fire({ contextualIdentity: old }); return old; };
 }

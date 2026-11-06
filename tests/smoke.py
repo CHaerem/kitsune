@@ -1568,7 +1568,27 @@ def alone_isolation(m):
 
     # A space's user agent and proxy.
     third = next(c for c in (1, 2, 3) if c not in (space, other))
-    r = extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "userAgent": "Smoke agent"})
+    r = ext_page(m, "/settings/settings.html", """
+      const id = args[0], card = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
+      await wait(800);
+      if (!card().querySelector(".space-more")) { card().querySelector(".more").click(); await wait(400); }
+      const set = (el, value) => { el.value = value; el.dispatchEvent(new page.Event("input", {bubbles: true})); };
+      const out = {saveHidden: card().querySelector(".save").hidden, hostHidden: card().querySelector(".host").hidden};
+      set(card().querySelector("select"), "http");
+      out.hostShown = !card().querySelector(".host").hidden;
+      card().querySelector(".save").click();
+      await wait(600);
+      out.incomplete = card().querySelector(".fact")?.textContent;
+      set(card().querySelector("select"), "");
+      set(card().querySelector("input[placeholder*=own]"), "Smoke agent");
+      card().querySelector(".save").click();
+      await wait(600);
+      out.saved = card().querySelector(".fact")?.textContent;
+      out.kept = card().querySelector("input[placeholder*=own]").value;
+      card().querySelector(".more").click();
+      return out;""", f"firefox-container-{third}")
+    check("a space's More has a proxy and a user agent, with Save only once something changed", r.get("saveHidden") is True and r.get("hostHidden") is True and r.get("hostShown") is True and r.get("saved") == "Saved." and r.get("kept") == "Smoke agent", str(r))
+    check("a proxy that is not complete is said, and not used", "not complete" in (r.get("incomplete") or ""), str(r))
     time.sleep(1)
     visit(m, third, f"{base}/r/agent-own")
     visit(m, space, f"{base}/r/agent-other")
@@ -1584,33 +1604,64 @@ def alone_isolation(m):
     got = seen(m, "through-proxy")
     check("a space's proxy carries its requests", got and all(x["proxied"] for x in got), str(got))
     check("other spaces' requests do not go through it", not seen(m, "past-proxy"), str(seen(m, "past-proxy")))
-    # A proxy that does not answer: Firefox then goes directly, whatever an extension asks
-    # (network.proxy.failover_direct, README). Here so that a change shows. The test's own
-    # server is on this machine, which Firefox otherwise never sends through a proxy.
+    # A proxy that does not answer (README says so, and this shows if Firefox changes it).
+    # The test's own server is on this machine, which Firefox otherwise never sends through
+    # a proxy: that is what the setting is for.
     extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "proxy": {"type": "http", "host": "127.0.0.1", "port": 1}})
     time.sleep(1)
-    direct = m.js(ISOLATION_JS + """Services.prefs.setBoolPref("network.proxy.allow_hijacking_localhost", true); inTab(args[0], args[1]); await wait(3000);
+    direct = m.js(ISOLATION_JS + """Services.prefs.setBoolPref("network.proxy.allow_hijacking_localhost", true); inTab(args[0], args[1]); await wait(5000);
       Services.prefs.clearUserPref("network.proxy.allow_hijacking_localhost"); return Services.prefs.getBoolPref("network.proxy.failover_direct", null);""", third, f"{base}/r/dead-proxy")
-    print(f"INFO  with a proxy that does not answer, Firefox {'went directly' if seen(m, 'dead-proxy') else 'loaded nothing'} (network.proxy.failover_direct: {direct})", flush=True)
+    check("a proxy that does not answer means no page, not going directly", not seen(m, "dead-proxy"), f"failover_direct: {direct}, {seen(m, 'dead-proxy')}")
     r = extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}"})
     time.sleep(1)
     visit(m, third, f"{base}/r/agent-unset")
     check("unset again, a space's requests are as they were", "Smoke agent" not in seen(m, "agent-unset")[0]["agent"] and r == {}, str(r))
 
     # Signing out: one site in one space, and everything in a space.
-    tab_ids = sidebar_page(m, """return 1;""")
-    r = m.js(ISOLATION_JS + """const w = main(), {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
-      const t = w.gBrowser.tabs.find(x => url(x).includes("baseline-here")); return ExtensionParent.apiManager.global.tabTracker.getId(t);""")
-    extension_message(m, {"type": "isolation:clearCookies", "tabId": r, "windowId": None})
+    # With the tab menu's table, by its item, on the real sidebar; without it, by the message it sends.
+    r = sidebar_page(m, """
+      await wait(400);
+      const row = plainTabs().find(x => x.querySelector(".title").textContent === "Recorded");
+      if (!row) return {row: false};
+      const box = row.getBoundingClientRect();
+      row.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5}));
+      await wait(500);
+      const menu = doc.getElementById("menu"), items = menu.hidden ? [] : [...menu.querySelectorAll(".item")];
+      const labels = items.map(i => i.textContent);
+      const item = items.find(i => i.textContent === "Clear this site's cookies in this space");
+      if (item) { item.click(); await wait(800); }
+      return {row: true, labels, clicked: !!item};""")
+    if r.get("labels"):
+        check("the tab menu has Clear this site's cookies and Open a copy in space", r.get("clicked") and "Open a copy in space" in r["labels"], str(r))
+    else:
+        tab = m.js(ISOLATION_JS + """const w = main(), {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+          const t = w.gBrowser.tabs.find(x => url(x).includes("baseline-here")); return ExtensionParent.apiManager.global.tabTracker.getId(t);""")
+        extension_message(m, {"type": "isolation:clearCookies", "tabId": tab, "windowId": None})
     visit(m, space, f"{base}/r/after-clear")
     visit(m, other, f"{base}/r/after-clear-other")
     check("clearing a site's cookies in a space takes them there", [x["cookie"] for x in seen(m, "after-clear") if "other" not in x["path"]] == [""], str(seen(m, "after-clear")))
     check("and leaves another space's alone", [x["cookie"] for x in seen(m, "after-clear-other")] == [there], str(seen(m, "after-clear-other")))
     m.js(GIVE_PERMISSIONS, EXT_ID, ["browsingData"], [])
-    extension_message(m, {"type": "isolation:signOut", "id": f"firefox-container-{other}"})
-    time.sleep(1)
+    r = ext_page(m, "/settings/settings.html", """
+      const id = args[0], card = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
+      await wait(800);
+      if (!card().querySelector(".space-more")) { card().querySelector(".more").click(); await wait(400); }
+      card().querySelector(".sign-out").click();
+      await wait(300);
+      const out = {question: card().querySelector(".question").textContent};
+      card().querySelector(".danger + button").click();
+      await wait(300);
+      out.kept = !card().querySelector(".question");
+      card().querySelector(".sign-out").click();
+      await wait(300);
+      card().querySelector(".danger").click();
+      await wait(1200);
+      out.fact = card().querySelector(".fact")?.textContent;
+      card().querySelector(".more").click();
+      return out;""", f"firefox-container-{other}")
+    check("signing out asks first, and Keep keeps", "for good" in r.get("question", "") and r.get("kept") is True, str(r))
     visit(m, other, f"{base}/r/signed-out")
-    check("signing out of a space takes its logins", [x["cookie"] for x in seen(m, "signed-out")] == [""], str(seen(m, "signed-out")))
+    check("signing out of a space takes its logins", [x["cookie"] for x in seen(m, "signed-out")] == [""] and "Signed out" in (r.get("fact") or ""), f"{r} {seen(m, 'signed-out')}")
     m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
 
     # New, edited and deleted, with clicks on the real settings page.
@@ -1947,8 +1998,25 @@ def alone_isolation_start(m):
     time.sleep(1)
     space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
     m.js(GIVE_PERMISSIONS, EXT_ID, ["webRequest", "webRequestBlocking"], ["<all_urls>"])
+    # The test declares Tidier alone through a stand-in for managed storage that exists only once
+    # it has connected, which is later than this is about: so the setting as the settings page stores it.
+    m.js(H + """const db = await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID(args[0]).extension)); await db.set({tidierAlone: true}); return 1;""", EXT_ID)
     visit(m, space, f"{base}/set-cookie?v=at-start")
     m.js(ISOLATION_JS + """await closeAll("/set-cookie"); return 1;""")
+    # A page you opened before there was a rule for it: Firefox restoring it, or you reloading it, is no reason to move it.
+    visit(m, space, f"{base}/r/before-the-rule")
+    other = 2 if space != 2 else 3
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "before-the-rule", "space": f"firefox-container-{other}"}]})
+    time.sleep(2.5)  # registered, so that it comes back
+    extension_message(m, {"type": "flush"})
+    time.sleep(1)
+    # The first start since the permission came while Tidier ran: Firefox does not remember the
+    # listener yet, so the page goes out, and is moved once Tidier has started.
+    m.restart(f"{base}/r/link-too-soon")
+    time.sleep(12)
+    r = m.js(ISOLATION_JS + """return containersOf("link-too-soon");""")
+    check("in the first start after the permission, a page that got out is moved to a space", r == [space], str(r))
+    m.js(ISOLATION_JS + """await closeAll("link-too-soon"); return 1;""")
     extension_message(m, {"type": "flush"})
     time.sleep(1)
     m.restart(f"{base}/r/link-at-start")
@@ -1957,6 +2025,15 @@ def alone_isolation_start(m):
     r = m.js(ISOLATION_JS + """return containersOf("link-at-start");""")
     check("a link that starts Firefox goes out in a space, from its first request", got and all(x["cookie"] == "login=at-start" for x in got), str(got))
     check("and its tab is there, in a space", r == [space], str(r))
+    r = m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("before-the-rule"));
+      if (!t) return {missing: true};
+      const before = {ctx: t.userContextId, loaded: !!t.linkedPanel};
+      w.gBrowser.selectedTab = t; await wait(2000);
+      const restored = containersOf("before-the-rule");
+      w.gBrowser.reloadTab(t); await wait(1500);
+      return {before, restored, reloaded: containersOf("before-the-rule")};""")
+    check("a tab Firefox restores is not moved by a rule, nor when you reload it", r.get("restored") == [space] and r.get("reloaded") == [space], str(r))
+    extension_message(m, {"type": "settings:rules", "rules": []})
     m.js(ISOLATION_JS + """await closeAll("/r/"); return 1;""")
     no_problems(m, "after a start by a link")
 

@@ -4,6 +4,7 @@
 // that records every request and its cookies.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { FakeFirefox, wait, GHOST } from "./fake_firefox.mjs";
 
 const NONE = "firefox-default", A = "firefox-container-1", B = "firefox-container-2", C = "firefox-container-3";
@@ -200,7 +201,7 @@ test("a known tab outside any container: its record and placeholders go, and it 
   ff.store.syncedTabs = { k: { url: "https://old.example/", title: "Old", cookieStoreId: NONE, parentKey: null, group: false, added: 1 } };
   const { w } = aWindow(ff);
   const other = ff.addWindow();
-  const t = ff.addTab(w.id, { url: "https://old.example/" }, { syncKey: "k", syncRole: "live" });
+  const t = ff.addTab(w.id, { url: "https://old.example/", discarded: true }, { syncKey: "k", syncRole: "live" });
   const ghost = ff.addTab(other.id, { url: GHOST("ghost", "k") }, { syncKey: "k", syncRole: "ghost" });
   const x = await run(ff);
   assert.equal((await ff.request({ tabId: t.id, url: "https://old.example/" })).cancel, true, "Firefox restoring it");
@@ -335,6 +336,39 @@ test("a request made before Tidier has read the window's space still goes to the
   x.kill();
 });
 
+test("a page already loaded outside any space when Tidier starts is moved, with or without the permission", async () => {
+  for (const granted of [GUARD, []]) {
+    const ff = new FakeFirefox(); ff.granted = new Set(granted);
+    const { w } = aWindow(ff);
+    const loaded = ff.addTab(w.id, { url: "https://early.example/" });
+    const resting = ff.addTab(w.id, { url: "https://resting.example/", discarded: true });
+    const blank = ff.addTab(w.id, { url: "about:newtab" });
+    const x = await run(ff);
+    await wait(500);
+    assert.ok(!ff.tabs.has(loaded.id), "moved");
+    assert.equal(opened(ff, w.id, "https://early.example/")[0].cookieStoreId, A);
+    assert.ok(ff.tabs.has(resting.id), "an unloaded one is stopped when it loads");
+    assert.ok(ff.tabs.has(blank.id), "a new tab page is no web page");
+    x.kill();
+  }
+});
+
+test("moving over: the listener is there as the page loads again, so Firefox remembers it", async () => {
+  const ff = new FakeFirefox(); ff.granted = new Set(GUARD);
+  aWindow(ff);
+  const x = await run(ff, { alone: false });
+  assert.ok(!ff.pageStorageData.isolationAtStart);
+  x.b.runtime.reload = () => {};
+  await x.js("moveOver")();
+  assert.equal(JSON.parse(ff.pageStorageData.isolationAtStart).guard, true);
+  x.kill();
+  const y = ff.boot();
+  assert.equal(y.b.webRequest.onBeforeRequest.ls.length, 1, "on the page's first tick");
+  await wait(300);
+  assert.equal(y.b.webRequest.onBeforeRequest.ls.length, 1, "and it stays, since the setting is on now");
+  y.kill();
+});
+
 // --- A space's network ---------------------------------------------------------------
 test("a proxy has to be complete, and a user agent is only changed for its space", async () => {
   const ff = new FakeFirefox(); ff.granted = new Set([...GUARD, "proxy"]);
@@ -384,6 +418,10 @@ test("a proxy set is in use from the first tick of the next start, and one witho
   const z = await run(ff);
   assert.match(z.js("[...notices.values()].join()"), /no longer has the permission/);
   z.kill();
+  ff.granted = new Set(["proxy"]); // the proxy, but no access to any site: it would see no request
+  const v = await run(ff);
+  assert.match(v.js("[...notices.values()].join()"), /no longer has the permission/);
+  v.kill();
 });
 
 // --- Signing out -----------------------------------------------------------------------
@@ -523,7 +561,7 @@ test("a container that vanished comes back with its name and look, and what poin
   const id = ff.store.essentials[0].cookieStoreId;
   assert.notEqual(id, GONE);
   assert.ok(ff.containers.has(id));
-  assert.deepEqual(ff.looks[id], { name: "Clients", color: "red", icon: "tree" });
+  assert.deepEqual(ff.identities[id], { name: "Clients", color: "red", icon: "tree" });
   assert.equal(ff.synced.F.cookieStoreId, id);
   assert.equal(ff.synced.s.cookieStoreId, id);
   assert.equal(ff.store.rules[0].space, id);
@@ -587,8 +625,8 @@ test("an ordinary tab of a remembered space brings it back too, and one nobody r
   };
   aWindow(ff);
   const x = await run(ff);
-  assert.equal(Object.values(ff.looks).filter(l => l.name === "Clients").length, 1);
-  assert.equal(Object.keys(ff.looks).length, 1);
+  assert.equal(Object.values(ff.identities).filter(l => l.name === "Clients").length, 1);
+  assert.equal(Object.keys(ff.identities).length, 1);
   x.kill();
 });
 
@@ -699,4 +737,21 @@ test("the old path still runs without the permission for a link with no containe
   await wait(500);
   assert.equal(opened(ff, w.id, "https://link.example/")[0].cookieStoreId, A);
   x.kill();
+});
+
+// --- The settings page ------------------------------------------------------------------
+test("no two scripts of the settings page define the same top-level name", () => {
+  // Plain scripts sharing one scope: unlike a background script's function, a const there
+  // defined twice stops the second script altogether, and with it the whole page.
+  const folder = new URL("../settings/", import.meta.url);
+  const scripts = [...readFileSync(new URL("settings.html", folder), "utf8").matchAll(/<script src="([^"]+)"/g)].map(m => m[1]);
+  assert.ok(scripts.length > 1);
+  const seen = new Map(), twice = [];
+  for (const file of scripts) {
+    for (const [, name] of readFileSync(new URL(file, folder), "utf8").matchAll(/^(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+      if (seen.has(name)) twice.push(`${name} (${seen.get(name)}, ${file})`);
+      else seen.set(name, file);
+    }
+  }
+  assert.deepEqual(twice, []);
 });

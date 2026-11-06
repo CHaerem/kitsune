@@ -243,7 +243,16 @@ class TestFirefox:
             self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir, *([url] if url else [])],
                                          env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
+            # Marionette looks at the window's selected tab as it connects. With a link at the
+            # start, that tab can be just then being replaced by one in a space (alone_isolation_start).
+            for attempt in range(10 if url else 1):
+                try:
+                    self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
+                    break
+                except RuntimeError:
+                    if attempt == (10 if url else 1) - 1:
+                        raise
+                    time.sleep(1)
         except OSError as err:
             # Without Firefox's own words this is only "Connection refused".
             lines = open(log, errors="replace").read().strip().splitlines()[-15:]

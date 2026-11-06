@@ -38,6 +38,7 @@ async function moveOver() {
   saveSynced(all);
   await flushWrites();
   await browser.storage.local.set({ tidierAlone: true });
+  await guardAfterReload();
   browser.runtime.reload();
 }
 

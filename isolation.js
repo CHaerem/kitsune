@@ -197,11 +197,15 @@ function tellOnce(windowId, text) {
 }
 
 // The listener must be added while the background page loads, or a request made while
-// Firefox starts is not held for it: Firefox holds those for a blocking listener it
-// remembers from last time (webRequest is "startup blocking"), and forgets the listener
-// if it isn't back by the time the page has loaded. That is a link from another app with
-// Firefox closed: the very request this is for. Reading whether Tidier alone is on takes
-// longer than that, so what was true last time is kept where it can be read at once.
+// Firefox starts is not held for it. Firefox holds those for a blocking listener it
+// remembers from last time (webRequest is "startup blocking"), but it only remembers one
+// that was added while the page was loading, and forgets it if it isn't back by then.
+// That is a link from another app with Firefox closed: the very request this is for.
+// Reading whether Tidier alone is on takes longer than that, so what was true last time
+// is kept where it can be read at once. So a permission given while Tidier runs holds
+// requests from the second start after it, and in the first one a page that slipped
+// through is moved as soon as Tidier has started (moveStragglers). Moving over reloads
+// the page, so it is there from the first (guardAfterReload).
 function guardRequests() {
   if (guarding || !browser.webRequest?.onBeforeRequest) return;
   browser.webRequest.onBeforeRequest.addListener(beforeTopLevelRequest, { urls: ["<all_urls>"], types: ["main_frame"] }, ["blocking"]);
@@ -212,6 +216,27 @@ function unguardRequests() {
   guarding = false;
 }
 browser.tabs.onRemoved.addListener(tabId => requestOfTab.delete(tabId));
+
+async function guardAfterReload() {
+  if (!await browser.permissions.contains?.(ISOLATION_PERMISSIONS).catch(() => false)) return;
+  try { localStorage.setItem(AT_START, JSON.stringify({ guard: true, network: networkNow })); } catch (err) { /* then from the next start */ }
+}
+
+// A web page already loaded outside any space when Tidier starts: it got there before
+// anything could stop it, with no login, since those are all in spaces, and it must not
+// stay there, where its next login would land. Only what is loaded: an unloaded tab is
+// stopped when it loads.
+async function moveStragglers() {
+  if (!tidierAlone) return;
+  const rules = await rulesList.get();
+  for (const tab of await browser.tabs.query({ cookieStoreId: NO_CONTAINER })) {
+    if (tab.pinned || tab.incognito || tab.discarded || !isWeb(tab.url)) continue;
+    const win = await browser.windows.get(tab.windowId).catch(() => null);
+    const popup = !!win && win.type !== "normal";
+    const space = whereItBelongs({ url: tab.url, tab, firstPage: false, popup, rules, activeSpace: await spaceToOpenIn(tab) });
+    if (space) await openElsewhere(tab, tab.url, space, popup);
+  }
+}
 
 // --- 2. A space's own network and identity -----------------------------------------
 // Set on the settings page. Nothing runs unless a space has one set. A proxy is `proxy`
@@ -262,7 +287,7 @@ function applyNetwork() {
     if (!wantsAgent && agentEvent.hasListener(agentFor)) agentEvent.removeListener(agentFor);
   }
   if (!tidierAlone) return;
-  const missing = (wantsProxy && !proxyEvent) || (wantsAgent && !agentEvent);
+  const missing = (wantsProxy || wantsAgent) && (!hostsGiven || (wantsProxy && !proxyEvent) || (wantsAgent && !agentEvent));
   setNotice("spaceNetwork", missing ? "A space's proxy or user agent is not in use: Tidier no longer has the permission for it. It can be given on the settings page." : null);
 }
 
@@ -520,6 +545,7 @@ function vanishedSpaces({ essentials, record, rules, have, memory = {} }) {
 }
 
 async function bringBackSpaces() {
+  await startIsolation(); // what was read while the page loaded may have changed: managed storage is read again here too
   if (!tidierAlone) return;
   // Containers turned off in Firefox: not known whether anything is gone.
   const containers = await identities().catch(() => null);

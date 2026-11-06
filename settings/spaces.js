@@ -53,7 +53,7 @@ function spaceCard(s) {
   return card;
 }
 
-const field = (label, ...content) => el("div", { className: "field" }, el("span", { className: "label", textContent: label }), el("div", { className: "content" }, ...content));
+const spaceField = (label, ...content) => el("div", { className: "field" }, el("span", { className: "label", textContent: label }), el("div", { className: "content" }, ...content));
 
 function spaceMore(s) {
   const choose = changes => async () => { await isolation("edit", { id: s.id, changes }); drawSpaces(true); };
@@ -71,12 +71,12 @@ function spaceMore(s) {
     return b;
   });
   const box = el("div", { className: "space-more" },
-    field("Colour", el("div", { className: "choices" }, ...colors)),
-    field("Icon", el("div", { className: "choices" }, ...icons)),
+    spaceField("Colour", el("div", { className: "choices" }, ...colors)),
+    spaceField("Icon", el("div", { className: "choices" }, ...icons)),
     ...networkFields(s),
-    field("Logins", ...signOutPart(s)),
+    spaceField("Logins", ...signOutPart(s)),
   );
-  if (isolated.spaces.length > 1) box.append(field("", ...deletePart(s)));
+  if (isolated.spaces.length > 1) box.append(spaceField("", ...deletePart(s)));
   const fact = spaceFacts.get(s.id);
   if (fact) box.append(el("p", { className: "hint fact", textContent: fact }));
   return box;
@@ -107,9 +107,9 @@ function networkFields(s) {
     drawSpaces(true);
   };
   return [
-    field("Proxy", el("div", { className: "line tight" }, type, host, port)),
-    field("User agent", el("div", { className: "line tight" }, agent)),
-    field("", save),
+    spaceField("Proxy", el("div", { className: "line tight" }, type, host, port)),
+    spaceField("User agent", el("div", { className: "line tight" }, agent)),
+    spaceField("", save),
   ];
 }
 
@@ -139,16 +139,16 @@ function signOutPart(s) {
   return [b];
 }
 
-const counted = (n, one, many) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
-function whatGoes({ essentials, folders, tabs }) {
-  const parts = [...(essentials ? [counted(essentials, "essential", "essentials")] : []), ...(folders ? [counted(folders, "folder", "folders")] : []), ...(tabs ? [counted(tabs, "tab", "tabs")] : []), "all its logins"];
+const spaceCount = (n, one, many) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+function whatGoesWithSpace({ essentials, folders, tabs }) {
+  const parts = [...(essentials ? [spaceCount(essentials, "essential", "essentials")] : []), ...(folders ? [spaceCount(folders, "folder", "folders")] : []), ...(tabs ? [spaceCount(tabs, "tab", "tabs")] : []), "all its logins"];
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
 }
 
 function deletePart(s) {
   const n = s.contents;
   const keeps = n.essentials || n.folders ? " A copy of its essentials and folders is kept first." : "";
-  const question = questionPart(s, "delete", `Delete ${s.name}? ${whatGoes(n)} go.${keeps}`, `Delete ${s.name}`, async () => {
+  const question = questionPart(s, "delete", `Delete ${s.name}? ${whatGoesWithSpace(n)} go.${keeps}`, `Delete ${s.name}`, async () => {
     const r = await isolation("delete", { id: s.id });
     asking.delete(s.id);
     if (r?.refused) spaceFacts.set(s.id, `${s.name} stays. ${r.refused}`);

@@ -975,6 +975,7 @@ async function start(delayMs) {
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
+  serial(moveStragglers); // isolation.js: once new tabs are registered again
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
 }

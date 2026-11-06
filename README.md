@@ -338,8 +338,11 @@ Guaranteed, with the permission for it (`isolation.js`, `whereItBelongs`):
 
 - **No web page is loaded outside a space.** A request with no container is stopped
   before it leaves and opened in the active space, also a tab restored or opened by
-  something else, and a link that starts Firefox itself. An essential with no container
-  becomes one of the active space.
+  something else, and a link that starts Firefox itself. (That last one Firefox only
+  holds for a listener it remembers: from the first start after moving over, or the
+  second after giving the permission later. Until then such a page goes out with no
+  login, and is moved to its space as soon as Tidier has started.) An essential with no
+  container becomes one of the active space.
 - **A rule's address opens in its space, from the first request on,** on a tab's first
   page and for an address you type or choose. A cookie set in one space is not sent in
   another.
