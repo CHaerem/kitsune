@@ -83,12 +83,15 @@ body {
   background: none; display: grid; place-items: center; cursor: default;
 }
 .space:hover { background: var(--hover); }
+.space.menu-for { background: var(--hover); }
 .space .dot { width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--color) 45%, transparent); }
 .space.active .dot { background: var(--color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color) 30%, transparent); }
 
 /* Tidier alone: the rest of what makes it the sidebar. */
 #space-name:empty, #actions { display: none; }
 #space-name { padding: 2px 8px 6px; font-weight: 600; color: var(--muted); font-size: 12px; }
+/* The name line as a box, the same height and with the text in the same place. */
+.space-box { display: block; box-sizing: border-box; width: calc(100% - 8px); height: 19px; margin: 0 4px 4px; padding: 0 3px; font: inherit; font-weight: 600; font-size: 12px; color: var(--text); background: var(--selected); border: 1px solid var(--accent); border-radius: 5px; outline: none; }
 .alone #actions { display: flex; gap: 4px; padding-bottom: 6px; }
 #actions button {
   border: 0; background: none; color: var(--muted); height: 28px; border-radius: var(--radius);

@@ -110,6 +110,8 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
+  else if (msg.type === "unloadSpace") await unloadSpace(msg.space);
+  else if (msg.type === "renameSpace") await renameSpace(msg.space, msg.name);
   viewSoon(windowId);
 }
 

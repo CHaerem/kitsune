@@ -5,7 +5,11 @@ function folderMenu(key, live) {
     ["Delete folder (its tabs stay)", () => send({ type: "deleteFolder", key })],
   ];
 }
-const listMenu = () => [["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }]];
+const listMenu = () => [
+  ["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }],
+  ...(clearableHere() ? [clearItem()] : []), // spacemenu.js
+  ["Settings", () => browser.runtime.openOptionsPage()],
+];
 
 function openMenu(e, items) {
   e.preventDefault();
