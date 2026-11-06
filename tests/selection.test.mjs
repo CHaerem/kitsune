@@ -137,6 +137,19 @@ test("a range goes over what is drawn, and starts at the clicked tab if the sele
   assert.deepEqual(t.picked(), [3, 4, 5]);
 });
 
+test("a range from a tab that has gone starts at the clicked one; earlier picks stay", async () => {
+  const s = await sidebar();
+  s.view({});
+  s.add(3);
+  s.el(3).offsetParent = null; // the last one picked, in a folder now closed
+  s.view({});
+  assert.deepEqual(s.picked(), [1]);
+  s.range(5);
+  assert.deepEqual(s.picked(), [1, 5]);
+  s.range(4);
+  assert.deepEqual(s.picked(), [1, 4, 5], "and from there it is a range again");
+});
+
 test("essentials and rows never mix: a click on the other kind starts over", async () => {
   const s = await sidebar();
   s.add(2);
@@ -193,6 +206,20 @@ test("× on a picked row, ⌫ and a middle click close them all, the selected ta
   assert.deepEqual(await closes(s => s.fire("keydown", { closest: () => null }, { key: "Backspace" })), want);
   assert.deepEqual(await closes(s => s.fire("auxclick", s.el(3), { button: 1 })), want);
   assert.deepEqual(await closes(s => s.fire("click", target({ item: s.el(2), button: xButton }))), want);
+});
+
+test("⌫ held down closes once: the repeats do not go on to the rows after", async () => {
+  const s = await sidebar();
+  const body = { closest: () => null };
+  s.add(2);
+  s.ctx.cursor = s.el(2);
+  s.fire("keydown", body, { key: "Backspace" });
+  assert.deepEqual(s.sent.map(m => m.tabId), [2, 1]);
+  const repeat = s.fire("keydown", body, { key: "Backspace", repeat: true });
+  assert.equal(repeat.stopped, true, "keys.js does not see it, or it closes the row the cursor went to");
+  assert.equal(s.sent.length, 2);
+  // Nothing picked: a first press is still keys.js's own.
+  assert.equal(s.fire("keydown", body, { key: "Backspace" }).stopped, false);
 });
 
 test("× or ⌫ on a tab that is not picked is that tab's own", async () => {
@@ -477,5 +504,72 @@ test("a tab with no record is a place too: a move lands right before it, in its 
   const here = ff.list(w.id).map(t => t.id);
   assert.equal(here.indexOf(a.id), here.indexOf(blank.id) - 1);
   assert.deepEqual(keysIn(ff, o), ["b", "a"], "elsewhere it goes last");
+  x.kill();
+});
+
+test("an essential's pin counts even on a copy Tidier has just made", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true }), o = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  ff.addTab(o.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  ff.addTab(o.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  ff.addTab(o.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const g = ff.addTab(w.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await start(ff);
+  // A placeholder dragged to the essentials and straight back: an ordinary tab again.
+  await x.b.tabs.update(g.id, { pinned: true });
+  await wait(300);
+  await x.b.tabs.update(g.id, { pinned: false });
+  await wait(4000);
+  await x.js("flushWrites")();
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://e.example/"]);
+  assert.ok(Object.values(ff.synced).some(e => e.url === "https://a.example/"));
+  assert.equal(ff.values.get(g.id).essentialKey, undefined);
+  // An essential closed, and its new copy straight to the list: no longer an essential.
+  ff.rm(t.id);
+  await wait(300);
+  const copy = ff.list(w.id).find(y => y.pinned);
+  await x.b.tabs.update(copy.id, { pinned: false });
+  await wait(4000);
+  await x.js("flushWrites")();
+  assert.deepEqual(ff.store.essentials, []);
+  assert.equal(ff.list(o.id).filter(y => y.pinned).length, 0, "and the other window's copy went too");
+  x.kill();
+});
+
+test("with the setting off, a copy Tidier is busy with is left alone when unpinned, as before", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await start(ff, false);
+  x.js("busy").add(t.id);
+  await x.b.tabs.update(t.id, { pinned: false });
+  await wait(1000);
+  await x.js("flushWrites")();
+  assert.equal(ff.store.essentials.length, 1);
+  x.kill();
+});
+
+test("each closed tab keeps the space for its own moment: an earlier timer does not end a later one", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const x = await start(ff);
+  // The moments are run by hand: real timers would make this a race of its own.
+  const moments = [], real = x.ctx.setTimeout;
+  x.ctx.setTimeout = (f, ms, ...a) => { if (ms === 200) { moments.push(f); return 0; } return real(f, ms, ...a); };
+  for (const tabId of [9001, 9002]) x.b.tabs.onRemoved.fire(tabId, { windowId: w.id, isWindowClosing: false });
+  x.ctx.setTimeout = real;
+  assert.equal(moments.length, 2);
+  moments[0]();
+  assert.equal(x.js("closedIn").has(w.id), true, "the first one's time is up, the last one's is not");
+  moments[1]();
+  assert.equal(x.js("closedIn").has(w.id), false);
   x.kill();
 });

@@ -160,8 +160,10 @@
       else if (cursor) moveCursor(null);
       else return;
       e.preventDefault();
-    } else if ((e.key === "Backspace" || e.key === "Delete") && picked.size && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      if (cursor && !picked.has(idOf(cursor))) return;
+    } else if ((e.key === "Backspace" || e.key === "Delete") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      // A key held a little long closes what it was pressed for, not the rows that come after.
+      if (e.repeat) { e.stopPropagation(); e.preventDefault(); return; }
+      if (!picked.size || (cursor && !picked.has(idOf(cursor)))) return;
       if (cursor) {
         const stays = x => !picked.has(idOf(x)), all = reachable(), at = all.indexOf(cursor);
         moveCursor(all.slice(at + 1).find(stays) ?? all.slice(0, at).reverse().find(stays));
