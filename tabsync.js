@@ -992,6 +992,7 @@ async function start(delayMs) {
   await serial(async () => {
     await step(closeOldFolderPages); // moveover.js
     await step(initList);
+    await step(essentialsAgree);
     // Without the roles every tab looks unsynced, and reconcileAll would act on that.
     if (await step(loadRoles)) {
       await step(initSynced);

@@ -509,8 +509,28 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (key) serial(() => oneLoaded(key));
 }, { properties: ["status"] });
 
-// Startup is driven from tabsync.js, so both features start in one order.
-async function startEssentials() {
-  await initList();
-  await ensureAllWindows();
+// At a start, the list and the pinned tabs agree again. A pinned page the list does not know
+// is an essential whose making was cut off: the list is written a moment later, and an update
+// or a crash can come first. A placeholder of an essential that is not there has nothing to
+// show, and would otherwise stay until you select it.
+async function essentialsAgree() {
+  const pinned = await browser.tabs.query({ pinned: true });
+  const keys = await Promise.all(pinned.map(keyOf));
+  let list = await getList();
+  const added = [];
+  for (const [i, t] of pinned.entries()) {
+    if (!isWeb(t.url) || list.some(e => e.key === keys[i] || (e.url === t.url && e.cookieStoreId === t.cookieStoreId))) continue;
+    keys[i] ??= crypto.randomUUID();
+    await tagTab(t.id, keys[i]);
+    added.push({ key: keys[i], url: t.url, cookieStoreId: t.cookieStoreId, title: t.title, icon: t.favIconUrl });
+    list = [...list, added.at(-1)];
+  }
+  if (added.length) setList(list);
+  for (const [i, t] of pinned.entries()) {
+    if (placeholderOf(t.url).kind !== "essential" || list.some(e => e.key === keys[i])) continue;
+    busy.add(t.id);
+    keyByTab.delete(t.id);
+    await browser.tabs.remove(t.id).catch(ifGone);
+    await forgetClosedPlaceholders("essential", [keys[i]]);
+  }
 }

@@ -1006,3 +1006,23 @@ test("a copy whose value is refused does not stay busy for good", async () => {
   assert.deepEqual([...x.js("busy")].filter(id => ff.list(b.id).some(y => y.id === id)), []);
   x.kill();
 });
+
+test("at a start, a pinned page the list does not know is an essential, and a placeholder of none goes", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const page = ff.addTab(w.id, { url: "https://cut-off.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "made-a-moment-before" });
+  const stale = ff.addTab(w.id, { url: GHOST("essential", "gone"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "gone" });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:home", active: true });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials.map(e => e.key).sort(), ["e", "made-a-moment-before"]);
+  assert.equal(ff.values.get(page.id).essentialKey, "made-a-moment-before");
+  assert.ok(!ff.tabs.has(stale.id));
+  assert.equal(ff.list(other.id).filter(t => t.pinned).length, 2);
+  x.kill();
+});
