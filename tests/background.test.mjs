@@ -888,3 +888,21 @@ test("a tab moved to a new window leaves its copy in the window it came from, th
   assert.ok(ff.urls(from.id).includes(GHOST("ghost", "a").replace("moz-extension://tidier/", "")), "the old window has a ghost");
   x.kill();
 });
+
+test("an unloaded tab moved to another window gets its title back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const from = ff.addWindow();
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(from.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const to = ff.addWindow();
+  ff.addTab(to.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  ff.log.length = 0;
+  await x.b.tabs.move(ghost.id, { windowId: to.id, index: 1 });
+  await wait(1500);
+  assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === ghost.id), "its placeholder is loaded again");
+  x.kill();
+});

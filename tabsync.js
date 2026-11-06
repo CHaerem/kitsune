@@ -930,6 +930,10 @@ browser.tabs.onAttached.addListener((tabId, { newWindowId }) => {
     // after a restart it would be a stranger, and a duplicate of itself.
     await setRole(tabId, key, role).catch(() => {});
     await reconcileAll();
+    // An unloaded tab arrives without its title, and Firefox shows its address. Its
+    // placeholder is loaded once more to set it, and unloads itself again.
+    const tab = await browser.tabs.get(tabId).catch(() => null);
+    if (tab?.discarded && isGhostUrl(tab.url) && syncKeyByTab.get(tabId) === key) await browser.tabs.update(tabId, { url: tab.url }).catch(() => {});
   });
 });
 
