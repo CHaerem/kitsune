@@ -101,9 +101,9 @@ async function moveInWindow(tabs, tabId, beforeId) {
 // input stays, and so does a tab that cannot be opened there; no rule sends it back,
 // since you moved it; and you stay where you are (safemoves.js).
 //
-// The address is the page's own while it is loaded: the record follows a page when it
-// finishes loading or its title changes, and a web app changes its address without
-// either. A placeholder's own address says nothing, so then it is the record's.
+// The address is the page's own while it is loaded: the record follows a page once it
+// has finished loading, and a tab can be moved before that. A placeholder's own address
+// says nothing, so then it is the record's.
 async function moveToSpace(tabId, space) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === space || tab.pinned) return;

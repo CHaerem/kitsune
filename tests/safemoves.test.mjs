@@ -396,32 +396,33 @@ test("a new tab refused for any other reason: the original stays, with its recor
   x.kill();
 });
 
-// A web app changes its address by itself: Firefox reports only the address, and the
-// record follows when a page finishes loading or its title changes.
-function pushState(ff, id, url) {
+// A page still loading: Firefox reports the new address, and the record follows when the
+// page has finished. (A page that changes its own address finishes at once: Firefox
+// reports its new address and "complete" together, so the record has that one.)
+function stillLoading(ff, id, url) {
   const t = ff.tabs.get(id);
-  t.url = url;
-  ff.ext.b.tabs.onUpdated.fire(id, { url }, ff.snap(t));
+  Object.assign(t, { url, status: "loading" });
+  ff.ext.b.tabs.onUpdated.fire(id, { status: "loading", url }, ff.snap(t));
 }
 
-test("a move takes the page the tab shows, not an older address in the record", async () => {
+test("a move of a page still loading takes its new address, not the older one in the record", async () => {
   const ff = new FakeFirefox();
   const { w, tab } = aWindow(ff);
   const x = await alone(ff);
-  pushState(ff, tab.id, SITE + "/deeper");
+  stillLoading(ff, tab.id, SITE + "/deeper");
   await move(x, tab.id, B);
   assert.deepEqual(ff.list(w.id).filter(t => t.cookieStoreId === B).map(t => t.url), [SITE + "/deeper"]);
   x.kill();
 });
 
-test("moved from its placeholder, a tab takes the page it shows in the other window", async () => {
+test("moved from its placeholder, a page still loading in the other window takes its new address", async () => {
   const ff = new FakeFirefox();
   const { tab } = aWindow(ff);
   const second = ff.addWindow();
   const ghost = ff.addTab(second.id, { url: GHOST("ghost", "moved"), cookieStoreId: A, discarded: true }, { syncKey: "moved", syncRole: "ghost" });
   ff.addTab(second.id, { url: GHOST("ghost", "home"), cookieStoreId: A, discarded: true }, { syncKey: "home", syncRole: "ghost" });
   const x = await alone(ff);
-  pushState(ff, tab.id, SITE + "/deeper");
+  stillLoading(ff, tab.id, SITE + "/deeper");
   await move(x, ghost.id, B);
   assert.deepEqual(ff.list(second.id).filter(t => t.cookieStoreId === B).map(t => t.url), [SITE + "/deeper"]);
   x.kill();

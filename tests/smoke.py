@@ -1553,10 +1553,15 @@ def alone_safe_moves(m):
     where = registered_where("smoke-safe-selected")
     check("the selected tab can be moved, and you stay in your space", r["dropped"] and r["on"] == here and r["active"] == here and where["at"] == [there] and not where["selected"], f"{r} {where}")
 
-    # A web app changes its own address, which the record does not follow: a move takes the page you see.
+    # A page still loading has its new address, and the record follows when it has finished.
     open_in(m.pages + "/plain?smoke-safe-app", here)
     registered_where("smoke-safe-app")
-    in_page("smoke-safe-app", """history.pushState({}, "", "?smoke-safe-deeper"); return 1;""")
+    in_page("smoke-safe-app", """location.href = "/slow?smoke-safe-deeper"; return 1;""")
+
+    def going():
+        state = m.js(where_script, "smoke-safe-deeper")
+        return {**state, "done": state["at"] == [here]}
+    until(going)
     moved = sidebar_page(m, drop_on_space + """return await dropOnSpace(await tabWith("smoke-safe-deeper"), args[0]);""", there)
 
     def deeper():
@@ -1564,7 +1569,7 @@ def alone_safe_moves(m):
         return {**state, "done": state["at"] == [there]}
     r = until(deeper)
     left = m.js(where_script, "smoke-safe-app")
-    check("a tab moved takes the address it has now, not the one it loaded", moved is True and r["at"] == [there] and left["at"] == [], f"{moved} {r} {left}")
+    check("a page still loading, moved, takes its new address", moved is True and r["at"] == [there] and left["at"] == [], f"{moved} {r} {left}")
 
     # A space that is gone by the time of the move: nothing happens to the tab, selected or not.
     open_in("https://example.org/?smoke-safe-nowhere", here)
@@ -1577,6 +1582,60 @@ def alone_safe_moves(m):
           const t = await page.browser.tabs.get(id); return {active: t.active, loaded: !t.discarded};""")
         where = m.js(where_script, "smoke-safe-nowhere")
         check(f"a move to a space that is gone leaves the tab {'selected' if selected else 'where it is'}, loaded", r == {"active": selected, "loaded": True} and where["at"] == [here], f"{r} {where}")
+
+    # A row that is a placeholder: its page is loaded and selected in the other window.
+    open_in("https://example.org/?smoke-safe-away", here)
+    registered_where("smoke-safe-away")
+    away = sidebar_page(m, """const here = (await page.browser.windows.getCurrent()).id, all = (await page.browser.tabs.query({})).filter(t => t.url.includes("smoke-safe-away") || t.title.includes("smoke-safe-away"));
+      const windows = await page.browser.windows.getAll({windowTypes: ["normal"]}), other = windows.find(w => w.id !== here);
+      const keys = await Promise.all((await page.browser.tabs.query({windowId: other.id})).map(async t => [t.id, await page.browser.sessions.getTabValue(t.id, "syncKey")]));
+      const live = all[0], key = await page.browser.sessions.getTabValue(live.id, "syncKey");
+      return {here, other: other.id, ghost: keys.find(([, k]) => k === key)[0], live: live.id, key};""")
+    m.js(H + """const w = wins().find(x => x.gBrowser.tabs.some(t => key(x, t) === JSON.stringify(args[0]) && !url(t).includes("smoke-safe-away")));
+      w.focus(); await wait(300);
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => key(w, t) === JSON.stringify(args[0]));
+      for (let i = 0; i < 40 && !url(w.gBrowser.selectedTab).includes("smoke-safe-away"); i++) await wait(100);
+      main().focus(); await wait(300); return 1;""", away["key"])
+    r = sidebar_page(m, """const rep = (await page.browser.tabs.query({windowId: args[0]})), keys = await Promise.all(rep.map(t => page.browser.sessions.getTabValue(t.id, "syncKey")));
+      const row = rep[keys.indexOf(args[1])], real = (await page.browser.tabs.query({})).find(t => t.url.includes("smoke-safe-away"));
+      send({type: "moveToSpace", tabId: row.id, space: args[2]}); await wait(300);
+      await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "stats"})));
+      return {rowUnloaded: row.discarded || row.url.includes("ghost.html"), realElsewhere: real.windowId !== args[0], realSelected: real.active};""", away["here"], away["key"], there)
+    where = registered_where("smoke-safe-away")
+    selected_there = m.js(H + """const w = wins().find(x => x !== main()); return w.gBrowser.selectedTab.userContextId ? "firefox-container-" + w.gBrowser.selectedTab.userContextId : "firefox-default";""")
+    check("a placeholder moves, with its page selected in the other window: once, and that window stays in its space", r["rowUnloaded"] and r["realElsewhere"] and r["realSelected"] and where["at"] == [there] and set(where["copies"]) == {there} and selected_there == here, f"{r} {where} {selected_there}")
+
+    # Tabs Firefox brings back: not sent away by a rule, for they are not new.
+    set_rules([{"url": "smoke-safe-back", "space": here}])
+    open_in("https://example.org/?smoke-safe-back", there)  # a tab opened with an address goes by the rule, so to `here`
+    r = registered_where("smoke-safe-back")
+    check("a new tab goes by the rule", r["at"] == [here], str(r))
+    sidebar_page(m, drop_on_space + """return await dropOnSpace(await tabWith("smoke-safe-back"), args[0]);""", there)
+    r = registered_where("smoke-safe-back")
+    check("(moved by hand, it stays)", r["at"] == [there], str(r))
+    # Closed for good, then ⌘⇧T: Firefox's own undo, with the tab's own values.
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("smoke-safe-back")); w.gBrowser.removeTab(t); await wait(1500); return 1;""")
+    gone = m.js(where_script, "smoke-safe-back")
+    m.js(H + """main().SessionStore.undoCloseTab(main(), 0); await wait(3000); return 1;""")
+    r = registered_where("smoke-safe-back")
+    check("a tab brought back with ⌘⇧T is not sent away by a rule", gone["at"] == [] and r["at"] == [there], f"{gone} {r}")
+    # In a folder, closed while loaded, and selected again: its placeholder loads itself.
+    folder = sidebar_page(m, """send({type: "newFolder", space: args[0], name: "smoke-safe-folder"}); await wait(500);
+      const all = (await page.browser.storage.local.get("syncedTabs")).syncedTabs; return Object.entries(all).find(([, e]) => e.name === "smoke-safe-folder")?.[0];""", there)
+    sidebar_page(m, """const id = (await page.browser.tabs.query({})).find(t => t.url.includes("smoke-safe-back")).id;
+      send({type: "moveTab", tabId: id, before: null, folder: args[0]}); await wait(500); return 1;""", folder)
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("smoke-safe-back")); w.gBrowser.removeTab(t); await wait(1500); return 1;""")
+    unloaded = sidebar_page(m, """const all = (await page.browser.storage.local.get("syncedTabs")).syncedTabs, k = Object.keys(all).find(k => all[k].url?.includes("smoke-safe-back"));
+      const windowId = (await page.browser.windows.getCurrent()).id, tabs = await page.browser.tabs.query({windowId});
+      const keys = await Promise.all(tabs.map(t => page.browser.sessions.getTabValue(t.id, "syncKey")));
+      const t = tabs[keys.indexOf(k)]; return t ? {id: t.id, placeholder: t.url.includes("ghost.html")} : null;""")
+    r = sidebar_page(m, """await page.browser.tabs.update(args[0], {active: true}); for (let i = 0; i < 60; i++) { const t = await page.browser.tabs.get(args[0]); if (t.url.includes("smoke-safe-back")) break; await wait(100); }
+      await wait(600); const t = await page.browser.tabs.get(args[0]); return {at: t.cookieStoreId, url: t.url};""", unloaded["id"])
+    where = m.js(where_script, "smoke-safe-back")
+    check("a saved tab's placeholder that loads itself is not sent away by a rule", unloaded["placeholder"] and r["at"] == there and "smoke-safe-back" in r["url"] and where["at"] == [there], f"{unloaded} {r} {where}")
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(300); const id = (await page.browser.tabs.query({})).find(t => t.url.includes("smoke-safe-back")).id; send({type: "close", tabId: id}); await wait(500);
+      send({type: "space", space: args[1]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[1]; i++) await wait(100); return 1;""", folder, here)
+    set_rules([])
 
     # A page with unsaved input stays, unasked: first in the background, then selected.
     open_in(m.pages + "/unsaved?smoke-safe-input", here)
@@ -1665,6 +1724,29 @@ def alone_safe_moves(m):
         return {**state, "done": state["left"] == 0 and state["active"] not in (None, made) and state["on"] == state["active"]}
     r = until(fell_back)
     check("the space you are in removed: you are in another space, on one of its tabs, with only its tabs shown", r["done"] and r["hiddenHere"] == 0 and r["shownElsewhere"] == 0, str(r))
+    sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", here)
+
+    # The same from Firefox's settings page, as that page does it: it closes the tabs, then removes
+    # the container. There the selected tab is in no space, and stays selected.
+    made = sidebar_page(m, """return (await page.browser.contextualIdentities.create(page.JSON.parse(JSON.stringify({name: "smoke-gone-settings", color: "green", icon: "circle"})))).cookieStoreId;""")
+    open_in("https://example.org/?smoke-gone-settings-tab", made)
+    registered_where("smoke-gone-settings-tab")
+    r = sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100);
+      return spaces().find(s => s.active)?.id;""", made)
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.addTrustedTab("about:preferences#containers", {}); await wait(800);
+      const svc = w.ContextualIdentityService ?? ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs").ContextualIdentityService;
+      const id = Number(args[0].split("-").pop());
+      await svc.closeContainerTabs(id); svc.remove(id); await wait(600); return 1;""", made)
+
+    def left_settings():
+        state = sidebar_page(m, """const windowId = (await page.browser.windows.getCurrent()).id, active = spaces().find(s => s.active)?.id;
+          const [on] = await page.browser.tabs.query({active: true, windowId}), tabs = await page.browser.tabs.query({windowId, pinned: false});
+          return {active, on: on.url, left: (await page.browser.tabs.query({cookieStoreId: args[0]})).length, record: Object.values((await page.browser.storage.local.get("syncedTabs")).syncedTabs).filter(e => e.cookieStoreId === args[0]).length,
+                  hiddenHere: tabs.filter(t => t.cookieStoreId === active && t.hidden).length};""", made)
+        return {**state, "done": state["left"] == 0 and state["record"] == 0 and state["active"] not in (None, made)}
+    r = until(left_settings)
+    check("a space removed from Firefox's settings page: the page stays selected, and the window is in another space, its tabs shown", r["done"] and r["on"].startswith("about:preferences") and r["hiddenHere"] == 0, str(r))
+    m.js(H + """await removeWhere((w, t) => url(t).startsWith("about:preferences")); return 1;""")
     sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", here)
     no_problems(m, "after moves and a removed container")
 
