@@ -60,8 +60,9 @@ async function initList() {
 // real page's title and icon, unloads itself, and opens the real page when
 // you select it. They are created unpinned, so Sidebery puts each in its
 // container's space, and pinned together a moment later; a pinned tab keeps
-// its space (see PIN_SETTLE_MS).
-async function createEssentials(windowId, items) { // [{ entry, index }]
+// its space (see PIN_SETTLE_MS). In a new window `settle` waits for Sidebery's
+// sidebar there first (see fillWindow), so it is passed in.
+async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
   const tabs = [];
   for (const { entry, index } of items) {
     const tab = await browser.tabs.create({
@@ -70,20 +71,40 @@ async function createEssentials(windowId, items) { // [{ entry, index }]
     });
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
-    tabs.push(tab);
+    tabs.push({ tab, entry });
     await sleep(CREATE_GAP_MS);
   }
   if (!tabs.length) return;
-  await sleep(PIN_SETTLE_MS);
   try {
-    for (const tab of tabs) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
+    await settle(tabs);
+    await pinEssentialCopies(tabs);
   } finally {
-    setTimeout(() => tabs.forEach(t => busy.delete(t.id)), 1500);
+    setTimeout(() => tabs.forEach(({ tab }) => busy.delete(tab.id)), 1500);
+  }
+}
+
+// Sidebery gives a tab that existed before a window's sidebar was ready the
+// last active space, ignoring its container rules, and a pinned tab keeps its
+// space (mbnuqw/sidebery#2497). Its container rules are applied again when an
+// unpinned tab's address changes, so each copy loads its placeholder once
+// more, gets a moment to be moved to its own space, and is pinned only then.
+async function pinEssentialCopies(tabs) {
+  await reloadPlaceholders(tabs);
+  await sleep(RULE_SETTLE_MS);
+  for (const { tab } of tabs) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
+}
+
+// Load each copy's placeholder again (a new address, so Sidebery sees a change).
+let placedCount = 0;
+async function reloadPlaceholders(tabs) {
+  placedCount++;
+  for (const { tab, entry } of tabs) {
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", entry.key) + "&placed=" + placedCount }).catch(() => {});
   }
 }
 
 // Add any essentials a window is missing. Safe to run repeatedly.
-async function ensureWindow(windowId) {
+async function ensureWindow(windowId, settle) {
   const list = await getList();
   if (!list.length) return;
   const win = await browser.windows.get(windowId).catch(() => null);
@@ -114,7 +135,7 @@ async function ensureWindow(windowId) {
     if (!isWeb(entry.url)) continue;
     missing.push({ entry, index: index++ });
   }
-  await createEssentials(windowId, missing);
+  await createEssentials(windowId, missing, settle);
 }
 
 async function ensureAllWindows() {
