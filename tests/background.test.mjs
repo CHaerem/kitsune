@@ -1041,3 +1041,19 @@ test("a new tab dragged to the essentials stays a tab", async () => {
   assert.equal(ff.tabs.get(page.id).pinned, true, "a page does become one");
   x.kill();
 });
+
+test("a tab closed as its new window opens does not leave the window empty", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  const first = ff.addTab(w.id, { url: "about:newtab", active: true });
+  ff.hooks.getTabValue = async id => { if (id === first.id) throw new Error(`Invalid tab ID: ${id}`); };
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1500);
+  assert.ok(ff.urls(w.id).includes(GHOST("ghost", "a").replace("moz-extension://tidier/", "")), "the window still gets its tabs");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});

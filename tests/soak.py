@@ -803,6 +803,7 @@ INVARIANTS = LIB + r"""
     violations: out,
     names: Object.fromEntries(entries.map(([k, e]) => [k, (e.url || e.name || "").split(/[/?]/).pop()])),
     keys: entries.filter(([, e]) => !e.group).map(([k]) => k),
+    noContainer: entries.filter(([, e]) => e.cookieStoreId === "firefox-default").map(([k]) => k),
     savedKeys: entries.filter(([, e]) => e.saved).map(([k]) => k),
     essentials: keys,
     folders: entries.filter(([, e]) => e.own).map(([k]) => k),
@@ -829,6 +830,15 @@ PROC_INFO = LIB + r"""
   }, null, done, null, false));
   return {mb: Math.round(ext.reduce((s, c) => s + (c.memory || 0), 0) / 1048576), cpuS: ext.reduce((s, c) => s + (c.cpuTime || 0), 0) / 1e9,
           heap: Math.round(explicit / 1048576), ghostWindows};
+"""
+
+# For a report: which tabs are changing while Tidier is at work.
+WHAT_CHANGES = LIB + r"""
+  const look = () => new Map(normal().flatMap((w, wi) => [...w.gBrowser.tabs].map(t => [t, wi + " " + t.label + " " + (t.linkedPanel ? "loaded" : "") + (t.getAttribute("busy") ? " loading" : "")])));
+  const before = look();
+  await wait(3000);
+  const now = look();
+  return [...now].filter(([t, s]) => before.get(t) !== s).map(([t, s]) => before.get(t) + " -> " + s + " " + url(t).slice(-40)).slice(0, 8).join("; ") || "nothing";
 """
 
 CLOSE_TICKING = LIB + r"""
@@ -979,7 +989,7 @@ class Soak:
                 quiet_since = None
             last = now
             time.sleep(0.7)
-        self.violation("Tidier never goes quiet", f"{SETTLE_LIMIT_S} s", f"jobs at {last}")
+        self.violation("Tidier never goes quiet", f"{SETTLE_LIMIT_S} s", f"jobs at {last}, changing: {self.call(WHAT_CHANGES)}")
         return time.time() - t0, s
 
     def violation(self, kind, subject, detail=""):
@@ -1017,7 +1027,10 @@ class Soak:
         # What is gone without having been closed.
         if self.prev:
             for k in set(self.prev["keys"]) - set(r["keys"]) - self.closed:
-                self.violation("a synced tab is gone, and nothing closed it", self.prev["names"].get(k, k), k)
+                # With Sidebery, a tab without a container is Sidebery's to reopen in the active
+                # space, which it does by closing that tab; Tidier then closes it everywhere.
+                if self.args.alone or k not in self.prev["noContainer"]:
+                    self.violation("a synced tab is gone, and nothing closed it", self.prev["names"].get(k, k), k)
             for k in set(self.prev["essentials"]) - set(r["essentials"]) - self.unpinned:
                 self.violation("an essential is gone, and nothing unpinned it", k)
             for k in set(self.prev["folders"]) - set(r["folders"]) - self.deleted:
@@ -1060,7 +1073,13 @@ class Soak:
 
     def idle_check(self):
         self.call(CLOSE_TICKING)
-        time.sleep(12)  # the last of what the actions caused: a placeholder waits up to 10 s for its icon
+        # The last of what the actions caused: a placeholder waits up to 10 s for its icon, and
+        # the title of a tab that changed is shown on its ghosts up to a minute later.
+        time.sleep(12)
+        for _ in range(80):
+            if not self.ask({"type": "stats"})["sizes"]["refreshTimers"]:
+                break
+            time.sleep(1)
         idle = self.ask({"type": "idle", "ms": 15000})
         if idle.get("alarms"):
             print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)

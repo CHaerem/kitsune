@@ -966,10 +966,11 @@ async function adoptRestored(windowId) {
   const removed = [];
   for (const t of await browser.tabs.query({ windowId })) {
     if (syncKeyByTab.has(t.id)) continue;
+    // Refused for a tab closed since the query. That must not leave the window unfilled.
     const [key, role] = await Promise.all([
       browser.sessions.getTabValue(t.id, SYNC_KEY),
       browser.sessions.getTabValue(t.id, SYNC_ROLE),
-    ]);
+    ]).catch(() => []);
     if (!key || !role) continue;
     found = true;
     if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
