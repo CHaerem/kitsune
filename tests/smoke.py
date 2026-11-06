@@ -1198,6 +1198,9 @@ def move_over(m):
               pages: wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("group.html")).length)};""" % EXT_ID
     tabs_here = H + """return wins().map(w => w.gBrowser.tabs.filter(t => !t.pinned && role(w, t) && role(w, t) !== "copy").map(t => key(w, t)).sort()).sort();"""
     before, tabs0 = m.js(record), m.js(tabs_here)
+    keys_now = """return Object.fromEntries((await WebExtensionPolicy.getByID(args[0]).extension.shortcuts.allCommands()).map(c => [c.name, c.shortcut]));"""
+    keys0 = m.js(keys_now, EXT_ID)
+    check("with Sidebery, Tidier's only key is the one to copy an address", [k for k, v in keys0.items() if v] == ["copy-url"], str(keys0))
     report = extension_message(m, {"type": "settings:get"})["report"]
     check("the report before moving names the folders and their tabs", len(report["folders"]) == len(before["folders"]) and not report["alone"] and report["tabs"] == len(before["tabs"]), str(report))
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
@@ -1214,6 +1217,8 @@ def move_over(m):
     r = m.js(H + "await wait(1500); return wins().map(w => [...new Set(w.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && t.userContextId).map(t => t.userContextId))].length);")
     check("after moving over, each window shows one space", all(x == 1 for x in r), str(r))
     no_problems(m, "after moving over")
+    keys = m.js(keys_now, EXT_ID)
+    check("after moving over, Tidier's keys are given", keys["tab-1"] == "Ctrl+1" and keys["space-1"] == "MacCtrl+1" and keys["next-tab"] == "Ctrl+MacCtrl+Down", str(keys))
     # And back: Sidebery on first, and its folder pages return.
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       await (await AddonManager.getAddonByID("%s")).enable(); await wait(4000); return 1;""" % SIDEBERY_ID)
@@ -1221,6 +1226,7 @@ def move_over(m):
     m.js(H + "await wait(10000); return 1;")
     back = m.js(record)
     check("after moving back, every folder has its tabs and its pages", back["folders"] == before["folders"] and back["tabs"] == before["tabs"] and back["pages"] == before["pages"], f"{before} -> {back}")
+    check("after moving back, Sidebery has the keys again", m.js(keys_now, EXT_ID) == keys0, str(m.js(keys_now, EXT_ID)))
 
 
 # The windows whose essentials (pinned tabs) are not together by space, with

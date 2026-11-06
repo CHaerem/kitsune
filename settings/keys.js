@@ -1,7 +1,8 @@
 // The Keys section of the settings page, with Tidier alone: every command with its key,
 // changed by clicking it and pressing the new one. What may be chosen is decided in the
 // background (setCommandKey in keys-commands.js). Firefox's own page for this refuses
-// every key Firefox uses, ⌘1 and ⌘D among them; commands.update does not.
+// every key Firefox uses, even once you have cleared it, ⌘1 and ⌘D among them;
+// commands.update does not.
 
 // The key's name in a shortcut, found much as Firefox's own page finds it: the letter the
 // keyboard's layout gives, else the physical key, since ⌥ can make a letter into
@@ -30,6 +31,8 @@ const keyGroup = name => name.startsWith("space-") ? "Go to a space" : name.star
 
 async function drawKeys(focus) {
   const commands = await ask("keys");
+  $("keys-section").hidden = !commands; // no list without Tidier alone: then Sidebery has the keys
+  if (!commands) return;
   const lines = [];
   for (const c of commands) {
     const group = keyGroup(c.name), last = lines.at(-1);
@@ -80,16 +83,12 @@ function keyButton(c, note) {
   return key;
 }
 
-// A section only for Tidier alone: without it, Sidebery has the keys.
 let keysMac = false;
 async function startKeys() {
-  const [{ os }, { report }] = await Promise.all([browser.runtime.getPlatformInfo(), ask("get")]);
-  keysMac = os === "mac";
-  $("keys-section").hidden = !report.alone;
-  if (!report.alone) return;
+  keysMac = (await browser.runtime.getPlatformInfo()).os === "mac";
   $("keys-back").onclick = async () => { keyNotes.clear(); await ask("keysBack"); await drawKeys(); };
   await drawKeys();
-  // Changed on Firefox's own page meanwhile, and by the two functions above.
+  // Changed on Firefox's own page meanwhile, and by what is above.
   browser.commands.onChanged?.addListener(() => { if (!document.querySelector(".key.recording")) drawKeys(); });
 }
 if (globalThis.document) startKeys();

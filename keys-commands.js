@@ -6,7 +6,7 @@
 // pulls its real tab in (tabsync.js).
 
 // The tabs as drawn: the space's essentials, each folder's tabs, today's tabs. A closed
-// folder draws only its selected tab, if it has it, and viewFor gives this window's.
+// folder draws only the selected tab, if it holds it.
 function tabsAsDrawn(view) {
   return [...view.essentials, ...view.folders.flatMap(f => f.collapsed ? f.tabs.filter(t => t.active) : f.tabs), ...view.tabs];
 }
@@ -133,6 +133,7 @@ const FIREFOX_KEYS = {
 
 // What the settings page lists: every command with a key to give, and that key now.
 async function commandKeys() {
+  if (!tidierAlone) return null;
   const { os } = await browser.runtime.getPlatformInfo();
   const have = await browser.commands.getAll();
   return COMMANDS.filter(c => c.key).map(({ name, label, key }) => {

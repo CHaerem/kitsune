@@ -324,17 +324,17 @@ test("the settings page's list says what each key is now and whether it was chan
 
 // The settings page's own part, on its real file, with what it needs from the page faked.
 function settingsKeys(alone) {
-  const called = [], section = { hidden: true, replaceChildren() {} };
+  const called = [], parts = {};
   const ctx = vm.createContext({
-    ask: async what => { called.push(what); return what === "get" ? { report: { alone } } : []; },
-    $: () => section, el: () => ({}), browser: { runtime: { getPlatformInfo: async () => ({ os: "mac" }) }, commands: {} }, document: { querySelector() {} },
+    ask: async what => { called.push(what); return alone ? [] : null; },
+    $: id => (parts[id] ??= { hidden: true, replaceChildren() {} }), el: () => ({}), browser: { runtime: { getPlatformInfo: async () => ({ os: "mac" }) }, commands: {} }, document: { querySelector() {} },
   });
   vm.runInContext(readFileSync(new URL("../settings/keys.js", import.meta.url), "utf8"), ctx);
-  return { ctx, called, section };
+  return { ctx, called, parts };
 }
 
 test("a key pressed on the settings page reads as Firefox writes it", () => {
-  const { shortcutOf } = settingsKeys(true).ctx;
+  const { shortcutOf } = settingsKeys(false).ctx;
   const press = o => ({ which: 0, code: "", key: "", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...o });
   const digit = press({ which: 49, code: "Digit1", key: "1", metaKey: true });
   assert.equal(shortcutOf(digit, true), "Command+1");
@@ -352,8 +352,11 @@ test("a key pressed on the settings page reads as Firefox writes it", () => {
 test("without Tidier alone the settings page has no Keys section", async () => {
   const off = settingsKeys(false);
   await new Promise(r => setTimeout(r, 10));
-  assert.equal(off.section.hidden, true);
-  assert.ok(!off.called.includes("keys"), "and asks for nothing");
+  assert.equal(off.parts["keys-section"].hidden, true);
+  assert.deepEqual(off.called, ["keys"], "and asks for nothing more");
+  const on = settingsKeys(true);
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(on.parts["keys-section"].hidden, false);
 });
 
 test("Firefox's lists are written the way keys are compared", async () => {
