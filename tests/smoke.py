@@ -1566,6 +1566,9 @@ def alone_touches(m):
       out.shown = signed();
       const moving = slow.querySelector(".slow-load")?.getAnimations()[0];
       out.animation = moving && {state: moving.playState, name: moving.animationName, iterations: moving.effect.getComputedTiming().iterations};
+      // A page that takes longer than the breathing lasts: moved to the end of it, not waited for.
+      moving?.finish();
+      out.settled = {state: moving?.playState, opacity: page.getComputedStyle(img).opacity, stillSigned: signed()};
       // Seen in the moment the sign goes: on a busy machine the fade may be over by the first look below.
       const fading = new Promise(done => { const o = new page.MutationObserver(() => { if (!signed()) { o.disconnect(); done(img.getAnimations().map(x => x.effect.getTiming().duration)); } }); o.observe(img, {attributes: true}); });
       await until(() => !signed(), 6000);
@@ -1603,6 +1606,7 @@ def alone_touches(m):
     a = r.get("animation") or {}
     check("the sign breathes, and comes to rest by itself", a.get("name") == "slow-load" and a.get("state") == "running" and 0 < (a.get("iterations") or 0) < 100, str(r))
     fade = r.get("brightening") or [0]
+    check("a page that never finishes leaves the sign still and dimmed, with nothing running", r.get("settled") == {"state": "finished", "opacity": "0.45", "stillSigned": True}, str(r))
     check("the sign goes softly when the page is there", r.get("gone") is True and r.get("fading") == [300] and fade == sorted(fade) and fade[-1] == 1, str(r))
     check("a load does not replace the icon", r.get("sameIcon") is True, str(r))
     check("a row drawn again during a load keeps its sign where it was", r.get("redrawn") == {"icon": True, "sameStart": True} and r.get("dripEnded") is True, str(r))
