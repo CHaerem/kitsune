@@ -158,11 +158,13 @@ browser.windows.onCreated.addListener(win => {
 
 // --- A tab without a container is opened again in the space you are in -----
 // ⌘T opens a new tab page, a link from another app (Slack, Mail) an address, both
-// without a container. A new tab page is opened again at once; a link once its
-// address is known (Firefox creates the tab on about:blank first), within
-// REOPEN_WINDOW_MS. Pages a container cannot have (about:, extensions' own pages,
-// files) stay as they are. A link's first request has then gone out without a
-// container: it carries no login, since those are all in containers.
+// without a container. A new tab page is opened again at once. A link is stopped
+// before its first request leaves, with the permission for that (isolation.js).
+// Without it, a link is opened again once its address is known (Firefox creates the
+// tab on about:blank first), within REOPEN_WINDOW_MS, and its first request has then
+// gone out without a container: it carries no login, since those are all in
+// containers. Pages a container cannot have (about:, extensions' own pages, files)
+// stay as they are.
 const REOPEN_WINDOW_MS = 3000;
 const NEW_TAB_PAGES = new Set(["about:newtab", "about:home", "about:blank"]);
 const newTabs = new Map(); // tabId -> when it was created, for tabs that may need reopening
@@ -177,6 +179,7 @@ browser.tabs.onCreated.addListener(tab => {
 });
 browser.tabs.onUpdated.addListener((tabId, change) => {
   if (!change.url) return;
+  if (isWeb(change.url) && requestsGuarded()) { firstPage.delete(tabId); newTabs.delete(tabId); return; } // its request was already looked at, and a redirect does not count
   if (isWeb(change.url) && firstPage.delete(tabId)) serial(() => byRule(tabId, change.url));
   else if (newTabs.has(tabId) && (isWeb(change.url) || change.url === "about:newtab" || change.url === "about:home")) serial(() => intoSpace(tabId));
 }, { properties: ["url"] });
@@ -184,9 +187,10 @@ browser.tabs.onRemoved.addListener(tabId => { newTabs.delete(tabId); firstPage.d
 
 // --- Rules: an address always opens in a given space (Arc's Air Traffic Control) ---
 // A rule is text to find in the address, or /a regular expression/. It is looked at
-// for a tab's first page only: a sign-in passing through the address on its way
-// back to the page you were on must not move your tab (with Sidebery's rules, which
-// look at every address a tab loads, it did).
+// for a tab's first page only (and, with the permission, when you type or choose an
+// address: isolation.js): a sign-in passing through the address on its way back to
+// the page you were on must not move your tab (with Sidebery's rules, which look at
+// every address a tab loads, it did).
 const rulesList = storedValue("rules", () => []); // [{ url, space }]
 const firstPage = new Set(); // tabs that have not shown a web page yet
 

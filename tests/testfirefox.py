@@ -31,6 +31,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import zipfile
 
 from marionette import FIREFOX, Marionette
@@ -73,15 +74,37 @@ TEST_PREFS = {
 PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+    "/see-cookie": "<title>?</title><script>document.title = 'cookie=' + document.cookie;</script>what a page can read",
+    "/go": "<title>Go</title><script>location.replace(new URLSearchParams(location.search).get('to'));</script>a page sending you on, as a link does",
 }
 
 
 def serve_pages():
+    # Every request is recorded with what came with it, for the check that matters most:
+    # what the server sees is what really left the browser (alone_isolation). Also what
+    # comes through it as a proxy, whose request line has the whole address.
+    #   /r/anything       a plain page
+    #   /set-cookie?v=x   sets a login cookie
+    #   /redirect?to=...  a redirect, the way a sign-in passes through an address
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            body = PAGES.get(self.path.split("?")[0])
+            url = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(url.query)
+            self.server.requests.append({"path": self.path, "cookie": self.headers.get("Cookie", ""), "agent": self.headers.get("User-Agent", ""), "proxied": bool(url.scheme)})
+            if url.path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", query["to"][0])
+                self.end_headers()
+                return
+            body = PAGES.get(url.path)
+            if url.path.startswith("/r/"):
+                body = "<title>Recorded</title>a recorded page"
+            elif url.path == "/set-cookie":
+                body = "<title>Cookie set</title>a login"
             self.send_response(200 if body else 404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            if url.path == "/set-cookie":
+                self.send_header("Set-Cookie", f"login={query['v'][0]}; Path=/; Max-Age=86400; SameSite=Lax")
             self.end_headers()
             self.wfile.write((body or "").encode())
 
@@ -89,6 +112,7 @@ def serve_pages():
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
@@ -135,11 +159,13 @@ class TestFirefox:
         self.alone = alone  # Tidier alone (PLAN.md): no Sidebery, and the setting declared in managed storage
         self.dir = self.proc = self.m = self.pages = None
 
-    def restart(self):
+    def restart(self, url=None):
         """Quit the test Firefox and start it again with the same profile, so
         the session is restored. Only when Tidier is installed for real
         (m.can_restart): a temporary add-on is gone after a restart. The same
-        Marionette object is kept, connected to the new Firefox."""
+        Marionette object is kept, connected to the new Firefox. With `url`,
+        Firefox is started by that link, as when another app opens one with
+        Firefox closed."""
         self.m.quit()
         try:
             self.proc.wait(30)
@@ -147,7 +173,7 @@ class TestFirefox:
             self.proc.kill()
             self.proc.wait(10)
         m = self.m
-        self._start()
+        self._start(url)
         m.__dict__.update(self.m.__dict__)
         self.m = m
         self.m.js(USE_TEST_MANAGED_STORAGE, f"{self.dir}/managed")
@@ -205,7 +231,7 @@ class TestFirefox:
         self.fake_prs = f"{self.dir}/fake-prs.json"
         json.dump({}, open(self.fake_prs, "w"))
 
-    def _start(self):
+    def _start(self, url=None):
         with socket.socket() as probe:
             if probe.connect_ex(("127.0.0.1", self.port)) == 0:
                 # Two runs on one port get in each other's way, and only show as
@@ -214,7 +240,7 @@ class TestFirefox:
         env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "TIDIER_FAKE_PRS": self.fake_prs}
         log = f"{self.dir}/firefox.log"
         with open(log, "ab") as out:
-            self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
+            self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir, *([url] if url else [])],
                                          env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
@@ -226,6 +252,7 @@ class TestFirefox:
         if not self.pages:
             self.pages = serve_pages()
         self.m.pages = f"http://127.0.0.1:{self.pages.server_address[1]}"
+        self.m.page_requests = self.pages.requests
         self.m.update_xpi = self._newer_xpi
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
@@ -258,7 +285,9 @@ class TestFirefox:
         m.restart = self.restart
         time.sleep(8)  # Tidier starts: essentials, tab sync, live folders
         if self.alone:
-            m.js(AFTER_TIDIER_ALONE, EXT_ID)
+            # TIDIER_ALONE_ALL_PERMISSIONS: every group with what you would give, the optional
+            # access for isolation included (alone_isolation otherwise gives it itself).
+            m.js(AFTER_TIDIER_ALONE, EXT_ID, bool(os.environ.get("TIDIER_ALONE_ALL_PERMISSIONS")))
         else:
             # Tidier's sidebar opens by itself when installed, as a sidebar does; here Sidebery stays the sidebar.
             m.js('await Services.wm.getMostRecentWindow("navigator:browser").SidebarController.show("_3c078156-979c-498b-8990-85f7987dd929_-sidebar-action"); return 1;')
@@ -320,10 +349,10 @@ SEED_TABS_ALONE = """
 # What you click once in the sidebar, the same way (permissions.request needs a
 # click, which a test has no way to make), and Tidier's sidebar shown.
 AFTER_TIDIER_ALONE = """
-  const [id] = args;
+  const [id, everything] = args;
   const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
   const ext = WebExtensionPolicy.getByID(id).extension;
-  await ExtensionPermissions.add(id, {permissions: ["tabHide"], origins: []}, ext);
+  await ExtensionPermissions.add(id, everything ? {permissions: ["tabHide", "webRequest", "webRequestBlocking"], origins: ["<all_urls>"]} : {permissions: ["tabHide"], origins: []}, ext);
   const w = Services.wm.getMostRecentWindow("navigator:browser");
   await w.SidebarController.show("_6844a953-9931-4334-9ff6-257c246485cb_-sidebar-action");
   return 1;

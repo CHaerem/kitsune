@@ -154,9 +154,10 @@ export class FakeFirefox {
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
     b.permissions = { onAdded: ev(), onRemoved: ev() };
     b.sidebarAction = { toggle: async () => {} };
+    addIsolationApis(ff, b);
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };
-    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {} });
+    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {}, localStorage: ff.pageStorage });
     const files = JSON.parse(readFileSync(new URL("manifest.json", REPO), "utf8")).background.scripts;
     for (const f of files) {
       const src = readFileSync(new URL(f, REPO), "utf8");
@@ -174,3 +175,51 @@ export class FakeFirefox {
   }
 }
 export const GHOST = (k, key) => `moz-extension://tidier/ghost.html?kind=${k}&key=${encodeURIComponent(key)}`;
+
+// What isolation.js uses, for tests/isolation.test.mjs. As in Firefox, an API behind an
+// optional permission is not there at all until the permission is: ff.granted, or
+// ff.grant() while running. The page's localStorage survives a boot, as it does.
+function addIsolationApis(ff, b) {
+  ff.granted ??= new Set();
+  ff.cookies ??= []; // [{ storeId, domain, name, value, path, ... }]
+  const store = (ff.pageStorageData ??= {});
+  ff.pageStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+  const apis = () => {
+    if (ff.granted.has("webRequest")) b.webRequest ??= { onBeforeRequest: ev(), onBeforeSendHeaders: ev() };
+    if (ff.granted.has("proxy")) b.proxy ??= { onRequest: ev() };
+    if (ff.granted.has("browsingData")) b.browsingData ??= { remove: async (o, kinds) => { ff.log.push(["browsingData", o, kinds]); ff.cookies = ff.cookies.filter(c => c.storeId !== o.cookieStoreId); } };
+  };
+  apis();
+  ff.grant = (...names) => { names.forEach(n => ff.granted.add(n)); apis(); b.permissions.onAdded.fire({ permissions: names, origins: [] }); };
+  b.permissions.contains = async ({ permissions = [], origins = [] }) => [...permissions, ...origins].every(p => ff.granted.has(p));
+  // Answers a top-level request as Firefox would ask it: undefined if nothing listens.
+  ff.request = async ({ tabId, url, requestId = "r" + (ff.nextRequest = (ff.nextRequest || 0) + 1), originUrl, type = "main_frame", method = "GET" }) => {
+    const t = ff.tabs.get(tabId);
+    const listener = b.webRequest?.onBeforeRequest.ls[0];
+    if (!listener || !listener.filter.types.includes(type)) return undefined;
+    ff.requests = (ff.requests || 0) + 1;
+    return listener.f({ tabId, url, requestId, originUrl, type, method, incognito: !!t?.incognito, cookieStoreId: t?.cookieStoreId });
+  };
+  b.cookies = {
+    getAll: async ({ storeId, url, domain }) => ff.cookies.filter(c => c.storeId === storeId && (
+      domain ? (c.domain.replace(/^\./, "") === domain || c.domain.endsWith("." + domain))
+        : url ? (new URL(url).hostname === c.domain.replace(/^\./, "") || new URL(url).hostname.endsWith("." + c.domain.replace(/^\./, ""))) : true)),
+    remove: async ({ storeId, name, url }) => { ff.cookies = ff.cookies.filter(c => !(c.storeId === storeId && c.name === name && url.includes(c.domain.replace(/^\./, "")))); },
+    set: async ({ storeId, name, value, url, domain }) => { ff.cookies.push({ storeId, name, value, domain: domain ?? new URL(url).hostname, path: "/", secure: url.startsWith("https"), hostOnly: !domain, firstPartyDomain: "" }); },
+  };
+  ff.looks ??= {}; // container -> { name, color, icon }
+  const identity = id => ({ cookieStoreId: id, name: id, color: "blue", colorCode: "#000", icon: "circle", iconUrl: "x.svg", ...ff.looks[id] });
+  const ci = b.contextualIdentities;
+  ci.query = async () => { if (ff.containersOff) throw new Error("Contextual identities are currently disabled"); return [...ff.containers].filter(c => c !== "firefox-default").map(identity); };
+  ci.create = async ({ name, color, icon }) => {
+    if (ff.refuseLooks?.includes(color)) throw new Error(`Invalid color name ${color}`);
+    ff.containerCount = Math.max(ff.containerCount || 0, ...[...ff.containers].map(c => Number(c.split("-").pop()) || 0)) + 1;
+    const id = `firefox-container-${ff.containerCount}`;
+    ff.containers.add(id);
+    ff.looks[id] = { name, color, icon };
+    ci.onCreated.fire({ contextualIdentity: identity(id) });
+    return identity(id);
+  };
+  ci.update = async (id, changes) => { Object.assign((ff.looks[id] ??= {}), changes); ci.onUpdated.fire({ contextualIdentity: identity(id) }); return identity(id); };
+  ci.remove = async id => { const old = identity(id); ff.containers.delete(id); ci.onRemoved.fire({ contextualIdentity: old }); return old; };
+}

@@ -1464,6 +1464,322 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+# --- Isolation: nothing goes out in the wrong container ------------------------------
+# The check that matters most. The server records each request and its Cookie header, so
+# this is what really left the browser, not what Tidier thinks it did.
+GIVE_PERMISSIONS = """const [id, permissions, origins] = args;
+  const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
+  await ExtensionPermissions.add(id, {permissions, origins}, WebExtensionPolicy.getByID(id).extension);
+  await new Promise(r => ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs").setTimeout(r, 800));
+  return 1;"""
+
+ISOLATION_JS = H + """
+  const system = Services.scriptSecurityManager.getSystemPrincipal();
+  const typed = (t, u) => t.linkedBrowser.loadURI(Services.io.newURI(u), {triggeringPrincipal: system});  // no page asked: as the address bar
+  const until = async (f, ms = 8000) => { for (let i = 0; i < ms / 100 && !f(); i++) await wait(100); return f(); };
+  const inTab = (ctx, u) => main().gBrowser.addTrustedTab(u, {userContextId: ctx, inBackground: true});
+  const containersOf = part => wins().flatMap(w => w.gBrowser.tabs.filter(t => url(t).includes(part)).map(t => t.userContextId));
+  const closeAll = async part => { for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (url(t).includes(part) || String(t.label).includes(part)) w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(2500); };
+"""
+
+
+def seen(m, part):
+    return [r for r in m.page_requests if part in r["path"]]
+
+
+def visit(m, ctx, address, wait_for=None):
+    """Open `address` in container `ctx`, and wait for it to have loaded."""
+    m.js(ISOLATION_JS + """const [ctx, u] = args; const t = inTab(ctx, u); await until(() => url(t) === u, 8000); await wait(300); return 1;""", ctx, address)
+
+
+def alone_isolation(m):
+    base = m.pages
+    # Tidier alone stays on one space while this runs; the tabs made here are hidden or not, but they load either way.
+    press(m, "1", CTRL)
+    time.sleep(1)
+    space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
+    other = 2 if space != 2 else 3
+    visit(m, space, f"{base}/set-cookie?v=here")
+    visit(m, other, f"{base}/set-cookie?v=there")
+    here, there = "login=here", "login=there"
+    m.js("""const [id] = args; const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
+      await ExtensionPermissions.remove(id, {permissions: ["webRequest", "webRequestBlocking"], origins: ["<all_urls>"]}, WebExtensionPolicy.getByID(id).extension);
+      await new Promise(r => ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs").setTimeout(r, 800)); return 1;""", EXT_ID)
+    visit(m, space, f"{base}/r/baseline-here")
+    check("a cookie set in a space is sent there", [r["cookie"] for r in seen(m, "baseline-here")] == [here], str(seen(m, "baseline-here")))
+    visit(m, other, f"{base}/r/baseline-there")
+    check("and that space's cookie in another", [r["cookie"] for r in seen(m, "baseline-there")] == [there], str(seen(m, "baseline-there")))
+
+    r = sidebar_page(m, """await wait(300); return {line: !doc.querySelector(".ask-line").hidden, words: doc.querySelector(".ask-line button").textContent};""")
+    check("without the permission, one line in the sidebar asks for it", r["line"] and "wrong space" in r["words"], str(r))
+    r = ext_page(m, "/settings/settings.html", """await wait(800); return !doc.getElementById("allow-isolation").hidden;""")
+    check("and the settings page can ask for it", r is True, str(r))
+
+    # Without the permission: this is what the permission is for, and shows the checks below can fail.
+    r = m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); await until(() => containersOf("old-path").some(c => c), 8000); await wait(500); return containersOf("old-path");""", f"{base}/r/old-path")
+    check("without the permission, a link's first request goes out with no login, and the tab then lands in the space", any(not x["cookie"] for x in seen(m, "old-path")) and r and all(r), f"{r} {seen(m, 'old-path')}")
+
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["webRequest", "webRequestBlocking"], ["<all_urls>"])
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "rule-there", "space": f"firefox-container-{other}"}]})
+    r = sidebar_page(m, """await wait(500); return doc.querySelector(".ask-line").hidden;""")
+    check("given, the line is gone", r is True, str(r))
+
+    def only(part, cookie, what):
+        got = seen(m, part)
+        check(what, len(got) >= 1 and all(x["cookie"] == cookie for x in got), f"{part}: {got}")
+
+    # A rule, from a tab in another space, the way you type an address.
+    r = m.js(ISOLATION_JS + """const t = inTab(args[1], "about:blank"); await wait(400); typed(t, args[0]); await until(() => containersOf("rule-there-typed").length, 8000); await wait(500); return containersOf("rule-there-typed");""", f"{base}/r/rule-there-typed", space)
+    only("rule-there-typed", there, "by a rule: the server saw only the rule's space's cookie, from the first request on")
+    check("by a rule: the tab is in the rule's space, once", r == [other], str(r))
+
+    # A link from another app, with no container.
+    r = m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); await until(() => containersOf("rule-there-link").length, 8000); await wait(500); return containersOf("rule-there-link");""", f"{base}/r/rule-there-link")
+    only("rule-there-link", there, "a link with no container, by a rule: the same")
+    check("a link with no container, by a rule: it is in the rule's space, once", r == [other], str(r))
+    r = m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); await until(() => containersOf("no-rule-link").length, 8000); await wait(500); return containersOf("no-rule-link");""", f"{base}/r/no-rule-link")
+    only("no-rule-link", here, "a link with no container: every request carries the active space's cookie, never none")
+    check("a link with no container: it is in the active space, once", r == [space], str(r))
+
+    # A new tab: ⌘T, then an address.
+    r = m.js(ISOLATION_JS + """const w = main(); const t = w.gBrowser.addTrustedTab("about:newtab"); w.gBrowser.selectedTab = t; await wait(1500);
+      const s = w.gBrowser.selectedTab, ctx = s.userContextId; typed(s, args[0]); await until(() => containersOf("new-tab-typed").length, 8000); await wait(500); return {ctx, got: containersOf("new-tab-typed")};""", f"{base}/r/new-tab-typed")
+    only("new-tab-typed", here, "a new tab, then an address: the same")
+    check("a new tab is in the active space", r["ctx"] == space and r["got"] == [space], str(r))
+
+    # What does not count: a link followed inside a page, and a redirect under way.
+    # (Encoded: the rule is text to find in the address, and must not match the page before it.)
+    link = f"{base}/go?to={base}/r/rule%2Dthere-by-link"
+    r = m.js(ISOLATION_JS + """const t = inTab(args[2], args[1]); await until(() => url(t) === args[1], 8000); await wait(300); typed(t, args[0]);
+      await until(() => containersOf("rule-there-by-link").length, 8000); await wait(500); return containersOf("rule-there-by-link");""", link, f"{base}/r/start-a", space)
+    only("rule-there-by-link", here, "a link followed inside a page stays in the space, with its cookie")
+    check("a link followed inside a page does not move the tab", r == [space], str(r))
+    hop = f"{base}/redirect?to={base}/r/rule%2Dthere-by-redirect"
+    r = m.js(ISOLATION_JS + """const t = inTab(args[2], args[1]); await until(() => url(t) === args[1], 8000); await wait(300); typed(t, args[0]);
+      await until(() => containersOf("rule-there-by-redirect").length, 8000); await wait(800); return containersOf("rule-there-by-redirect");""", hop, f"{base}/r/start-b", space)
+    only("rule-there-by-redirect", here, "a redirect under way stays in the space, with its cookie")
+    check("a redirect under way does not move the tab", r == [space], str(r))
+
+    # What a page can read.
+    r = m.js(ISOLATION_JS + """const [u, a, b] = args; const one = inTab(a, u), two = inTab(b, u); await until(() => /cookie=/.test(one.label) && /cookie=/.test(two.label), 8000);
+      return [one.label, two.label];""", f"{base}/see-cookie", space, other)
+    check("what a page can read of its cookies is its own space's", r == ["cookie=login=here", "cookie=login=there"], str(r))
+    extension_message(m, {"type": "settings:rules", "rules": []})
+
+    # A space's user agent and proxy.
+    third = next(c for c in (1, 2, 3) if c not in (space, other))
+    r = extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "userAgent": "Smoke agent"})
+    time.sleep(1)
+    visit(m, third, f"{base}/r/agent-own")
+    visit(m, space, f"{base}/r/agent-other")
+    own, others = seen(m, "agent-own"), seen(m, "agent-other")
+    check("a space's user agent reaches the server", [x["agent"] for x in own] == ["Smoke agent"], str(own))
+    check("other spaces' requests are untouched", others and "Smoke agent" not in others[0]["agent"] and "Firefox" in others[0]["agent"], str(others))
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["proxy"], ["<all_urls>"])
+    server_port = base.rsplit(":", 1)[1]
+    r = extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "proxy": {"type": "http", "host": "127.0.0.1", "port": server_port}})
+    check("a proxy is taken as given", r and r.get("proxy", {}).get("port") == int(server_port), str(r))
+    time.sleep(1)
+    m.js(ISOLATION_JS + """inTab(args[0], "http://proxied.invalid/r/through-proxy"); inTab(args[1], "http://proxied.invalid/r/past-proxy"); await wait(3000); return 1;""", third, space)
+    got = seen(m, "through-proxy")
+    check("a space's proxy carries its requests", got and all(x["proxied"] for x in got), str(got))
+    check("other spaces' requests do not go through it", not seen(m, "past-proxy"), str(seen(m, "past-proxy")))
+    # A proxy that does not answer: Firefox then goes directly, whatever an extension asks
+    # (network.proxy.failover_direct, README). Here so that a change shows. The test's own
+    # server is on this machine, which Firefox otherwise never sends through a proxy.
+    extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "proxy": {"type": "http", "host": "127.0.0.1", "port": 1}})
+    time.sleep(1)
+    direct = m.js(ISOLATION_JS + """Services.prefs.setBoolPref("network.proxy.allow_hijacking_localhost", true); inTab(args[0], args[1]); await wait(3000);
+      Services.prefs.clearUserPref("network.proxy.allow_hijacking_localhost"); return Services.prefs.getBoolPref("network.proxy.failover_direct", null);""", third, f"{base}/r/dead-proxy")
+    print(f"INFO  with a proxy that does not answer, Firefox {'went directly' if seen(m, 'dead-proxy') else 'loaded nothing'} (network.proxy.failover_direct: {direct})", flush=True)
+    r = extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}"})
+    time.sleep(1)
+    visit(m, third, f"{base}/r/agent-unset")
+    check("unset again, a space's requests are as they were", "Smoke agent" not in seen(m, "agent-unset")[0]["agent"] and r == {}, str(r))
+
+    # Signing out: one site in one space, and everything in a space.
+    tab_ids = sidebar_page(m, """return 1;""")
+    r = m.js(ISOLATION_JS + """const w = main(), {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const t = w.gBrowser.tabs.find(x => url(x).includes("baseline-here")); return ExtensionParent.apiManager.global.tabTracker.getId(t);""")
+    extension_message(m, {"type": "isolation:clearCookies", "tabId": r, "windowId": None})
+    visit(m, space, f"{base}/r/after-clear")
+    visit(m, other, f"{base}/r/after-clear-other")
+    check("clearing a site's cookies in a space takes them there", [x["cookie"] for x in seen(m, "after-clear") if "other" not in x["path"]] == [""], str(seen(m, "after-clear")))
+    check("and leaves another space's alone", [x["cookie"] for x in seen(m, "after-clear-other")] == [there], str(seen(m, "after-clear-other")))
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["browsingData"], [])
+    extension_message(m, {"type": "isolation:signOut", "id": f"firefox-container-{other}"})
+    time.sleep(1)
+    visit(m, other, f"{base}/r/signed-out")
+    check("signing out of a space takes its logins", [x["cookie"] for x in seen(m, "signed-out")] == [""], str(seen(m, "signed-out")))
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
+
+    # New, edited and deleted, with clicks on the real settings page.
+    r = ext_page(m, "/settings/settings.html", """
+      await wait(800);
+      const cards = () => [...doc.querySelectorAll("#spaces .space-card")];
+      const before = cards().length;
+      doc.getElementById("new-space").click();
+      await wait(1000);
+      const card = cards().at(-1), id = card.dataset.space;
+      const out = {before, after: cards().length, focus: doc.activeElement === card.querySelector("input"), name: card.querySelector("input").value};
+      const name = card.querySelector("input");
+      name.value = "Smoke space";
+      name.dispatchEvent(new page.Event("change", {bubbles: true}));
+      await wait(500);
+      const now = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
+      now().querySelector(".swatch[data-color=red], .swatch[data-color=orange]").click();
+      await wait(600);
+      now().querySelector(".icon-choice[data-icon=tree]").click();
+      await wait(600);
+      const c = await page.browser.contextualIdentities.get(id);
+      out.saved = {name: c.name, color: c.color, icon: c.icon};
+      out.shown = {swatch: now().querySelector(".swatch.chosen")?.dataset.color, icon: now().querySelector(".icon-choice.chosen")?.dataset.icon};
+      out.id = id;
+      return out;""")
+    check("New space on the settings page makes one, ready to name, with a look of its own", r.get("after") == r.get("before", 0) + 1 and r.get("focus") and r.get("name") == "New space", str(r))
+    check("its name, colour and icon are changed there", r["saved"]["name"] == "Smoke space" and r["saved"]["color"] in ("red", "orange") and r["saved"]["icon"] == "tree" and r["shown"] == {"swatch": r["saved"]["color"], "icon": "tree"}, str(r))
+    new_id = r["id"]
+    r = sidebar_page(m, """
+      const dot = doc.querySelector(`#spaces .space[data-space="${args[0]}"]`);
+      if (!dot) return {dot: false};
+      const color = dot.style.getPropertyValue("--color"), tint0 = getComputedStyle(doc.documentElement).backgroundColor;
+      dot.click();
+      await wait(1200);
+      const tint1 = getComputedStyle(doc.documentElement).backgroundColor;
+      return {dot: true, color, tint0, tint1, name: doc.getElementById("space-name").textContent};""", new_id)
+    check("the bar has the new space, in its colour, and its name", r.get("dot") and r.get("color") and r.get("name") == "Smoke space", str(r))
+    check("the window's tint in the sidebar follows a new space with no line in tidier.css", r.get("tint0") != r.get("tint1"), str(r))
+    time.sleep(1)
+    r = ext_page(m, "/settings/settings.html", """
+      const id = args[0], now = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
+      now().querySelector(".delete").click();
+      await wait(300);
+      const question = now().querySelector(".question").textContent;
+      now().querySelector(".danger + button").click();
+      await wait(300);
+      const kept = !!now() && !now().querySelector(".question");
+      now().querySelector(".delete").click();
+      await wait(300);
+      now().querySelector(".danger").click();
+      await wait(2500);
+      const left = (await page.browser.contextualIdentities.query({})).some(c => c.cookieStoreId === id);
+      return {question, kept, left, card: !!now()};""", new_id)
+    check("deleting a space asks, naming what goes, and Keep keeps it", "all its logins" in r.get("question", "") and r.get("kept"), str(r))
+    check("and then it is gone", r.get("left") is False and r.get("card") is False, str(r))
+    press(m, "1", CTRL)
+    time.sleep(1.5)
+    r = m.js(H + """return {selected: main().gBrowser.selectedTab.userContextId, stray: wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId > 4).map(t => t.userContextId))};""")
+    check("you are not left in it, and no tab of it is", r["selected"] == space and not r["stray"], str(r))
+
+    # A copy in another space, and a folder moved to one.
+    visit(m, space, f"{base}/r/copy-me")
+    visit(m, space, f"{base}/r/in-folder")
+    visit(m, space, f"{base}/unsaved")
+    time.sleep(2.5)  # registered as tabs of the record
+    ids = m.js(ISOLATION_JS + """const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs"), id = t => ExtensionParent.apiManager.global.tabTracker.getId(t);
+      const of = part => id(main().gBrowser.tabs.find(x => url(x).includes(part))); return {copy: of("copy-me"), folder: of("in-folder"), unsaved: of("/unsaved")};""")
+    copies = extension_message(m, {"type": "isolation:copy", "tabIds": [ids["copy"]], "space": f"firefox-container-{other}", "windowId": None})
+    time.sleep(1.5)
+    r = m.js(ISOLATION_JS + """return containersOf("copy-me").sort();""")
+    check("a copy in another space leaves the original", copies == 1 and r == sorted([space, other]), f"{copies} {r}")
+    r = sidebar_page(m, """
+      send({type: "newFolder", space: "firefox-container-" + args[0], name: "Going over"});
+      await wait(1000);
+      send({type: "moveTab", tabId: args[1], folder: [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".head .title").textContent === "Going over").dataset.key, before: null});
+      send({type: "moveTab", tabId: args[2], folder: [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".head .title").textContent === "Going over").dataset.key, before: null});
+      await wait(1500);
+      return [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".head .title").textContent === "Going over").dataset.key;""", space, ids["folder"], ids["unsaved"])
+    key = r
+    moved = extension_message(m, {"type": "isolation:moveFolder", "key": key, "space": f"firefox-container-{other}", "windowId": None})
+    time.sleep(1.5)
+    r = m.js(ISOLATION_JS + """const all = (await storage(args[0], ["syncedTabs"])).syncedTabs, folder = args[1];
+      const inFolder = Object.entries(all).filter(([k, e]) => e.parentKey === folder);
+      return {folder: all[folder].cookieStoreId, inFolder: inFolder.map(([k, e]) => [new URL(e.url).pathname, e.cookieStoreId]), unsaved: containersOf("/unsaved"), ghost: inFolder.map(([k]) => wins().flatMap(w => w.gBrowser.tabs.filter(t => value(w, t, "syncKey") === k).map(t => [t.userContextId, url(t).includes("ghost.html") || !t.linkedPanel])))};""", EXT_ID, key)
+    check("a folder moved to another space goes there, its tab with it, unloaded", moved == {"moved": 1, "stayed": 1} and r["folder"] == f"firefox-container-{other}" and [x[1] for x in r["inFolder"]] == [f"firefox-container-{other}"] and r["ghost"][0] == [[other, True]], f"{moved} {r}")
+    check("a page holding unsaved input stays, where it was", r["unsaved"] == [space], str(r))
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
+    extension_message(m, {"type": "flush"})
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", key)
+
+    # The same from the folder's menu, and a tab dropped on the bar for a new space.
+    r = sidebar_page(m, """
+      send({type: "newFolder", space: spaces().find(s => s.active).id, name: "By menu"});
+      await wait(1000);
+      const head = () => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "By menu");
+      const box = head().getBoundingClientRect();
+      head().dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5}));
+      await wait(200);
+      const items = [...doc.querySelectorAll("#menu .item")];
+      const out = {labels: items.map(i => i.textContent)};
+      const item = items.find(i => i.textContent.startsWith("Move to space"));
+      item.click();
+      await wait(100);
+      // A list in place, where the menu can do that.
+      const inner = doc.getElementById("menu").hidden ? [] : [...doc.querySelectorAll("#menu .item:not(.back)")];
+      if (inner.length) inner[0].click();
+      await wait(1500);
+      out.left = !head();
+      return out;""")
+    check("a folder's menu moves it to another space", r.get("left") is True and sum(x.startswith("Move to space") for x in r["labels"]) >= 1, str(r))
+    before = m.js(H + """const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs"); return c.getPublicIdentities().length;""")
+    visit(m, space, f"{base}/r/dropped")
+    time.sleep(2.5)
+    r = sidebar_page(m, """
+      const row = plainTabs().find(x => x.title === "Recorded" || x.querySelector(".title").textContent === "Recorded");
+      const spot = doc.querySelector(".new-space");
+      const out = {row: !!row, hiddenBefore: spot.hidden};
+      if (!row) return out;
+      const box = row.getBoundingClientRect(), data = new page.DataTransfer();
+      const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 1, dataTransfer: data};
+      row.dispatchEvent(new page.DragEvent("dragstart", at));
+      out.shownInDrag = !spot.hidden;
+      spot.dispatchEvent(new page.DragEvent("dragover", at));
+      spot.dispatchEvent(new page.DragEvent("drop", at));
+      row.dispatchEvent(new page.DragEvent("dragend", at));
+      out.hiddenAfter = spot.hidden;
+      await wait(2500);
+      return out;""")
+    check("while a tab is dragged there is a place on the bar for a new space, and only then", r.get("hiddenBefore") is True and r.get("shownInDrag") is True and r.get("hiddenAfter") is True, str(r))
+    r = m.js(ISOLATION_JS + """const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs");
+      return {count: c.getPublicIdentities().length, where: containersOf("/r/dropped"), newest: Math.max(...c.getPublicIdentities().map(i => i.userContextId))};""")
+    check("a tab dropped there is in a new space of its own, and you stay", r["count"] == before + 1 and r["where"] == [r["newest"]], f"{before} {r}")
+    m.js(ISOLATION_JS + """await closeAll("/r/dropped"); const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs"); c.remove(args[0]); await wait(1000); return 1;""", r["newest"])
+
+    # A container removed while Tidier runs stays removed; one that vanishes while Tidier is off comes back.
+    made = m.js(H + """const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs");
+      const one = c.create("Removed by hand", "tree", "red"), two = c.create("Comes back", "cart", "purple"); await wait(1000);
+      return [one.userContextId, two.userContextId];""")
+    gone_id, back_id = [f"firefox-container-{x}" for x in made]
+    sidebar_page(m, """send({type: "newFolder", space: args[0], name: "Mine"}); send({type: "newFolder", space: args[1], name: "Theirs"}); await wait(800); return 1;""", gone_id, back_id)
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "vanished-rule", "space": back_id}]})
+    extension_message(m, {"type": "flush"})
+    m.js(H + """const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs");
+      c.remove(args[0]); await wait(1000); return 1;""", made[0])
+    extension_message(m, {"type": "flush"})
+    # Firefox's own file lost, seen by a Tidier that was not running to see it.
+    r = m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
+      const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs");
+      const addon = await AddonManager.getAddonByID(args[0]);
+      await addon.disable(); await wait(1000);
+      c.remove(args[1]); await wait(500);
+      await addon.enable(); await wait(8000);
+      const names = c.getPublicIdentities().map(i => c.getUserContextLabel(i.userContextId));
+      const data = await storage(args[0], ["rules", "syncedTabs"]);
+      return {names, rule: data.rules[0], folder: Object.values(data.syncedTabs).filter(e => e.own && (e.name === "Theirs" || e.name === "Mine")).map(e => [e.name, e.cookieStoreId])};""", EXT_ID, made[1])
+    check("a container vanished while Tidier was not looking comes back, with its name", "Comes back" in r["names"], str(r))
+    check("what pointed at it follows it", r["rule"]["space"] != back_id and r["folder"] == [["Theirs", r["rule"]["space"]]], str(r))
+    check("one removed while Tidier ran stays removed", "Removed by hand" not in r["names"], str(r))
+    r = ext_page(m, "/settings/settings.html", """await wait(800); return doc.getElementById("notices").textContent;""")
+    check("Tidier says so", "Comes back had gone from Firefox" in str(r), str(r))
+    extension_message(m, {"type": "settings:rules", "rules": []})
+    extension_message(m, {"type": "isolation:seen"})
+    m.js(H + """const {ContextualIdentityService: c} = ChromeUtils.importESModule("moz-src:///toolkit/components/contextualidentity/ContextualIdentityService.sys.mjs");
+      for (const i of c.getPublicIdentities()) if (c.getUserContextLabel(i.userContextId) === "Comes back") c.remove(i.userContextId);
+      await wait(1000); return 1;""")
+    press(m, "1", CTRL)
+    time.sleep(1)
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1620,6 +1936,31 @@ def alone_end(m):
     no_problems(m, "with Tidier alone")
 
 
+def alone_isolation_start(m):
+    # Firefox closed, and a link from another app starts it: the request is held for
+    # Tidier's listener, which comes back while its background page loads.
+    if not m.can_restart:
+        print("SKIP  alone_isolation_start (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
+        return
+    base = m.pages
+    press(m, "1", CTRL)
+    time.sleep(1)
+    space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["webRequest", "webRequestBlocking"], ["<all_urls>"])
+    visit(m, space, f"{base}/set-cookie?v=at-start")
+    m.js(ISOLATION_JS + """await closeAll("/set-cookie"); return 1;""")
+    extension_message(m, {"type": "flush"})
+    time.sleep(1)
+    m.restart(f"{base}/r/link-at-start")
+    time.sleep(12)
+    got = seen(m, "link-at-start")
+    r = m.js(ISOLATION_JS + """return containersOf("link-at-start");""")
+    check("a link that starts Firefox goes out in a space, from its first request", got and all(x["cookie"] == "login=at-start" for x in got), str(got))
+    check("and its tab is there, in a space", r == [space], str(r))
+    m.js(ISOLATION_JS + """await closeAll("/r/"); return 1;""")
+    no_problems(m, "after a start by a link")
+
+
 # Each window's tabs and space, and the folders.
 SNAP_ALONE = H + """
   const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
@@ -1632,7 +1973,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_isolation, alone_idle, alone_update, alone_end, alone_restart, alone_isolation_start)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

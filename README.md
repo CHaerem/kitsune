@@ -309,13 +309,72 @@ changes how new tabs are handled.
 `contextualIdentities` (the spaces), `nativeMessaging` (the pull request search and
 the daily copy), `alarms` (their timing, and archiving), `clipboardWrite` (⌘⇧C), and
 `menus` and `menus.overrideContext` (the context menu in Tidier's sidebar).
-`tabHide` is optional, asked for when Tidier alone is turned on: a permission
-added to the required ones makes Firefox hold every later update until it is
-approved, with only a badge to show it (a unit test stops that).
+The rest are optional, with Tidier alone only, each asked for by your click when it
+is first of use: a permission added to the required ones makes Firefox hold every
+later update until it is approved, with only a badge to show it (a unit test stops
+that). Everything works without them, as it says here:
 
-No host permissions and no data collection. The only network use is icons: a
+- `tabHide`, when Tidier alone is turned on: other spaces' tabs hidden.
+- `webRequest`, `webRequestBlocking` and access to all websites, in the same click:
+  a page stopped before it loads in the wrong space (below, Isolation). Tidier reads no
+  page and keeps no record of where you go; all it looks at is the address of a tab's
+  next page and the container it is in. Clearing a site's cookies is offered once this
+  is given, since the cookies API shows nothing without it.
+- `proxy` (with access to all websites), when a space is first given a proxy, and
+  `browsingData`, when you first sign out of everything in a space.
+
+No required host permissions and no data collection. The only network use is icons: a
 placeholder with no saved icon tries the site's `/favicon.ico`, and Tidier's sidebar
-loads tabs' icons from where the site has them.
+loads tabs' icons from where the site has them. No IP lookups, nothing else by itself.
+
+## Isolation
+
+With Tidier alone every space is a Firefox container, so its logins, cookies and what
+sites store are its own, and it should be something nobody has to think about. `alone_isolation` checks
+it with a local server that records each request and its cookies, so what is checked is
+what really left the browser.
+
+Guaranteed, with the permission for it (`isolation.js`, `whereItBelongs`):
+
+- **No web page is loaded outside a space.** A request with no container is stopped
+  before it leaves and opened in the active space, also a tab restored or opened by
+  something else, and a link that starts Firefox itself. An essential with no container
+  becomes one of the active space.
+- **A rule's address opens in its space, from the first request on,** on a tab's first
+  page and for an address you type or choose. A cookie set in one space is not sent in
+  another.
+- **A tab does not move because of where it passes through.** A link followed inside a
+  page and a redirect do not count: with Sidebery's rules, which look at everything a
+  tab loads, a sign-in passing through an address took your tab with it. A reload,
+  Firefox restoring a tab, a popup, and a tab you moved by hand stay too.
+
+Not guaranteed:
+
+- **Without the permission,** a link's first request goes out with no container, and
+  the tab is then opened again in its space. It carries no login, since those are all
+  in spaces, but the site does see it.
+- A page you reach by a link inside another stays in that space, with that space's
+  login, whatever a rule says about its address: that is the point of the line above.
+- **A space's logins are separate; Firefox's other data is not.** History, bookmarks,
+  saved passwords and downloads are per Firefox. Private windows are left alone, and
+  `about:` pages, extensions' pages and files have no space. Firefox's own requests
+  (its updates, say) are in no space.
+- **A proxy is not anonymity.** It carries a space's requests, with the names looked up
+  there too for SOCKS; a proxy that does not answer means no page rather than going
+  directly (checked). Addresses on this machine never go through one: that is Firefox's
+  rule. Sites can still recognise you by the login, or by the browser itself.
+- **A user agent is only the header.** A page's scripts can still read the real one.
+  Only the spaces that set one are changed, but while any does, each request of every
+  space passes Tidier for an instant.
+- **Signing out takes** cookies, IndexedDB and local storage, for one space. Firefox
+  cannot clear a cache or service workers for one container, so those stay; they hold
+  no login, but pages already open show it only when they next load.
+- **A container that vanishes comes back without its logins** (`Refresh Firefox`, a lost
+  `containers.json`): Tidier remembers each space's name, colour and icon, makes it again
+  at a start and says so. It cannot tell that from one removed while Tidier wasn't
+  running. One removed while it runs stays removed, and its essentials, folders and rules
+  are gone with it.
+- A placeholder fetching a site's icon does so in its own container, as a page would.
 
 ## Files
 
@@ -331,6 +390,9 @@ loads tabs' icons from where the site has them.
 - `archive.js` – archiving of unused tabs.
 - `shortcuts.js` – ⌘⇧C, copy the address.
 - `spaces.js` – spaces: hiding, switching, new tabs and links, rules.
+- `isolation.js`, `settings/spaces.js`, `sidebar/isolation.js` – nothing goes out in the wrong container; a
+  space's proxy and user agent; signing out; new, edited and deleted spaces; a vanished
+  container brought back; a copy of a tab, and a folder, to another space.
 - `ownfolders.js` – Tidier's own folders, moving tabs, the tab's context menu.
 - `sidebar-view.js`, `sidebar/` – Tidier's own sidebar.
 - `copies.js` – the daily copy of Tidier's data, and taking one in.

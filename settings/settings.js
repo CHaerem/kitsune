@@ -25,14 +25,6 @@ async function refresh() {
   $("version").textContent = "Version " + state.version;
 }
 
-function drawSpaces() {
-  $("spaces").replaceChildren(...state.spaces.map(s => {
-    const name = el("input", { type: "text", value: s.name });
-    name.onchange = () => ask("space", { id: s.id, changes: { name: name.value } });
-    return el("div", { className: "line" }, el("span", { textContent: "●", style: `color:${s.color}` }), name);
-  }));
-}
-
 function drawRules() {
   const save = () => ask("rules", { rules: [...$("rules").children].map(l => ({ url: l.querySelector("input").value.trim(), space: l.querySelector("select").value })) });
   $("rules").replaceChildren(...state.rules.map(rule => ruleLine(rule, save)));
@@ -54,9 +46,10 @@ $("add-rule").onclick = () => {
 $("archive-hours").onchange = e => ask("archiveHours", { hours: e.target.value });
 $("allow-hiding").onclick = () => browser.permissions.request({ permissions: ["tabHide"] }).then(refresh);
 $("move-over").onclick = async () => {
-  // Asked here: the permission needs your click. Without it, tabs are simply not hidden yet.
+  // Asked here, in one go: the permissions need your click. Without them, tabs are simply
+  // not hidden yet, and a page's first request can go out in the wrong container.
   browser.sidebarAction.open(); // also needs your click: Firefox brings it back after Tidier starts again
-  await browser.permissions.request({ permissions: ["tabHide"] }).catch(() => {});
+  await browser.permissions.request({ permissions: ["tabHide", "webRequest", "webRequestBlocking"], origins: ["<all_urls>"] }).catch(() => {});
   await ask("moveOver");
 };
 $("do-move-back").onclick = () => ask("moveBack");

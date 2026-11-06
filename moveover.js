@@ -75,6 +75,7 @@ async function moveBack() {
   await flushWrites();
   await browser.tabs.show((await browser.tabs.query({ hidden: true })).map(t => t.id)).catch(() => {});
   await resetSpaceKeys(); // Sidebery's again
+  stopIsolation();
   await browser.storage.local.set({ tidierAlone: false });
   browser.runtime.reload();
 }

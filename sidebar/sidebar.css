@@ -18,6 +18,9 @@
 /* The window's own colour (userChrome.css's --zen-frame); a sidebar cannot be
  * transparent, so your tidier.css (dotfiles) sets it per space. */
 html { --frame: light-dark(#ececf0, #1f1f23); background: var(--frame); transition: background-color .25s ease; }
+/* With Tidier alone the tint comes from the space's own colour, so a new space has one
+ * too, and tidier.css is no longer needed (a rule of its own there still wins). */
+html.alone { --frame: light-dark(color-mix(in srgb, var(--accent) 12%, #ececf0), color-mix(in srgb, var(--accent) 9%, #1f1f23)); }
 html, body { height: 100%; margin: 0; }
 body {
   display: flex; flex-direction: column;
@@ -115,3 +118,12 @@ body {
 .drop-after { box-shadow: 0 2px 0 0 var(--accent); }
 .drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
 .cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+
+/* Isolation: the line asking for the permission, and the place to drop a tab for a new
+ * space, which floats over the end of the bar so that nothing moves while you drag. */
+.ask-line { display: flex; gap: 4px; }
+.ask-line button:first-child { flex: 1; }
+.notice .ask-no { width: 24px; flex: none; padding: 0; background: none; color: var(--muted); }
+.notice .ask-no:hover { background: var(--hover); }
+.new-space { position: fixed; right: 8px; bottom: 6px; width: 26px; height: 26px; padding: 0; border: 1px dashed var(--muted); border-radius: 50%; background: var(--frame); color: var(--muted); font: inherit; }
+.new-space[hidden] { display: none; }

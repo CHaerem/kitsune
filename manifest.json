@@ -28,7 +28,12 @@
     "menus.overrideContext"
   ],
   "optional_permissions": [
-    "tabHide"
+    "tabHide",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>",
+    "proxy",
+    "browsingData"
   ],
   "options_ui": {
     "page": "settings/settings.html",
@@ -55,6 +60,7 @@
       "ownfolders.js",
       "copies.js",
       "moveover.js",
+      "isolation.js",
       "sidebar-view.js",
       "archive.js",
       "shortcuts.js"

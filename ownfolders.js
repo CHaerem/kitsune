@@ -105,7 +105,7 @@ async function moveToSpace(tabId, space) {
   const key = syncKeyByTab.get(tabId);
   const url = key ? all[key]?.url : tab.url;
   if (!isWeb(url)) return;
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: false });
+  await globalThis.openUnruled({ windowId: tab.windowId, cookieStoreId: space, url, active: false }); // no rule may send it back
   if (key) await closeEverywhere(key, { dismiss: false });
   else await browser.tabs.remove(tabId).catch(() => {});
 }

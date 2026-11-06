@@ -135,6 +135,7 @@ Changed by saying so. All of them can be reversed.
 - Essentials stay pinned tabs, so other spaces' essentials stay in ⌃Tab; Firefox
   cannot hide a pinned tab.
 - A link opened from a tab in a folder is an ordinary tab, as in Arc (Tidier alone).
-- A link's first request may go out without a container before it is opened in its
-  space. It carries no login, and needs no access to all websites, so README's "no
-  host permissions" stays.
+- No page's first request goes out in the wrong container: it is stopped before it
+  leaves, as Sidebery does. That takes access to all websites, so it is optional, asked
+  for in the same click as hiding tabs. Without it a link's first request goes out with
+  no container before it is opened in its space, as before: it carries no login.

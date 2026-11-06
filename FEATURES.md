@@ -47,7 +47,12 @@ there is a test.
 | Switch with ⌃1/2/3 | Z A S | Done | Tidier alone, checked; Sidebery's shortcuts in the daily browser |
 | Switch by swiping sideways on the trackpad | Z A | Later | tried with Sidebery and left out: vertical swipes switched space by mistake; to try again without it |
 | Colour per space, for the whole window | Z A | Done | userChrome.css and tidier.css |
-| Name, icon and colour of a space editable in Tidier | Z A | Partly | the name, on the settings page; else Firefox's container settings |
+| New, edited and deleted spaces in Tidier: name, icon and colour | Z A S | Done | Tidier alone, checked, on the settings page; dropping a tab on the bar makes a new one; Firefox's container settings aren't needed |
+| Nothing goes out in the wrong container: the first request is stopped | S | Done | Tidier alone, checked with a server recording cookies; needs the optional access to all websites |
+| A space's own proxy and user agent | S | Done | Tidier alone, checked; on the settings page, under More. No address bar button, and no IP lookups |
+| Clear a site's cookies in one space, or a whole space's logins | S | Done | Tidier alone, checked; signing out asks first, since it can't be undone |
+| A vanished container comes back | | Done | Tidier alone, checked; with its name, colour and icon, and everything that pointed at it |
+| A folder to another space, and a copy of a tab | S | Done | Tidier alone, checked; unsaved input stays behind and says so |
 | New tabs and links from other apps open in the active space | A S | Done | Tidier alone, checked; Sidebery in the daily browser |
 | Rules: an address always opens in a given space ("Air Traffic Control") | A S | Done | Tidier alone, checked, on the settings page, and imported from Sidebery's export; Sidebery's rules in the daily browser |
 | Open a link in another space (context menu) | A | Planned | |
