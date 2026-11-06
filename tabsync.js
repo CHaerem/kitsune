@@ -384,7 +384,7 @@ async function register(tabId) {
   for (const w of await normalWindows()) {
     if (w.id === tab.windowId) continue;
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
-    await createRep(w.id, key, entry, parentId);
+    await createRep(w.id, key, entry, parentId, tidierAlone ? indexBeforeSameNeighbour(tabs, tab.id, w.id) : undefined);
   }
 }
 

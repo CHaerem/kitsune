@@ -52,6 +52,7 @@
       "folders.js",
       "livefolders.js",
       "spaces.js",
+      "newtabs.js",
       "ownfolders.js",
       "copies.js",
       "moveover.js",

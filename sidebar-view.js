@@ -40,7 +40,7 @@ async function viewFor(windowId) {
 
   // A tab without a container (a new tab) belongs to the space you are in.
   const all = await getSynced();
-  const here = tabs.filter(t => !t.pinned && (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER));
+  const here = tabs.filter(t => !t.pinned && (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER) && !reopensSoon(t));
   const folders = tidierAlone
     ? foldersOf(all, space).map(f => ({ key: f.key, name: f.name, collapsed: !!f.collapsed, live: f.live || null, tabs: [] }))
     : here.filter(t => isSideberyGroup(t.url)).map(t => ({ key: syncKeyByTab.get(t.id), id: t.id, name: folderName(t.url), tabs: [] }));
@@ -84,7 +84,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
-      await browser.tabs.create({ windowId, cookieStoreId: msg.space });
+      await browser.tabs.create({ windowId, cookieStoreId: msg.space, index: tidierAlone ? await topOfToday(windowId, msg.space) : undefined });
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (tidierAlone) {
