@@ -13,6 +13,7 @@
 // - New tab / navigating a new tab to a page -> ghosts appear in other windows.
 // - Closing a tab (live or ghost)            -> closed in every window.
 //   Closing a folder copy only affects its own window.
+// - Moving a tab into or out of a folder     -> the same in the other windows.
 // - Selecting a ghost, or focusing a window
 //   whose selected tab is a ghost            -> the live tab is pulled in.
 // - Closing a window                         -> its live tabs are taken over
@@ -404,6 +405,100 @@ async function pull(ghostId) {
     setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling = false; }, 600);
   }
 }
+
+// A tab you moved into or out of a folder in one window is moved into or out
+// of it in the other windows (the parent is read with treeParent, common.js).
+// Sidebery takes a parent from another extension only when a tab is created,
+// so the ghost there is replaced by a new one under its new parent, and then
+// put next to the same synced tab of its space. A live tab, a folder copy or
+// the selected tab there keeps its place. (Only the parent is copied, not the
+// order: Sidebery gives a tab another extension moves the space of the tab it
+// lands on, so moving tabs around in other windows could change spaces.)
+async function applyMoves(windowId, ids) {
+  const all = await getSynced();
+  const here = (await browser.tabs.query({ windowId, pinned: false })).sort((a, b) => a.index - b.index);
+  const hereById = new Map(here.map(t => [t.id, t]));
+  const synced = t => all[syncKeyByTab.get(t.id)] ? syncKeyByTab.get(t.id) : null;
+  const others = (await normalWindows()).filter(w => w.id !== windowId);
+  const replaced = new Set(), gone = [];
+  let changed = false;
+  for (const t of here.filter(t => ids.has(t.id) && synced(t))) {
+    const key = synced(t), entry = all[key];
+    const opener = treeParent(t, hereById);
+    const parentKey = (opener && synced(opener)) || null;
+    if ((entry.parentKey || null) === parentKey && !replaced.has(parentKey)) continue;
+    entry.parentKey = parentKey; changed = true;
+    // The synced tabs of its space before and after it, nearest first.
+    const space = here.filter(x => x.cookieStoreId === t.cookieStoreId);
+    const before = space.slice(0, space.indexOf(t)).reverse().map(synced).filter(Boolean);
+    const after = space.slice(space.indexOf(t) + 1).map(synced).filter(Boolean);
+    for (const w of others) {
+      const tabs = await browser.tabs.query({ windowId: w.id });
+      const reps = repMap(tabs);
+      const rep = tabs.find(x => x.id === reps.get(key));
+      const parentRep = parentKey ? reps.get(parentKey) : undefined;
+      if (!rep || rep.active || syncRoleByTab.get(rep.id) !== "ghost" || (parentKey && parentRep === undefined)) continue;
+      syncBusy.add(rep.id); forget(rep.id);
+      await browser.tabs.remove(rep.id);
+      const ghost = await createRep(w.id, key, entry, parentRep, rep.index);
+      replaced.add(key); gone.push(key);
+      await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
+      await placeNextTo(w.id, ghost.id, before, after);
+    }
+  }
+  if (changed) saveSynced(all);
+  if (gone.length) await forgetClosedPlaceholders("ghost", gone);
+}
+
+// Move a tab after the nearest of `before` (keys) its window has, else before
+// the nearest of `after`, but only where Sidebery keeps it in its space: it
+// gives a tab another extension moves the space of the tab at the new index.
+async function placeNextTo(windowId, tabId, before, after) {
+  const tabs = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
+  const tab = tabs.find(x => x.id === tabId);
+  if (!tab) return;
+  const reps = repMap(tabs), at = k => tabs.find(x => x.id === reps.get(k) && x.id !== tabId);
+  const prev = before.map(at).find(Boolean), next = prev ? undefined : after.map(at).find(Boolean);
+  let index = prev ? prev.index + 1 : next?.index;
+  if (index === undefined) return;
+  if (tab.index < index) index--;
+  if (index === tab.index || tabs[index]?.cookieStoreId !== tab.cookieStoreId) return;
+  await browser.tabs.move(tabId, { windowId, index }).catch(() => {});
+}
+
+// A tab moved above its stored parent is out of that folder, whatever its
+// opener says once folders first has moved the folder above it again (see
+// treeParent, common.js).
+async function leftParentSoon(tabId, windowId) {
+  const entry = (await getSynced())[syncKeyByTab.get(tabId)];
+  if (!entry?.parentKey) return;
+  const tabs = await browser.tabs.query({ windowId }).catch(() => []);
+  const tab = tabs.find(t => t.id === tabId), parent = tabs.find(t => t.id === repMap(tabs).get(entry.parentKey));
+  if (tab && parent && parent.index > tab.index) staleOpener.set(tab.id, parent.id);
+}
+
+// Sidebery sets the new parent just after it moves a tab, and moves a branch
+// one tab at a time, so the moves are taken together a moment later. Only
+// moves you make count: in the window you are using, of tabs that are not
+// new (Sidebery places a new tab, and a new window's tabs, itself).
+const movedTabs = new Map(); // windowId -> tab IDs you moved there
+const moveTimers = new Map();
+const createdAt = new Map(); // tabId -> when it was created
+browser.tabs.onCreated.addListener(tab => createdAt.set(tab.id, Date.now()));
+browser.tabs.onRemoved.addListener(tabId => createdAt.delete(tabId));
+browser.tabs.onMoved.addListener((tabId, { windowId }) => {
+  if (!started || pulling || windowId !== focusedWindowId || syncBusy.has(tabId) || !syncKeyByTab.has(tabId)) return;
+  if (Date.now() - (createdAt.get(tabId) || 0) < NEW_TAB_QUIET_MS) return;
+  leftParentSoon(tabId, windowId);
+  if (!movedTabs.has(windowId)) movedTabs.set(windowId, new Set());
+  movedTabs.get(windowId).add(tabId);
+  clearTimeout(moveTimers.get(windowId));
+  moveTimers.set(windowId, setTimeout(() => {
+    const ids = movedTabs.get(windowId) || new Set();
+    movedTabs.delete(windowId); moveTimers.delete(windowId);
+    serial(() => applyMoves(windowId, ids));
+  }, MOVE_SETTLE_MS));
+});
 
 // --- Events ---------------------------------------------------------------
 

@@ -8,7 +8,7 @@
 // that, see sortLikeReference). When a run does not start with its folder
 // branches, they are moved to its start in one tabs.move call, in their own
 // order, so each branch stays together and the run stays contiguous. The tree
-// is read from openerTabId, which Sidebery keeps equal to the parent.
+// is read with treeParent (common.js).
 //
 // It runs after Kitsune has started and whenever a tab is created, moved,
 // attached or becomes a folder page. Our own moves are not answered.
@@ -22,7 +22,7 @@ async function foldersFirst(windowId) {
   const byId = new Map(tabs.map(t => [t.id, t]));
   const rootOf = tab => {
     let root = tab;
-    for (let p = byId.get(root.openerTabId), seen = new Set([tab.id]); p && !seen.has(p.id) && p.cookieStoreId === tab.cookieStoreId; p = byId.get(p.openerTabId)) {
+    for (let p = treeParent(root, byId), seen = new Set([tab.id]); p && !seen.has(p.id) && p.cookieStoreId === tab.cookieStoreId; p = treeParent(p, byId)) {
       seen.add(p.id);
       root = p;
     }
@@ -46,7 +46,14 @@ async function foldersFirstAll() {
   for (const w of await normalWindows()) await foldersFirst(w.id);
 }
 
-const foldersFirstSoon = windowId => { if (started) serial(() => foldersFirst(windowId)); };
+// A moment later: Sidebery sets a moved tab's new parent just after the move,
+// and a tab dragged out of a folder must not still count as in it.
+const foldersTimers = new Map();
+const foldersFirstSoon = windowId => {
+  if (!started) return;
+  clearTimeout(foldersTimers.get(windowId));
+  foldersTimers.set(windowId, setTimeout(() => { foldersTimers.delete(windowId); serial(() => foldersFirst(windowId)); }, FOLDERS_SETTLE_MS));
+};
 browser.tabs.onMoved.addListener((tabId, info) => { if (!ownFolderMoves.has(tabId)) foldersFirstSoon(info.windowId); });
 browser.tabs.onAttached.addListener((tabId, info) => foldersFirstSoon(info.newWindowId));
 browser.tabs.onCreated.addListener(tab => { if (!tab.pinned) foldersFirstSoon(tab.windowId); });

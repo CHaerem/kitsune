@@ -72,6 +72,17 @@ const PIN_SETTLE_MS = 800;
 const SIDEBAR_WAIT_MS = 4000;
 const RULE_SETTLE_MS = 600;
 const PROBE_MS = 500;
+// A tab moved into or out of a folder is moved the same way in the other
+// windows MOVE_SETTLE_MS later, once Sidebery has set its new parent (see
+// applyMoves); the new ghost there gets NEW_TAB_SETTLE_MS for Sidebery to
+// place it before it is put in its place. Moves of a tab in its first
+// NEW_TAB_QUIET_MS are Sidebery placing it.
+const MOVE_SETTLE_MS = 800;
+const NEW_TAB_SETTLE_MS = 500;
+const NEW_TAB_QUIET_MS = 5000;
+// Folders are moved first in their space FOLDERS_SETTLE_MS after a change
+// (see folders.js), before the move is copied to the other windows.
+const FOLDERS_SETTLE_MS = 400;
 
 // The focused window, tracked here so tab events need no round trip to ask.
 // Registered before the other scripts' listeners, so it is current when they run.
@@ -95,3 +106,27 @@ function storedValue(storageKey, empty) {
     },
   };
 }
+
+// A tab's parent in Sidebery's tree, from openerTabId, which Sidebery keeps
+// equal to the parent. Sidebery counts a parent only before its children, and
+// cannot clear openerTabId when it makes a tab a root (Firefox keeps the old
+// opener), so a tab once seen with its opener after it is a root, also after
+// the opener has moved up again (folders first), until its opener changes.
+// (Dragged back into the same folder, it still counts as a root: Sidebery
+// then sets the same opener again, which cannot be seen.)
+const staleOpener = new Map(); // tabId -> the opener it had when it became a root
+function treeParent(tab, byId) {
+  const p = byId.get(tab.openerTabId);
+  if (!p || p.id === tab.id || p.windowId !== tab.windowId) return undefined;
+  if (p.index > tab.index) { staleOpener.set(tab.id, p.id); return undefined; }
+  if (staleOpener.get(tab.id) === p.id) return undefined;
+  staleOpener.delete(tab.id);
+  return p;
+}
+// Seen at once when a tab moves, before folders first moves its old parent up.
+browser.tabs.onMoved.addListener(async (tabId, { windowId }) => {
+  const tabs = await browser.tabs.query({ windowId }).catch(() => []);
+  const byId = new Map(tabs.map(t => [t.id, t])), tab = byId.get(tabId);
+  if (tab) treeParent(tab, byId);
+});
+browser.tabs.onRemoved.addListener(tabId => staleOpener.delete(tabId));

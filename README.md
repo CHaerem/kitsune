@@ -24,8 +24,9 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    unloaded *ghost* in the others (same URL, title, container and place in the
    Sidebery tree). Selecting a ghost moves the live tab into your window and
    leaves a ghost behind, so each page is only ever loaded once. Opening a tab
-   adds it everywhere; closing it closes it everywhere; closing a window hands
-   its tabs over to another window.
+   adds it everywhere; closing it closes it everywhere; moving it into or out
+   of a folder does the same in the other windows; closing a window hands its
+   tabs over to another window.
 3. **Folders first** (`folders.js`): in each space, Sidebery's folders, with
    the tabs in them, come before the ordinary tabs, like the pinned part of a
    space in Zen and Arc. Sidebery has no setting for it, and reordering with
@@ -185,6 +186,12 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   ghost it leaves behind stays in the folder. Sidebery decides a moved-in tab's
   place in its tree itself, from the tab that opened it, and Firefox does not
   report an opener in another window, so no extension can put it in the folder.
+- Moving a tab into or out of a folder is copied to the other windows, but
+  not moving it elsewhere: Sidebery gives a tab another extension moves the
+  space of the tab it lands next to, so moving ghosts around could change
+  their space. Where the tab is live or selected, in a window you are not
+  using, it stays where it was there. A new window takes the order of the window with the
+  most tabs.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
 - A tab that exists before a new window's sidebar has started gets the last
