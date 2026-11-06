@@ -54,16 +54,16 @@ var PAGE_BLOCK = /^(ADDRESS|ARTICLE|BODY|DD|DETAILS|DIALOG|DIV|DL|DT|FIELDSET|FI
 var PAGE_MOST = 500000; // characters walked at most: the rest of a very long page is not read
 
 function pageMarkdown(root) {
-  const st = { left: PAGE_MOST };
-  return md(root, st).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  let left = PAGE_MOST;
+  return md(root).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 
-  function kids(node) { return [...node.childNodes].map(n => md(n, st)).join(""); }
+  function kids(node) { return [...node.childNodes].map(md).join(""); }
   function wrap(mark, text) { const t = text.trim(); return t ? `${mark}${t}${mark}` : ""; }
   function md(node) {
-    if (st.left <= 0) return "";
+    if (left <= 0) return "";
     if (node.nodeType === Node.TEXT_NODE) {
       const text = node.data.replace(/\s+/g, " ");
-      st.left -= text.length;
+      left -= text.length;
       return text;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return "";
@@ -76,12 +76,13 @@ function pageMarkdown(root) {
       case "HR": return "\n\n---\n\n";
       case "A": {
         const text = kids(node).replace(/\s+/g, " ").trim();
-        return text && /^(https?:|mailto:)/.test(node.href) ? `[${text.replace(/([[\]])/g, "\\$1")}](${node.href})` : text;
+        const within = node.hash && node.href.split("#")[0] === location.href.split("#")[0]; // a footnote's number: the text says enough
+        return text && !within && /^(https?:|mailto:)/.test(node.href) ? `[${text.replace(/([[\]])/g, "\\$1")}](${node.href})` : text;
       }
       case "STRONG": case "B": return wrap("**", kids(node));
       case "EM": case "I": return wrap("*", kids(node));
       case "CODE": case "KBD": case "SAMP": return wrap("`", node.textContent.replace(/\s+/g, " "));
-      case "PRE": { st.left -= node.textContent.length; return `\n\n\`\`\`\n${node.textContent.replace(/\n$/, "")}\n\`\`\`\n\n`; }
+      case "PRE": { left -= node.textContent.length; return `\n\n\`\`\`\n${node.textContent.replace(/\n$/, "")}\n\`\`\`\n\n`; }
       case "IMG": { const alt = (node.alt ?? "").replace(/\s+/g, " ").trim(); return alt ? `![${alt}]` : ""; } // what it shows, not where it is
       case "UL": case "OL": {
         let n = Number(node.getAttribute("start")) || 1;
@@ -113,7 +114,7 @@ function pageMain() {
 function pageRead({ offset, max }) {
   const text = document.body ? pageMarkdown(pageMain()) : "";
   const end = offset + max;
-  return { title: document.title, url: location.href, total: text.length, text: text.slice(offset, end), next: end < text.length ? end : null };
+  return { title: document.title.slice(0, 500), url: location.href.slice(0, 2000), total: text.length, text: text.slice(offset, end), next: end < text.length ? end : null };
 }
 
 // --- Elements --------------------------------------------------------------------------------

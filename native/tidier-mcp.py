@@ -20,14 +20,17 @@ import struct
 import sys
 from urllib.parse import urlsplit
 
-HOME = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "tidier")
+# As the XDG standard says, and as github-prs.py: a relative path does not count.
+CONFIG = os.environ.get("XDG_CONFIG_HOME", "")
+HOME = os.path.join(CONFIG if os.path.isabs(CONFIG) else os.path.expanduser("~/.config"), "tidier")
 SOCKET_NAME = "bridge.sock"
 SOCKET = os.path.join(HOME, SOCKET_NAME)
 PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")  # newest first
 ANSWER_TIMEOUT_S = 60  # more than wait_for's longest wait
+MAX_REQUEST = 200_000  # the bridge takes 256 KB; said here, it can say why
 MAX_ANSWER = 64 * 1024 * 1024  # a screenshot, in base64, is well below this
 MAX_TEXT = 200_000  # characters; bridge.js gives less, this is for what should not happen
-OFF = "Tidier's bridge is off. You can turn it on on Tidier's settings page, under Claude and other agents; an agent cannot."
+OFF = "Tidier's bridge is off. The person can turn it on, on Tidier's settings page under Claude and other agents; an agent cannot."
 
 INSTRUCTIONS = """Tidier lets you work in the person's Firefox, in spaces (each with its own logins).
 By default you can see and touch only the space named Agent, and tabs you open go there.
@@ -129,12 +132,15 @@ def connect():
 
 def ask_bridge(name, args):
     """The answer of the extension: {ok, text, image} or {ok: false, error}."""
+    request = json.dumps({"id": 1, "tool": name, "args": args}).encode() + b"\n"
+    if len(request) > MAX_REQUEST:
+        return {"ok": False, "error": "That request is too big."}
     conn = connect()
     if conn is None:
         return {"ok": False, "error": OFF}
     try:
         with conn:
-            conn.sendall(json.dumps({"id": 1, "tool": name, "args": args}).encode() + b"\n")
+            conn.sendall(request)
             data = b""
             while b"\n" not in data:
                 chunk = conn.recv(1 << 20)

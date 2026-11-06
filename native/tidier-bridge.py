@@ -28,7 +28,9 @@ import struct
 import sys
 import threading
 
-HOME = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "tidier")
+# As the XDG standard says, and as github-prs.py: a relative path does not count.
+CONFIG = os.environ.get("XDG_CONFIG_HOME", "")
+HOME = os.path.join(CONFIG if os.path.isabs(CONFIG) else os.path.expanduser("~/.config"), "tidier")
 SOCKET_NAME = "bridge.sock"
 # Firefox refuses a message over 1 MB from a native host, and closes the port for it;
 # what an agent asks for is small (what comes back the other way may be up to 4 GB,

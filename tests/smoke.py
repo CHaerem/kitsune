@@ -64,7 +64,11 @@ is reported as failed. It checks that:
   - after Firefox is quit and started again, both windows come back with the
     same essentials and tabs, one live tab each, folders with their tabs and
     every tab in its space, and tab sync and new windows still work (only
-    where Tidier can be installed for real: Developer Edition, or --xpi).
+    where Tidier can be installed for real: Developer Edition, or --xpi);
+  - the bridge to agents, end to end through the real MCP server, socket and
+    host (alone_bridge): off means no socket and no process; an agent sees and
+    touches only its own space, and is refused elsewhere, also past the server;
+    what comes from a page is marked as untrusted; Stop cuts it at once.
 """
 import base64
 import glob
@@ -1202,6 +1206,8 @@ def move_over(m):
               pages: wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("group.html")).length)};""" % EXT_ID
     tabs_here = H + """return wins().map(w => w.gBrowser.tabs.filter(t => !t.pinned && role(w, t) && role(w, t) !== "copy").map(t => key(w, t)).sort()).sort();"""
     before, tabs0 = m.js(record), m.js(tabs_here)
+    r = ext_page(m, "/settings/settings.html", """await wait(300); return doc.getElementById("claude-section").hidden;""")
+    check("with Sidebery, the settings page offers nothing for agents", r is True, str(r))
     report = extension_message(m, {"type": "settings:get"})["report"]
     check("the report before moving names the folders and their tabs", len(report["folders"]) == len(before["folders"]) and not report["alone"] and report["tabs"] == len(before["tabs"]), str(report))
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
@@ -1562,6 +1568,18 @@ def alone_bridge(m):
     if os.environ.get("TIDIER_SHOTS") and raw:
         open(os.path.join(os.environ["TIDIER_SHOTS"], "bridge-screenshot.jpg"), "wb").write(raw)
 
+    # A tab that is not loaded: only what is known of it, until navigate takes it somewhere.
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent?unload")
+    unload = json.loads(text)["tab"]
+    client.call("wait_for", tab=unload, selector="h1")
+    sidebar_page(m, """await page.browser.tabs.discard(args[0]); await wait(400); return 1;""", unload)
+    text, is_error, _ = client.call("read_page", tab=unload)
+    check("read_page does not load a tab behind your back", is_error and "navigate" in text, text)
+    text, is_error, _ = client.call("navigate", tab=unload, url=m.pages + "/agent?loaded")
+    text2 = client.call("read_page", tab=unload)[0]
+    check("navigate loads it, and it can be read", not is_error and "# A heading" in text2, f"{text} {text2[:200]}")
+    check("close_tab closes it", not client.call("close_tab", tab=unload)[1] and "?loaded" not in client.call("list_tabs")[0])
+
     # A password Firefox filled in, as it does in any container: an agent must not be able to sign in with it.
     text, _, _ = client.call("open_tab", url=m.pages + "/agent-signin")
     signin = json.loads(text)["tab"]
@@ -1615,8 +1633,17 @@ def alone_bridge(m):
     client.call("wait_for", tab=second, selector="h1")
     r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?second")).map(t => t.userContextId);""")
     check("a rule does not send an agent's tab out of its space", r == [context], str(r))
+    client.call("navigate", tab=second, url=m.pages + "/agent?second-again")
+    client.call("wait_for", tab=second, selector="h1")
+    r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?second-again")).map(t => t.userContextId);""")
+    check("nor when it goes to an address that matches", r == [context], str(r))
+    # By dragging it to the space's dot, with real drag events on the real sidebar.
     handed = sidebar_page(m, """const t = plainTabs()[0], id = Number(t.dataset.tab), title = t.querySelector(".title").textContent;
-      send({type: "moveToSpace", tabId: id, space: args[0]}); await wait(3000); return {title, gone: !doc.querySelector(`[data-tab="${id}"]`)};""", agent["id"])
+      const dot = doc.querySelector(`#spaces .space[data-space="${args[0]}"]`), box = dot.getBoundingClientRect(), data = new page.DataTransfer();
+      const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5, dataTransfer: data};
+      t.dispatchEvent(new page.DragEvent("dragstart", at)); dot.dispatchEvent(new page.DragEvent("dragover", at));
+      dot.dispatchEvent(new page.DragEvent("drop", at)); t.dispatchEvent(new page.DragEvent("dragend", at));
+      await wait(3000); return {title, gone: !doc.querySelector(`[data-tab="${id}"]`)};""", agent["id"])
     listing = client.call("list_tabs")[0]
     check("a tab you hand over by moving it to the Agent space is there for the agent", handed["gone"] and handed["title"] in listing, f"{handed} {listing[:500]}")
     extension_message(m, {"type": "settings:rules", "rules": []})
@@ -1680,8 +1707,15 @@ def alone_bridge(m):
 
     # Copy for Claude, by the same page.
     m.js(H + """const w = main(); w.focus(); return 1;""")
+    tab_menu = """const row = plainTabs()[0], box = row.getBoundingClientRect(); await wait(200);
+      row.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5})); await wait(500);
+      const labels = [...doc.querySelectorAll("#menu .item")].map(b => b.textContent); doc.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true})); doc.body.click(); return labels;"""
+    labels_off = sidebar_page(m, tab_menu)
     r = ext_page(m, "/settings/settings.html", """doc.getElementById("claude-copy").click(); await wait(500); return doc.getElementById("claude-copy").checked;""")
     check("Copy for Claude can be turned on by itself", r is True and not running(), str(r))
+    labels_on = sidebar_page(m, tab_menu)
+    if labels_off or labels_on:  # where Tidier draws the tab's menu
+        check("a tab's menu offers Copy for Claude only once it is on", not any("Claude" in x for x in labels_off) and "Copy page for Claude" in labels_on and "Ask Claude about this page" in labels_on, f"{labels_off} {labels_on}")
     r = copy_for_claude(m, tab)
     check("Copy page for Claude gives title, address and clean text", r.startswith("# ") and "/agent" in r and "# A heading" in r and "SECRET" not in r and "<untrusted" not in r, r[:400])
     ext_page(m, "/settings/settings.html", """doc.getElementById("claude-copy").click(); await wait(300); return 1;""")

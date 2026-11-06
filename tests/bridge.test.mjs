@@ -386,6 +386,18 @@ test("page tools only on a web page, so never on Tidier's own", async () => {
   x.kill();
 });
 
+test("an agent cannot bury Firefox in tabs", async () => {
+  const ff = new FakeFirefox();
+  alone(ff);
+  const x = await start(ff);
+  await x.settings("on", { on: true });
+  const host = x.hosts[0];
+  const most = x.js("OPEN_MOST");
+  for (let i = 0; i < most; i++) assert.ok((await host.call("open_tab", { url: "https://a.example/" + i })).ok, String(i));
+  assert.match((await host.call("open_tab", { url: "https://a.example/more" })).error, /close some first/);
+  x.kill();
+});
+
 test("what an agent does is kept short, in memory, and shows only a site's name", async () => {
   const ff = new FakeFirefox();
   alone(ff);
@@ -398,8 +410,7 @@ test("what an agent does is kept short, in memory, and shows only a site's name"
   const log = x.js("agentLog");
   assert.equal(log.length, x.js("AGENT_LOG"));
   assert.ok(log.at(-1).refused, "a refusal is in it");
-  const line = x.js("agentLine");
-  assert.ok(!line.includes("work.example") || line.startsWith("refused"), line);
+  assert.equal(x.js("agentLine"), "refused: read_page", "it does not name your tab");
   x.js("agentLog.length = 0");
   await host.call("open_tab", { url: "https://a.example/secret/path?token=abc" });
   assert.equal(x.js("agentLog")[0].text, "opened a.example", "not the whole address");
@@ -483,6 +494,30 @@ test("copy for Claude: a page, tabs, and a placeholder's real address", async ()
   const claude = [...ff.tabs.values()].find(t => t.url === "https://claude.ai/new");
   assert.equal(claude.cookieStoreId, x.js(`activeSpace.get(${w.id})`));
   assert.equal(claude.active, true);
+  x.kill();
+});
+
+test("copy for Claude joins the command bar's table, where that is here", async () => {
+  const ff = new FakeFirefox();
+  const w = alone(ff);
+  const x = await start(ff);
+  if (x.js("typeof BAR_COMMANDS") !== "undefined") {
+    const commands = x.js("BAR_COMMANDS").filter(c => c.name.startsWith("claude-"));
+    assert.deepEqual(commands.map(c => c.name), ["claude-copy-page", "claude-copy-tabs", "claude-ask"]);
+    const ctx = { windowId: w.id, picked: [tabIn(ff, WORK)], tab: tabIn(ff, WORK) };
+    assert.ok(commands.every(c => !c.when(ctx)), "off: left out");
+    await x.settings("copy", { on: true });
+    assert.ok(commands.every(c => c.when(ctx)), "on: there");
+    commands[0].run(ctx);
+    await settle();
+    assert.match(ff.copied, /^# Work/);
+  }
+  // Each of these is a key of your own too, and the one for the whole space takes the view's tabs.
+  await x.settings("copy", { on: true });
+  x.b.commands.onCommand.fire("claude-copy-tabs", tabIn(ff, WORK));
+  await settle();
+  assert.match(ff.copied, /^- \[Work\]\(https:\/\/work\.example\/\)\n/);
+  assert.ok(!ff.copied.includes("home.example"), "only this space's");
   x.kill();
 });
 

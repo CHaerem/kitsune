@@ -31,7 +31,8 @@ const AGENT_QUIET_MS = 20000; // how long after its last action an agent still c
 const AGENT_LOG = 50; // actions kept, in memory only, for the settings page
 const PAGE_WAIT_MS = 15000, PAGE_CALL_MS = 20000;
 const READ_DEFAULT = 30000, READ_MOST = 100000, COPY_MOST = 200000; // characters
-const LIST_MOST = 300; // tabs in one answer
+const LIST_MOST = 200; // tabs in one answer
+const OPEN_MOST = 100; // tabs in a space beyond which an agent opens no more: a runaway agent, or a page steering one, cannot bury Firefox
 const SHOT_MOST = 8 * 1024 * 1024; // a screenshot, in base64
 const NOTE_MOST = 200, TYPE_MOST = 20000, ASK_MOST = 1000;
 const NO_SUCH_TAB = "No such tab in a space open to agents."; // the same for a tab not open and one not there: nothing to learn from it
@@ -45,7 +46,7 @@ let claudeCopyOn = false;
 // What a space is to agents: "write", "read" or null. A tab without a container belongs
 // to no space and can never be opened. A name of the wrong kind (__proto__) is simply no space.
 function bridgeAccess(space, settings) {
-  if (!space || space === NO_CONTAINER) return null;
+  if (typeof space !== "string" || !space || space === NO_CONTAINER) return null;
   if (space === settings.agentSpace) return "write";
   const mode = Object.hasOwn(settings.allowed || {}, space) ? settings.allowed[space]?.mode : null;
   return mode === "write" || mode === "read" ? mode : null;
@@ -86,7 +87,7 @@ function markUntrusted(text, source = "a web page") {
 // An agent is given the id of the tab that really holds the page; a placeholder's id
 // also works, and means the same page.
 const bridgeIsLoaded = t => !t.discarded && !isGhostUrl(t.url);
-const bridgeHost = url => { try { return new URL(url).hostname; } catch (err) { return ""; } };
+const bridgeHost = url => { try { return isWeb(url) ? new URL(url).hostname : ""; } catch (err) { return ""; } };
 
 // The tab that really holds this tab's page (or, if none does, the tab itself).
 async function bridgeRealTab(tabId) {
@@ -131,7 +132,7 @@ const BRIDGE_TOOLS = {
   find: { level: "read", on: "tab", page: true, says: "looked through", run: ctx => bridgeOnPage(ctx, { op: "find", selector: bridgeAskText(ctx.args.selector), text: bridgeAskText(ctx.args.text), limit: ctx.args.limit }).then(found => ({ text: JSON.stringify(found) })) },
   click: { level: "write", on: "tab", page: true, says: "clicked on", run: ctx => bridgeOnPage(ctx, { op: "click", ref: ctx.args.ref, selector: bridgeAskText(ctx.args.selector), text: bridgeAskText(ctx.args.text) }).then(done => ({ text: JSON.stringify(done) })) },
   type: { level: "write", on: "tab", page: true, says: "typed on", run: bridgeType },
-  wait_for: { level: "read", on: "tab", page: true, says: "waited for", run: bridgeWaitFor },
+  wait_for: { level: "read", on: "tab", says: "waited for", run: bridgeWaitFor },
   leave_for_you: { level: "write", on: "tab", says: "left you a tab from", run: bridgeLeaveForYou },
 };
 
@@ -176,6 +177,7 @@ async function bridgeOpenTab(ctx) {
   const space = ctx.args.space ?? ctx.settings.agentSpace;
   if (!bridgeAllows("open_tab", space, ctx.settings)) throw bridgeRefusal("That space is not open to agents for changes.");
   const props = { windowId: await bridgeWindow(), cookieStoreId: space, url, active: false };
+  if ((await browser.tabs.query({ windowId: props.windowId, cookieStoreId: space })).length >= OPEN_MOST) throw bridgeRefusal(`There are ${OPEN_MOST} tabs in that space already: close some first.`);
   bridgeAlive(ctx);
   const tab = await (globalThis.openUnruled?.(props) ?? browser.tabs.create(props));
   bridgeCurrent = tab.id;
@@ -403,6 +405,10 @@ async function forYouLoad() {
 // workplace's space would put the agent among its logins.)
 const bridgeKeeps = tab => !!agentSpaceId && tab.cookieStoreId === agentSpaceId;
 
+// With the bridge off and nothing in it, the Agent space rests: no dot on the bar for
+// something you tried once. Its logins stay, for when it is turned on again.
+const bridgeRests = spaceId => spaceId === agentSpaceId && !bridgeWanted;
+
 // --- The port to the native host ---------------------------------------------------------
 let bridgePort = null; // only while the bridge is on
 let bridgeWanted = false; // on, whether or not the host is there right now
@@ -454,11 +460,12 @@ function bridgeConnect() {
 function bridgeLost(reason) {
   bridgePort = null;
   bridgeReady = false;
-  if (bridgeTries < BRIDGE_RETRIES_MS.length) {
+  const notThere = /No such native application/.test(reason ?? ""); // trying again will not help
+  if (!notThere && bridgeTries < BRIDGE_RETRIES_MS.length) {
     bridgeRetry = setTimeout(bridgeConnect, BRIDGE_RETRIES_MS[bridgeTries++]);
   } else {
-    bridgeProblem = String(reason || "the helper stopped").slice(0, 300);
-    setNotice("bridge", `Agents cannot connect: ${bridgeProblem} (native/install.sh)`);
+    bridgeProblem = notThere ? "its helper is not installed; run native/install.sh, and turn this on again" : String(reason || "its helper stopped").slice(0, 300);
+    setNotice("bridge", `Agents cannot connect: ${bridgeProblem}`);
   }
   pushAgentState();
 }
@@ -509,9 +516,10 @@ async function bridgeRun(name, ctx) {
   if (tool.on === "tab") {
     const id = ctx.args.tab ?? bridgeCurrent;
     if (id === null || id === undefined) throw bridgeRefusal("No tab: name one, or open or select one first.");
-    ctx.tab = Number.isInteger(id) ? await bridgeRealTab(id) : null;
+    const tab = Number.isInteger(id) ? await bridgeRealTab(id) : null;
     // Checked on the tab that holds the page, and a placeholder has the same container.
-    if (!ctx.tab || !bridgeAllows(name, ctx.tab.cookieStoreId, ctx.settings)) throw bridgeRefusal(NO_SUCH_TAB);
+    if (!tab || !bridgeAllows(name, tab.cookieStoreId, ctx.settings)) throw bridgeRefusal(NO_SUCH_TAB);
+    ctx.tab = tab;
   }
   agentDid(name, ctx);
   const answer = await tool.run(ctx);
@@ -529,9 +537,10 @@ let agentLine = null, agentLastSpace = null, agentTimer = null;
 function agentDid(name, ctx, refused) {
   const tool = Object.hasOwn(BRIDGE_TOOLS, name) ? BRIDGE_TOOLS[name] : null;
   // Only the name of a site: nothing a page wrote gets here.
-  const where = bridgeHost(ctx.args.url ?? ctx.tab?.url ?? "");
-  const text = refused ? `refused: ${name || "a call"}${where ? " on " + where : ""}` : [tool?.says, where].filter(Boolean).join(" ");
-  if (refused && !tool) return;
+  if (!tool) return;
+  const where = bridgeHost(ctx.args.url ?? ctx.tab?.url);
+  // (A tab just opened has no address yet.)
+  const text = refused ? `refused: ${name}${where ? " on " + where : ""}` : `${tool.says} ${where || (tool.on === "tab" ? "a page" : "")}`.trim();
   agentLine = text;
   agentLastSpace = ctx.tab?.cookieStoreId ?? ctx.settings?.agentSpace ?? agentLastSpace;
   agentLog.push({ when: Date.now(), text, refused: !!refused });

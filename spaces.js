@@ -30,7 +30,7 @@ async function spaceList(used) {
   const { spaceOrder } = await browser.storage.local.get("spaceOrder"); // from Sidebery's export (moveover.js)
   const first = Array.isArray(declared) ? declared : spaceOrder ?? (await getList()).map(e => e.cookieStoreId);
   const rank = new Map([...new Set(first)].map((id, i) => [id, i]));
-  const listed = s => !Array.isArray(declared) || rank.has(s.id) || used.has(s.id);
+  const listed = s => used.has(s.id) || (!bridgeRests(s.id) && (!Array.isArray(declared) || rank.has(s.id)));
   return all.filter(listed).sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
 }
 
