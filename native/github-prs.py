@@ -1,9 +1,9 @@
 #!/usr/bin/python3
-# Native messaging host for Kitsune's live folders.
+# Native messaging host for Tidier's live folders.
 #
 # The folders are set up in a local file, not in the extension or this
-# repository: $XDG_CONFIG_HOME/kitsune/live-folders.json (default
-# ~/.config/kitsune/), see live-folders.example.json. The extension can
+# repository: $XDG_CONFIG_HOME/tidier/live-folders.json (default
+# ~/.config/tidier/), see live-folders.example.json. The extension can
 # ask for the list of folders ({"list": true}) and for one folder's pull
 # requests ({"folder": id}); it cannot run any other search or gh command, and
 # no GitHub token ever reaches the browser. The search runs with the gh CLI
@@ -18,7 +18,7 @@ import struct
 import subprocess
 import sys
 
-CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "kitsune", "live-folders.json")
+CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "tidier", "live-folders.json")
 # Every folder shows open pull requests you are involved in, within its search.
 BASE = "is:open is:pr archived:false (review-requested:@me OR author:@me OR assignee:@me)"
 JQ = '[.items[] | {url: .html_url, title, number, draft, repo: (.repository_url | split("/") | .[-1])}]'

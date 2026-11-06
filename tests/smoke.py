@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Smoke test for Kitsune and the Firefox setup in dotfiles.
+"""Smoke test for Tidier and the Firefox setup in dotfiles.
 
     tests/smoke.py              # this folder, as a temporary add-on
     tests/smoke.py --installed  # the signed version installed in your Firefox
@@ -63,7 +63,7 @@ is reported as failed. It checks that:
   - after Firefox is quit and started again, both windows come back with the
     same essentials and tabs, one live tab each, folders with their tabs and
     every tab in its space, and tab sync and new windows still work (only
-    where Kitsune can be installed for real: Developer Edition, or --xpi).
+    where Tidier can be installed for real: Developer Edition, or --xpi).
 """
 import glob
 import json
@@ -170,7 +170,7 @@ def extension_message(m, msg):
       "args": [msg]})
     m.chrome()
     # Close the helper page with the tab selected before it back in front;
-    # otherwise Firefox selects a neighbour, which may be a ghost that Kitsune
+    # otherwise Firefox selects a neighbour, which may be a ghost that Tidier
     # then (rightly) pulls in, and the test would be testing its own clicks.
     m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("ghost.html?kind=test"));
       if (w.__beforeHelper && !w.__beforeHelper.closing) w.gBrowser.selectedTab = w.__beforeHelper;
@@ -425,7 +425,7 @@ def trees(m):
     # space and folder) must not spread to a new window: there, tabs used to
     # be moved into the dragged order one by one, and Sidebery put every tab
     # between a folder and one of its tabs into that folder (all of them, in
-    # every space). The new window must get Kitsune's own record of the tree
+    # every space). The new window must get Tidier's own record of the tree
     # (each tab's folder), tab by tab, whatever the other windows look like.
     r = m.js(H + """
       const SB = "extension:%s:data", m0 = main();
@@ -446,7 +446,7 @@ def trees(m):
       try {
         for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);
         for (let i = 0; i < 100 && Object.keys(tree(w)).length < Object.keys(before).length; i++) await wait(100);
-        // Until the tree has stayed the same for 2 s (at most 12 s): Kitsune sorts 1.5 s after filling.
+        // Until the tree has stayed the same for 2 s (at most 12 s): Tidier sorts 1.5 s after filling.
         let now = tree(w), same = 0;
         for (let i = 0; i < 24 && same < 4; i++) { await wait(500); const t = tree(w); same = JSON.stringify(t) === JSON.stringify(now) ? same + 1 : 0; now = t; }
         // Named by their stored address (a ghost's own address is its placeholder's).
@@ -455,7 +455,7 @@ def trees(m):
         wrong = Object.keys(before).filter(k => now[k] !== before[k]).map(k => nm(k) + " in " + folder(now[k]) + ", not " + folder(before[k]));
         if (wrong.length) {
           // For finding out why: each window's tabs in the spaces concerned,
-          // indented by Sidebery's tree, with their role, and Kitsune's record.
+          // indented by Sidebery's tree, with their role, and Tidier's record.
           const ctxs = new Set(Object.keys(before).filter(k => now[k] !== before[k]).map(k => synced[k]?.cookieStoreId));
           const strip = x => { const ts = x.gBrowser.tabs.filter(t => !t.pinned && ctxs.has(ctxOf(t))), byId = new Map(ts.map(t => [sbData(x, t).id, t]));
             const depth = t => { let d = 0; for (let p = byId.get(sbData(x, t).parentId); p && d < 9; p = byId.get(sbData(x, p).parentId)) d++; return d; };
@@ -826,7 +826,7 @@ def look(m):
 
 def live_folders(m):
     # The native host is a stand-in (fake_github_host.py) that answers from
-    # m.fake_prs; the test rewrites the file and asks Kitsune to refresh.
+    # m.fake_prs; the test rewrites the file and asks Tidier to refresh.
     def answer(items, renamed=()):
         json.dump({"folders": [{"id": "smoke", "name": "Smoke PRs", "container": "firefox-container-2"}],
                    "items": {"smoke": [{"url": f"https://example.org/?smoke-pr-{n}", "title": f"Pull request {n}" + (" renamed" if n in renamed else ""),
@@ -893,7 +893,7 @@ def live_folders(m):
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
 
-# The extension process's memory and CPU time so far (Kitsune shares it with
+# The extension process's memory and CPU time so far (Tidier shares it with
 # Sidebery and Firefox's own extensions).
 PROC_INFO = """const info = await ChromeUtils.requestProcInfo();
   const ext = info.children.filter(c => c.type === "extension");
@@ -945,23 +945,23 @@ def many_tabs(m):
           not any(r["misplaced"].values()) and not r["stillLoaded"], str(r), sidebery_bug="pin race")
     left = m.js(H + """await wait(2000); return wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("smoke-many") || (t.pinned && !ek(w, t))).map(t => t.label));""")
     check("and they are all gone again once closed", all(not x for x in left), str(left))
-    # Memory and work. Kitsune's lists of tabs and windows are back to their
+    # Memory and work. Tidier's lists of tabs and windows are back to their
     # size once the tabs and the window are gone (after the 10 s in which
     # closed placeholders are looked for in Recently Closed), and with nothing
-    # happening Kitsune does nothing (unless a timed check came by).
+    # happening Tidier does nothing (unless a timed check came by).
     time.sleep(12)
     after = extension_message(m, {"type": "stats"})
     grown = {k: (before["sizes"][k], n) for k, n in after["sizes"].items() if n > before["sizes"].get(k, 0)}
-    check("Kitsune's lists in memory are back to their size once the tabs and the window are closed", not grown, f"grown (before, after): {grown}")
+    check("Tidier's lists in memory are back to their size once the tabs and the window are closed", not grown, f"grown (before, after): {grown}")
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
         print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)
     else:
-        check("with nothing happening, Kitsune does nothing (15 s)", idle["jobs"] == 0 and idle["lookups"] == 0, str(idle))
+        check("with nothing happening, Tidier does nothing (15 s)", idle["jobs"] == 0 and idle["lookups"] == 0, str(idle))
     proc = m.js(PROC_INFO)
     print(f"INFO  for 30 tabs and 10 essentials, a new window and closing them all: {after['jobs'] - before['jobs']} jobs, "
           f"queue busy {round((after['queueMs'] - before['queueMs']) / 1000, 1)} s (Sidebery waits included), "
-          f"{after['lookups'] - before['lookups']} tab lookups; extension process (Kitsune and Sidebery) "
+          f"{after['lookups'] - before['lookups']} tab lookups; extension process (Tidier and Sidebery) "
           f"{proc['mb']} MB, {round(proc['cpuS'] - proc0['cpuS'], 1)} s CPU", flush=True)
 
 
@@ -978,7 +978,7 @@ def handover(m):
 
 def reopened_window(m):
     # Reopening the window closed above (⌘⇧N) brings its tabs back with their
-    # Kitsune values; nothing may be doubled.
+    # Tidier values; nothing may be doubled.
     r = m.js(H + """
       const count = () => { const by = {};
         for (const [i, w] of wins().entries()) for (const t of w.gBrowser.tabs) { const k = key(w, t); if (!k) continue;
@@ -1003,11 +1003,11 @@ def reopened_window(m):
 
 def restart(m):
     # Quitting and starting Firefox again restores both windows with their
-    # tabs' Kitsune values: the same essentials and tabs in each, one live tab
+    # tabs' Tidier values: the same essentials and tabs in each, one live tab
     # each, folders with their tabs, every tab in its space, and tab sync and
     # new windows work as before.
     if not m.can_restart:
-        print("SKIP  restart (Kitsune is a temporary add-on here, which Firefox removes when it quits; "
+        print("SKIP  restart (Tidier is a temporary add-on here, which Firefox removes when it quits; "
               "runs where unsigned add-ons are allowed, as in Developer Edition, or with --xpi)", flush=True)
         return
     snap = H + """
@@ -1029,7 +1029,7 @@ def restart(m):
     before = m.js(snap)
     t0 = time.time()
     m.restart()
-    # Kitsune starts 5 s after Firefox (onStartup), then fills in what is missing.
+    # Tidier starts 5 s after Firefox (onStartup), then fills in what is missing.
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(15000); return 1;""")
     after = m.js(snap)
     print(f"INFO  restarted in {round(time.time() - t0)} s: {len(before['windows'])} -> {len(after['windows'])} windows", flush=True)

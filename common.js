@@ -9,11 +9,11 @@ function serial(fn) {
     work.jobs++;
     try { return await fn(); } finally { work.queueMs += performance.now() - t0; }
   });
-  queue = run.catch(err => console.error("Kitsune:", err));
+  queue = run.catch(err => console.error("Tidier:", err));
   return run;
 }
 
-// How much Kitsune does, for the smoke test (the "stats" message, tabsync.js):
+// How much Tidier does, for the smoke test (the "stats" message, tabsync.js):
 // jobs run in the queue and how long they held it (waits for Sidebery
 // included), tab lookups made outside it (noteOrder, tabsync.js), and the
 // timed checks (archiving, live folders), the only work with nothing happening.

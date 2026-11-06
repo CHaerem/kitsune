@@ -1,11 +1,14 @@
-# Kitsune
+# Tidier
 
-In Japanese folklore a *kitsune* is a fox spirit that can take another shape.
-This Firefox extension lets Firefox take the shape of Zen and Arc: it adds the
-features Firefox and Sidebery cannot do themselves, for a Firefox + Sidebery
-setup with one Sidebery panel ("space") per container. Each one is a small
-*bodge*: not the proper way to do it, but it does what you need with what you
-have.
+A calmer, tidier Firefox: spaces, the same tabs in every window, and tabs
+that tidy themselves, in the spirit of Zen and Arc but in Firefox itself. It
+adds the features Firefox and Sidebery cannot do themselves, for a Firefox +
+Sidebery setup with one Sidebery panel ("space") per container. Each one is a
+small *bodge*: not the proper way to do it, but it does what you need with
+what you have.
+
+(It was called Kitsune until November 2026; Mozilla's support site already
+uses that name. The add-on's ID is the same, so it updates as before.)
 
 The rule: only what Firefox and Sidebery cannot do. Anything a setting,
 `about:keyboard` or Sidebery can do is set up there instead (in the dotfiles).
@@ -35,7 +38,7 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
 3. **Folders first** (`folders.js`): in each space, Sidebery's folders, with
    the tabs in them, come before the ordinary tabs, like the pinned part of a
    space in Zen and Arc. Sidebery has no setting for it, and reordering with
-   CSS would only change the picture, so Kitsune keeps the real tab order:
+   CSS would only change the picture, so Tidier keeps the real tab order:
    when a space does not start with its folders, the ordinary tabs above them
    are moved below them, one at a time (moving a folder would make Sidebery
    put the tabs it passes into it).
@@ -83,7 +86,7 @@ under the copy. Closing a folder copy only affects its own window.
 The pull request search runs in `native/github-prs.py`, a Firefox native
 messaging host that calls the `gh` CLI with your existing login. No GitHub
 token is stored in the browser. The folders are set up in a local file, not in
-this repository: `~/.config/kitsune/live-folders.json` (see
+this repository: `~/.config/tidier/live-folders.json` (see
 `native/live-folders.example.json`), one entry per folder with its name, its
 container (so its space) and a GitHub search (`org:…`, `user:…`, `repo:…`).
 The extension only learns each folder's id, name and container, and the host
@@ -96,7 +99,7 @@ config file from the example if there is none:
 native/install.sh
 ```
 
-It writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/kitsune_github.json`,
+It writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/tidier_github.json`,
 which only allows this extension to start the host. The `native/` folder is not
 part of the signed extension.
 
@@ -159,7 +162,7 @@ as a regular expression: `/^https:\/\/(www\.|m\.)?youtube\.com\//`.
 
 ## Sidebery's look and settings come from dotfiles
 
-Sidebery's CSS (`sidebery.css`) and the settings that matter for Kitsune
+Sidebery's CSS (`sidebery.css`) and the settings that matter for Tidier
 (`sidebery-settings.json`) are in dotfiles, which hands them to Sidebery as
 *managed storage*: a file in `~/Library/Application Support/Mozilla/ManagedStorage/`
 that Firefox gives the extension. Sidebery reads it every time it starts, and
@@ -296,7 +299,7 @@ Set up once:
   and `AMO_JWT_SECRET`. Only the release workflow, which runs code from `main`,
   can read them.
 - Firefox: install the first release by hand (open the `.xpi` from the newest
-  [release](https://github.com/CHaerem/kitsune/releases)). Versions before
+  [release](https://github.com/CHaerem/tidier/releases)). Versions before
   1.6 have no `update_url`, so they cannot find updates.
 
 ## Testing
@@ -327,16 +330,16 @@ The smoke test runs in an invisible test Firefox with a throwaway profile
 window, no clipboard, its own Marionette port (one per test Firefox). The
 profile is deleted afterwards. It is built the same way every time, from:
 
-- dotfiles (`~/src/private/dotfiles/home/firefox`, or `KITSUNE_DOTFILES`):
+- dotfiles (`~/src/private/dotfiles/home/firefox`, or `TIDIER_DOTFILES`):
   `user.js`, `userChrome.css`, `customKeys.json` and Sidebery's CSS, so it
   tests the setup as dotfiles says it is;
 - `tests/fixtures`: Sidebery's spaces and settings, and the containers, made
   from your own setup without any addresses by `tests/fixtures/from_backup.py`
   (run it again when you change spaces or containers);
 - Sidebery as you have it installed (or, if your Firefox has none, the newest
-  from addons.mozilla.org, kept for a day in `~/Library/Caches/kitsune`),
+  from addons.mozilla.org, kept for a day in `~/Library/Caches/tidier`),
   with its permissions and ⌃1/⌃2/⌃3;
-- Kitsune (this folder, or a signed `.xpi`);
+- Tidier (this folder, or a signed `.xpi`);
 - test tabs in each space: essentials, a folder with tabs, ordinary tabs.
 - a stand-in for the live folders' native host (`tests/fake_github_host.py`),
   which answers from a file the test writes, so live folders are tested
@@ -359,7 +362,7 @@ container).
 headless Firefox on a macOS runner with the newest Sidebery, both in the newest
 Firefox and in Firefox Developer Edition (the Beta, about four weeks ahead, so a
 Firefox change that would break the setup shows up before it reaches you).
-Developer Edition allows unsigned add-ons, so there Kitsune is installed for
+Developer Edition allows unsigned add-ons, so there Tidier is installed for
 real and the test also quits and restarts Firefox to check the restored
 session; on your Mac that part runs with `--installed` or `--xpi`. It
 runs on pushes and pull requests here and every Monday, so a Firefox or

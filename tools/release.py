@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, sign and release Kitsune, so Firefox updates itself to it.
+"""Build, sign and release Tidier, so Firefox updates itself to it.
 
 Run by .github/workflows/release.yml after the smoke test has passed on main.
 Does nothing if no file that goes into the extension has changed since the
@@ -25,7 +25,7 @@ import base64, hashlib, hmac, json, os, subprocess, sys, time, uuid, zipfile
 import urllib.error, urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO = "CHaerem/kitsune"
+REPO = "CHaerem/tidier"
 AMO = "https://addons.mozilla.org/api/v5"
 # Everything in git goes into the extension, except these.
 EXCLUDE = ("README.md", ".gitignore", ".github/", "native/", "tests/", "tools/")
@@ -63,7 +63,7 @@ def changed_since(tag):
 
 def build(out_dir, ver):
     """The .xpi, with the version filled in. Same input gives the same bytes."""
-    path = os.path.join(out_dir, f"kitsune-{ver}.xpi")
+    path = os.path.join(out_dir, f"tidier-{ver}.xpi")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         for f in extension_files():
             data = open(os.path.join(ROOT, f), "rb").read()
@@ -78,7 +78,7 @@ def build(out_dir, ver):
 def updates_json(out_dir, ver):
     """What Firefox reads from update_url."""
     gecko_id = manifest()["browser_specific_settings"]["gecko"]["id"]
-    link = f"https://github.com/{REPO}/releases/download/v{ver}/kitsune-{ver}.xpi"
+    link = f"https://github.com/{REPO}/releases/download/v{ver}/tidier-{ver}.xpi"
     path = os.path.join(out_dir, "updates.json")
     json.dump({"addons": {gecko_id: {"updates": [{"version": ver, "update_link": link}]}}}, open(path, "w"), indent=2)
     return path
@@ -152,7 +152,7 @@ def sign(xpi, ver, out_dir):
     version = poll("signing", lambda: amo("GET", f"{versions}{version_id}/"), lambda v: v["file"]["status"] != "unreviewed")
     if version["file"]["status"] != "public":
         raise SystemExit(f"AMO did not sign {ver}: file status {version['file']['status']}")
-    signed = os.path.join(out_dir, f"kitsune-{ver}.xpi")
+    signed = os.path.join(out_dir, f"tidier-{ver}.xpi")
     open(signed, "wb").write(amo("GET", version["file"]["url"], raw=True))
     return signed
 
@@ -162,7 +162,7 @@ def sign(xpi, ver, out_dir):
 def release(ver, files, tag):
     commits = git("log", "--format=- %s", f"{tag}..HEAD" if tag else "HEAD")
     subprocess.run(["gh", "release", "create", f"v{ver}", *files, "--repo", REPO, "--target", git("rev-parse", "HEAD"),
-                    "--title", f"Kitsune {ver}", "--notes", commits or "-", "--latest"], check=True)
+                    "--title", f"Tidier {ver}", "--notes", commits or "-", "--latest"], check=True)
 
 
 def main():
@@ -185,7 +185,7 @@ def main():
     os.makedirs(unsigned_dir, exist_ok=True)
     signed = sign(build(unsigned_dir, ver), ver, out)
     release(ver, [signed, updates_json(out, ver)], tag)
-    print(f"Released Kitsune {ver}")
+    print(f"Released Tidier {ver}")
 
 
 if __name__ == "__main__":

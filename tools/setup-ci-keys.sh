@@ -15,5 +15,5 @@ for id in $(gh api repos/CHaerem/dotfiles/keys --jq ".[] | select(.title == \"$t
   gh api -X DELETE "repos/CHaerem/dotfiles/keys/$id" >/dev/null
 done
 gh repo deploy-key add "$tmp/key.pub" --repo CHaerem/dotfiles --title "$title"
-gh secret set DOTFILES_DEPLOY_KEY --repo CHaerem/kitsune < "$tmp/key"
-echo "CHaerem/kitsune can now read CHaerem/dotfiles"
+gh secret set DOTFILES_DEPLOY_KEY --repo CHaerem/tidier < "$tmp/key"
+echo "CHaerem/tidier can now read CHaerem/dotfiles"

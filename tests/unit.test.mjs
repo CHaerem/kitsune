@@ -66,7 +66,7 @@ function loadCommon(model) {
     sessions: { onChanged: { addListener() {} } },
     alarms: { onAlarm: { addListener() {} } },
     storage: { local: { get: async () => ({}), set: async () => {} } },
-    runtime: { getURL: p => "moz-extension://kitsune/" + p },
+    runtime: { getURL: p => "moz-extension://tidier/" + p },
   };
   const context = vm.createContext({ browser, console, setTimeout, clearTimeout, URL });
   vm.runInContext(readFileSync(new URL("../common.js", import.meta.url), "utf8"), context);
@@ -107,7 +107,7 @@ test("tree order: parents that point at each other are not lost", () => {
 });
 
 test("the Sidebery model: moving a folder away from its tabs makes it take in the tabs between", () => {
-  // The bug placeInOrder avoids: Kitsune used to move a whole folder with one
+  // The bug placeInOrder avoids: Tidier used to move a whole folder with one
   // tabs.move call, which Firefox carries out one tab at a time.
   const model = sidebery([
     tab("a-plain", "A"), tab("A1", "A", { folder: true }), tab("a1", "A", { parent: "A1" }), tab("a2", "A", { parent: "A1" }),

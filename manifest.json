@@ -1,13 +1,13 @@
 {
   "manifest_version": 2,
-  "name": "Kitsune",
+  "name": "Tidier",
   "version": "1.6",
   "description": "Firefox in the shape of Zen and Arc: essentials and tabs in every window, live folders of GitHub pull requests, archiving of unused tabs, and ⌘⇧C to copy the address.",
   "browser_specific_settings": {
     "gecko": {
       "id": "{6844a953-9931-4334-9ff6-257c246485cb}",
       "strict_min_version": "140.0",
-      "update_url": "https://github.com/CHaerem/kitsune/releases/latest/download/updates.json",
+      "update_url": "https://github.com/CHaerem/tidier/releases/latest/download/updates.json",
       "data_collection_permissions": {
         "required": [
           "none"

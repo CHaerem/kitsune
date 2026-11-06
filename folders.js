@@ -11,7 +11,7 @@
 // made Sidebery put every tab after a folder into it. A tab without a
 // container belongs to the space it sits in.
 //
-// It runs after Kitsune has started and whenever a tab is created, moved,
+// It runs after Tidier has started and whenever a tab is created, moved,
 // attached or becomes a folder page. Our own moves are not answered.
 
 const ownFolderMoves = new Set();

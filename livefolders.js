@@ -13,7 +13,7 @@
 // folder and its tabs in every window. A tab you close stays closed until the
 // pull request leaves the search.
 
-const NATIVE_HOST = "kitsune_github";
+const NATIVE_HOST = "tidier_github";
 const GITHUB_ICON = "https://github.githubassets.com/favicons/favicon.svg";
 const LIVE_REFRESH_MINUTES = 15;
 
@@ -93,7 +93,7 @@ function searchLiveFolder(folder) {
 }
 
 async function refreshLiveFolder(folder, res) {
-  if (!res || res.error || !Array.isArray(res.items)) { console.warn("Kitsune: live folder", folder.id, res?.error); return; }
+  if (!res || res.error || !Array.isArray(res.items)) { console.warn("Tidier: live folder", folder.id, res?.error); return; }
   const state = await folderState(folder.id);
   const groupKey = await ensureFolderGroup(folder, state);
   if (!groupKey) return;

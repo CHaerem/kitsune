@@ -3,7 +3,7 @@
 
 The test Firefox starts this instead of the real host (see testfirefox.py),
 so the live folders are tested without your gh login or GitHub. It answers
-from the file in KITSUNE_FAKE_PRS, which the test rewrites between refreshes:
+from the file in TIDIER_FAKE_PRS, which the test rewrites between refreshes:
 
     {"folders": [{"id", "name", "container"}], "items": {"<folder id>": [{url, title, number, repo}]}}
 """
@@ -20,7 +20,7 @@ def main():
     (length,) = struct.unpack("@I", raw)
     msg = json.loads(sys.stdin.buffer.read(length))
     try:
-        data = json.load(open(os.environ["KITSUNE_FAKE_PRS"]))
+        data = json.load(open(os.environ["TIDIER_FAKE_PRS"]))
     except (KeyError, OSError, ValueError):
         data = {}
     if msg.get("list"):

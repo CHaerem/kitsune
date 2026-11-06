@@ -2,7 +2,7 @@
 # headless Firefox on a macOS runner, with the newest Sidebery and both the
 # newest Firefox (what yours updates to) and Firefox Developer Edition (the
 # Beta, about four weeks ahead, so a Firefox change that would break something
-# shows up before it reaches you). Developer Edition also lets Kitsune be
+# shows up before it reaches you). Developer Edition also lets Tidier be
 # installed unsigned for real, so only there does the test quit and restart
 # Firefox to check the restored session. It runs on pushes and pull requests here and every Monday, so
 # a Firefox or Sidebery update that breaks something shows up even when
@@ -41,10 +41,10 @@ jobs:
       matrix:
         firefox: ["latest", "latest-devedition"]
     steps:
-      - name: Check out Kitsune
+      - name: Check out Tidier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: kitsune
+          path: tidier
           persist-credentials: false
       - name: Check out dotfiles (main)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,15 +61,15 @@ jobs:
       - name: Download Sidebery
         run: curl -fsSL -o "$RUNNER_TEMP/sidebery.xpi" https://addons.mozilla.org/firefox/downloads/latest/sidebery/latest.xpi
       - name: Unit tests
-        working-directory: kitsune
+        working-directory: tidier
         run: node --test
       # One test Firefox at a time (--serial): GitHub's runner is slower than
-      # a Mac, and three at once there would test the runner, not Kitsune.
+      # a Mac, and three at once there would test the runner, not Tidier.
       - name: Smoke test
         env:
-          KITSUNE_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
-          KITSUNE_SIDEBERY_XPI: ${{ runner.temp }}/sidebery.xpi
-          KITSUNE_DOTFILES: ${{ github.workspace }}/dotfiles/home/firefox
+          TIDIER_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
+          TIDIER_SIDEBERY_XPI: ${{ runner.temp }}/sidebery.xpi
+          TIDIER_DOTFILES: ${{ github.workspace }}/dotfiles/home/firefox
         run: |
-          echo "Firefox ${{ steps.firefox.outputs.firefox-version }} at $KITSUNE_FIREFOX"
-          python3 -I kitsune/tests/smoke.py --serial
+          echo "Firefox ${{ steps.firefox.outputs.firefox-version }} at $TIDIER_FIREFOX"
+          python3 -I tidier/tests/smoke.py --serial

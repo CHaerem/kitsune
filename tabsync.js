@@ -155,7 +155,7 @@ function bySpace(items, spaceOf) {
 }
 
 // The order a window is filled in: the reference window's order, put in tree
-// order (see treeOrder in common.js) from Kitsune's own record of each tab's
+// order (see treeOrder in common.js) from Tidier's own record of each tab's
 // folder. The reference window's own tree is not trusted: one tab dragged
 // into another space's folder there would otherwise be copied into every new
 // window, and with it a folder taking in every tab after it.
@@ -262,7 +262,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   return Promise.resolve(sidebarWaits);
 });
 
-// For the smoke test: how much Kitsune has done (work, common.js) and how big
+// For the smoke test: how much Tidier has done (work, common.js) and how big
 // each list it keeps in memory is, so that idle work and lists that only grow
 // show up there. A list kept per tab or window must shrink again when tabs
 // and windows close.
@@ -283,7 +283,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
   };
-  // Counted once Kitsune is done with what it was doing (the helper page
+  // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
   return (async () => {
     for (let i = 0; i < 20 && (orderQueries.size || pending.size); i++) await sleep(100);
@@ -365,7 +365,7 @@ async function register(tabId) {
 }
 
 // A saved tab you closed and reopened (⌘⇧T, History → Recently Closed Tabs):
-// Firefox brings it back with its Kitsune values, while its placeholder is
+// Firefox brings it back with its Tidier values, while its placeholder is
 // still there, unloaded. The reopened tab becomes the live tab, and its
 // placeholder in this window is removed, so it is not there twice.
 async function reopenedSaved(tab, all) {
@@ -825,7 +825,7 @@ browser.tabs.onAttached.addListener(tabId => {
 
 // A new window gets essentials and ghosts of every synced tab.
 // A window you reopened (History → Recently Closed Windows, ⌘⇧N) comes back
-// with its tabs' Kitsune values: its tabs are taken back instead, so nothing
+// with its tabs' Tidier values: its tabs are taken back instead, so nothing
 // is doubled (see adoptRestored).
 browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
@@ -835,7 +835,7 @@ browser.windows.onCreated.addListener(win => {
   }), NEW_WINDOW_DELAY_MS);
 });
 
-// Tabs restored with their Kitsune values: a tab still synced is taken back
+// Tabs restored with their Tidier values: a tab still synced is taken back
 // as what it was (reconcileAll then keeps one live tab and one tab per window);
 // a placeholder of a tab closed since is removed; any other tab is left to be
 // registered as new. Returns whether the window had any.

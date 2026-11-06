@@ -12,9 +12,9 @@ deleted afterwards. The profile is built the same way every time, from:
     (tests/fixtures/from_backup.py makes them from your own setup);
   - Sidebery, with the permissions and ⌃1/⌃2/⌃3 shortcuts you have;
 
-Paths can be set with KITSUNE_FIREFOX, KITSUNE_SIDEBERY_XPI and KITSUNE_DOTFILES
+Paths can be set with TIDIER_FIREFOX, TIDIER_SIDEBERY_XPI and TIDIER_DOTFILES
 (the CI workflow does); the defaults are your own Mac's.
-  - Kitsune, from this folder (or a signed .xpi);
+  - Tidier, from this folder (or a signed .xpi);
   - test tabs in each space: essentials, a folder with tabs in it, and
     ordinary tabs.
 
@@ -35,7 +35,7 @@ from marionette import FIREFOX, Marionette
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXT_DIR = os.path.dirname(HERE)
 FIXTURES = os.path.join(HERE, "fixtures")
-DOTFILES = os.path.expanduser(os.environ.get("KITSUNE_DOTFILES", "~/src/private/dotfiles/home/firefox"))
+DOTFILES = os.path.expanduser(os.environ.get("TIDIER_DOTFILES", "~/src/private/dotfiles/home/firefox"))
 EXT_ID = "{6844a953-9931-4334-9ff6-257c246485cb}"
 SIDEBERY_ID = "{3c078156-979c-498b-8990-85f7987dd929}"
 PORT = 2829  # not 2828, which your own Firefox would use for Marionette
@@ -57,7 +57,7 @@ TEST_PREFS = {
     "app.update.disabledForTesting": True,
     "datareporting.policy.dataSubmissionEnabled": False,
     "extensions.update.enabled": False,
-    # Lets Kitsune be installed for real (not as a temporary add-on, which
+    # Lets Tidier be installed for real (not as a temporary add-on, which
     # Firefox removes when it quits) where Firefox allows unsigned add-ons:
     # Developer Edition and Nightly. Release Firefox ignores it.
     "xpinstall.signatures.required": False,
@@ -65,9 +65,9 @@ TEST_PREFS = {
 
 
 def sidebery_xpi():
-    """Sidebery: KITSUNE_SIDEBERY_XPI (an .xpi, or a folder for a temporary add-on), as you have it installed, or downloaded."""
-    if os.environ.get("KITSUNE_SIDEBERY_XPI"):
-        return os.environ["KITSUNE_SIDEBERY_XPI"]
+    """Sidebery: TIDIER_SIDEBERY_XPI (an .xpi, or a folder for a temporary add-on), as you have it installed, or downloaded."""
+    if os.environ.get("TIDIER_SIDEBERY_XPI"):
+        return os.environ["TIDIER_SIDEBERY_XPI"]
     found = glob.glob(os.path.expanduser(f"~/Library/Application Support/Firefox/Profiles/*.default-release/extensions/{SIDEBERY_ID}.xpi"))
     if found:
         return found[0]
@@ -75,14 +75,14 @@ def sidebery_xpi():
 
 
 SIDEBERY_URL = "https://addons.mozilla.org/firefox/downloads/latest/sidebery/latest.xpi"
-SIDEBERY_CACHE = os.path.expanduser("~/Library/Caches/kitsune/sidebery.xpi")
+SIDEBERY_CACHE = os.path.expanduser("~/Library/Caches/tidier/sidebery.xpi")
 
 
 def downloaded_sidebery():
     """The newest Sidebery from addons.mozilla.org, as the CI workflow gets it.
 
     For a Mac where Firefox has no Sidebery of its own (a machine used only to
-    work on Kitsune). Kept for a day, so a run of tests downloads it once.
+    work on Tidier). Kept for a day, so a run of tests downloads it once.
     """
     fresh = os.path.exists(SIDEBERY_CACHE) and time.time() - os.path.getmtime(SIDEBERY_CACHE) < 86400
     if not fresh:
@@ -101,13 +101,13 @@ def downloaded_sidebery():
 
 class TestFirefox:
     def __init__(self, xpi=None, port=PORT):
-        self.xpi = xpi  # a signed Kitsune .xpi; default: this folder (installed for real where Firefox allows it)
+        self.xpi = xpi  # a signed Tidier .xpi; default: this folder (installed for real where Firefox allows it)
         self.port = port  # each test Firefox running at the same time needs its own
         self.dir = self.proc = self.m = None
 
     def restart(self):
         """Quit the test Firefox and start it again with the same profile, so
-        the session is restored. Only when Kitsune is installed for real
+        the session is restored. Only when Tidier is installed for real
         (m.can_restart): a temporary add-on is gone after a restart. The same
         Marionette object is kept, connected to the new Firefox."""
         self.m.quit()
@@ -144,7 +144,7 @@ class TestFirefox:
             shutil.rmtree(self.dir, ignore_errors=True)
 
     def _build_profile(self):
-        self.dir = tempfile.mkdtemp(prefix="kitsune-test-")
+        self.dir = tempfile.mkdtemp(prefix="tidier-test-")
         os.makedirs(f"{self.dir}/chrome")
         prefs = open(f"{DOTFILES}/user.js").read() + "\n// Test profile\n"
         prefs += "".join(f"user_pref({json.dumps(k)}, {json.dumps(v)});\n" for k, v in {**TEST_PREFS, "marionette.port": self.port}.items())
@@ -161,14 +161,14 @@ class TestFirefox:
         # The live folders' native host is a stand-in that answers from a file
         # the test writes (fake_github_host.py), never your gh login.
         os.makedirs(f"{self.dir}/managed/NativeMessagingHosts")
-        json.dump({"name": "kitsune_github", "description": "test", "type": "stdio",
+        json.dump({"name": "tidier_github", "description": "test", "type": "stdio",
                    "path": os.path.join(HERE, "fake_github_host.py"), "allowed_extensions": [EXT_ID]},
-                  open(f"{self.dir}/managed/NativeMessagingHosts/kitsune_github.json", "w"))
+                  open(f"{self.dir}/managed/NativeMessagingHosts/tidier_github.json", "w"))
         self.fake_prs = f"{self.dir}/fake-prs.json"
         json.dump({}, open(self.fake_prs, "w"))
 
     def _start(self):
-        env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "KITSUNE_FAKE_PRS": self.fake_prs}
+        env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "TIDIER_FAKE_PRS": self.fake_prs}
         self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self.m = Marionette(port=self.port, wait=60)
@@ -197,11 +197,11 @@ class TestFirefox:
                 m.can_restart = False
                 m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
         m.restart = self.restart
-        time.sleep(8)  # Kitsune starts: essentials, tab sync, live folders
+        time.sleep(8)  # Tidier starts: essentials, tab sync, live folders
 
     def _unsigned_xpi(self):
         """This folder as an .xpi, without what is not part of the extension."""
-        path = f"{self.dir}/kitsune.xpi"
+        path = f"{self.dir}/tidier.xpi"
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             for root, dirs, files in os.walk(EXT_DIR):
                 dirs[:] = [d for d in dirs if root != EXT_DIR or d not in ("tests", "tools", "native", ".git", ".github")]
@@ -221,7 +221,7 @@ USE_TEST_MANAGED_STORAGE = """
   await NativeManifests.init();
   const lookup = NativeManifests._lookup;
   NativeManifests._lookup = (type, name, context) =>
-    type === "storage" || name === "kitsune_github" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
+    type === "storage" || name === "tidier_github" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
 """
 
 # Sidebery: permissions, shortcuts, and the fixture written to its storage
@@ -251,7 +251,7 @@ SETUP_SIDEBERY = """
 # two tabs in it, and two ordinary tabs. Sidebery puts each tab in its
 # container's space. A folder's tabs are put in it the way Sidebery stores its
 # tree (parentId in its tab data, read when it starts) and opener = folder
-# (which Kitsune reads), with Sidebery disabled meanwhile.
+# (which Tidier reads), with Sidebery disabled meanwhile.
 SEED_TABS = """
   const [SB] = args;
   const {setTimeout: sT} = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
@@ -291,7 +291,7 @@ SEED_TABS = """
   }
   // Sidebery reads the tree when it starts. Now and then (seen on GitHub) it
   // starts with a whole space's tabs in the space before it; that is the
-  // test's own setup going wrong, not Kitsune, so it is started again.
+  // test's own setup going wrong, not Tidier, so it is started again.
   const {ExtensionStorageIDB} = ChromeUtils.importESModule("resource://gre/modules/ExtensionStorageIDB.sys.mjs");
   const misplaced = async () => {
     const db = await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID(SB).extension));

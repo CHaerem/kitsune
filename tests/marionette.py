@@ -8,8 +8,8 @@ import socket
 import subprocess
 import time
 
-# Which Firefox: KITSUNE_FIREFOX (the program, or a .app), default the one in /Applications.
-FIREFOX = os.environ.get("KITSUNE_FIREFOX", "/Applications/Firefox.app")
+# Which Firefox: TIDIER_FIREFOX (the program, or a .app), default the one in /Applications.
+FIREFOX = os.environ.get("TIDIER_FIREFOX", "/Applications/Firefox.app")
 if FIREFOX.endswith(".app"):
     FIREFOX = os.path.join(FIREFOX, "Contents", "MacOS", "firefox")
 elif os.path.isdir(FIREFOX):
