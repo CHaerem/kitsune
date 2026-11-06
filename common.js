@@ -70,6 +70,10 @@ const PIN_SETTLE_MS = 800;
 // RULE_SETTLE_MS for Sidebery to move each copy to its own space before
 // pinning it.
 const SIDEBAR_WAIT_MS = 4000;
+// A tab pulled in from another window gets its place in Sidebery's tree from
+// the tab after it (the ghost it replaces), so the ghost is removed only
+// PULL_SETTLE_MS after the move (see pull in tabsync.js).
+const PULL_SETTLE_MS = 500;
 const RULE_SETTLE_MS = 600;
 const PROBE_MS = 500;
 

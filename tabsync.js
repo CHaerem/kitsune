@@ -377,19 +377,13 @@ async function pull(ghostId) {
       if (calm) await browser.tabs.update(calm.id, { active: true });
     }
     await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index });
+    const movedAt = Date.now();
     await browser.tabs.update(live.id, { active: true });
 
     // Bookkeeping.
     forget(ghostId);
     const all = await getSynced();
     const entry = all[key];
-    const tabsHere = await browser.tabs.query({ windowId: ghost.windowId });
-    const parentId = entry?.parentKey ? repMap(tabsHere).get(entry.parentKey) : undefined;
-    await Promise.all([
-      browser.tabs.remove(ghostId),
-      parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
-    ]);
-    await forgetClosedPlaceholders("ghost", [key]);
     if (entry) {
       // A never-loaded live tab is still a placeholder page; keep the real URL then.
       if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: live.favIconUrl || entry.icon });
@@ -398,6 +392,17 @@ async function pull(ghostId) {
       const opener = fromOpener !== undefined && (await browser.tabs.get(fromOpener).catch(() => null));
       await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
     }
+    // Sidebery puts a tab that comes from another window in the tree of the
+    // tab after it, which is the ghost: so the ghost stays a moment, until
+    // Sidebery has placed the tab, or a tab in a folder would leave it.
+    await sleep(Math.max(0, PULL_SETTLE_MS - (Date.now() - movedAt)));
+    const tabsHere = await browser.tabs.query({ windowId: ghost.windowId });
+    const parentId = entry?.parentKey ? repMap(tabsHere).get(entry.parentKey) : undefined;
+    await Promise.all([
+      browser.tabs.remove(ghostId),
+      parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
+    ]);
+    await forgetClosedPlaceholders("ghost", [key]);
   } finally {
     setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling = false; }, 600);
   }
