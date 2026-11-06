@@ -1047,3 +1047,18 @@ test("a tab pinned just as it gets an address is not opened again in a space", a
   assert.equal(ff.list(w.id).filter(y => y.pinned).length, 1, "and is there once");
   x.kill();
 });
+
+test("a tab dragged to another window right after a pull is handled", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  ff.focusWindow(b.id);
+  ff.select(ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key).id);
+  while (ff.tabs.get(t.id).windowId !== b.id) await ff.clock.step();
+  await ff.clock.run(200); // the pull is done, and has marked the tab for a little longer
+  ff.moveTabs([t.id], { windowId: a.id, index: -1 });
+  await ff.clock.idle(60000);
+  for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1, `one in window ${w.id}`);
+  x.kill();
+});

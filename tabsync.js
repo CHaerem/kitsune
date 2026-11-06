@@ -41,6 +41,7 @@ const syncKeyByTab = new Map();  // tabId -> key
 const syncRoleByTab = new Map(); // tabId -> role
 const syncBusy = new Set();      // tab IDs we are changing ourselves
 let pulling = 0;                 // pulls in progress: tabs being moved are not moves you made
+const beingPulled = new Set();   // tabs on their way to another window right now, by a pull
 let started = false;             // tab sync waits for startup before reacting
 
 const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
@@ -555,7 +556,8 @@ async function pull(ghostId) {
         oldTabs.find(t => t.id !== live.id);
       if (calm) await browser.tabs.update(calm.id, { active: true });
     }
-    await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index });
+    beingPulled.add(live.id);
+    await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index }).finally(() => beingPulled.delete(live.id));
     await browser.tabs.update(live.id, { active: true });
 
     // Bookkeeping. A tab moved before it was ever loaded (a live folder's pull
@@ -912,10 +914,11 @@ browser.windows.onFocusChanged.addListener(windowId => {
 
 // You dragged a tab to another window: fix up both windows.
 browser.tabs.onAttached.addListener(tabId => {
-  // A tab being pulled is not yours to fix up; any other is, also one just created or one
-  // you drag while another is being pulled (it would be left without its values, twice in
-  // the window it went to, and missing from the one it left).
-  if (!started || (pulling && syncBusy.has(tabId)) || !syncKeyByTab.has(tabId)) return;
+  // A tab arriving by a pull is not yours to fix up. Any other is, also one just created, just
+  // pulled, or one you drag during a pull: it would be left without its values, twice in the
+  // window it went to, and missing from the one it left. (Firefox sends this event before
+  // the answer to the move.)
+  if (!started || beingPulled.has(tabId) || !syncKeyByTab.has(tabId)) return;
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   serial(async () => {
     // Firefox loses the sessions values of an unloaded tab moved to another window;
