@@ -111,6 +111,13 @@ test("the lists in place: other folders and spaces, and New folder last", () => 
   assert.ok(!only.labels([row()]).includes("Move to space"), "nowhere to go");
 });
 
+test("another file can add an item to the table, in its group", () => {
+  const m = menu();
+  vm.runInContext(`TAB_MENU.push({ id: "extra", group: 2, label: () => "Copy for later", when: () => true, run() {} })`, m.ctx);
+  const labels = m.labels([row()]);
+  assert.deepEqual(labels.slice(labels.indexOf("Duplicate"), labels.indexOf("Make essential")), ["Duplicate", "Copy address", "Copy for later", "|"]);
+});
+
 test("Copy takes one address per line, on the click", () => {
   const m = menu();
   m.items([row()]).find(i => i?.[0] === "Copy address")[1]();

@@ -22,8 +22,9 @@ const folderChoices = tabs => [
 const otherSpaces = tabs => view.spaces.filter(s => s.id !== tabs[0].space);
 const spaceChoices = tabs => otherSpaces(tabs).map(s => [s.name, () => tabAct("space", tabs, { space: s.id }), { color: s.color }]);
 
-// In the order shown; a line between groups. Rows and tiles differ only by their rules.
-// `many`: it can take several tabs. `choices`: it opens a list of its own, in place.
+// In the order shown, by group, with a line between groups. Rows and tiles differ only by
+// their rules. `many`: it can take several tabs. `choices`: it opens a list of its own, in
+// place. Another file can add an item with TAB_MENU.push.
 const TAB_MENU = [
   { id: "reload", group: 1, many: true, label: n => tabsWord(n, "Reload", "Reload # tabs"),
     when: eachTab(t => t.loaded), run: tabs => tabAct("reload", tabs) },
@@ -65,7 +66,7 @@ const TAB_MENU = [
 function tabMenuItems(tabs) {
   const n = tabs.length, items = [];
   let group = null;
-  for (const item of TAB_MENU) {
+  for (const item of [...TAB_MENU].sort((a, b) => a.group - b.group)) {
     if ((n > 1 && !item.many) || !item.when(tabs)) continue;
     if (group !== null && item.group !== group) items.push(null);
     group = item.group;

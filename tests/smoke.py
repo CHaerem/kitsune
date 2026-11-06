@@ -1748,6 +1748,29 @@ def alone_tab_menu(m):
         closed = sidebar_page(m, "return doc.getElementById('menu').hidden;")
         check("a real click on an item does it, and closes the menu", copied == "https://example.org/?smoke-menu-b" and closed, f"{copied!r}, {closed}")
         m.js(H + """const w = main(); if (w.__before && !w.__before.closing) w.gBrowser.selectedTab = w.__before; await wait(300); return 1;""")
+
+        # The same in the real sidebar, where a page in a tab cannot say what it is like: its
+        # contents cannot be read from here, but where things are can be, and the clipboard shows the result.
+        at = sidebar_page(m, MENU_PAGE + """const r = rowOf(args[0]).getBoundingClientRect(), x = r.left + 30, y = r.top + 8;
+          await rightClick(rowOf(args[0])); const first = rowOf(args[0]).getBoundingClientRect();
+          const item = [...menu.querySelectorAll(".item")].find(i => i.textContent === "Copy address").getBoundingClientRect();
+          menu.hidden = true;
+          return {x, y, dx: item.left + 12 - (first.left + 8), dy: item.top + 8 - (first.top + 8)};""", b)
+        base = m.js(H + """const w = main(); w.focus(); await wait(300);
+          // A panel of Firefox's own (it says when an extension hides tabs) would take the first click.
+          for (const p of w.document.querySelectorAll("panel, menupopup")) if (p.state === "open") p.hidePopup();
+          await wait(300); const r = w.SidebarController.browser.getBoundingClientRect(); return [r.left, r.top];""")
+        m.js(clipboard + 'Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString("before"); return 1;')
+        pointer = lambda x, y, button: m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "x": int(x), "y": int(y), "duration": 0}, {"type": "pointerDown", "button": button}, {"type": "pointerUp", "button": button}]}]})
+        x, y = base[0] + at["x"], base[1] + at["y"]
+        pointer(x, y, 2)
+        m.cmd("WebDriver:ReleaseActions")
+        time.sleep(0.5)
+        pointer(x + at["dx"], y + at["dy"], 0)
+        m.cmd("WebDriver:ReleaseActions")
+        copied = m.js(clipboard + 'await until(() => read() !== "before", 3000); return read();')
+        check("in the real sidebar, a real right click opens the menu and its item copies the address", copied == "https://example.org/?smoke-menu-b", repr(copied))
     finally:
         # Nothing of this for the groups after it. The folders' tabs first, as they are saved.
         clear_rules()
