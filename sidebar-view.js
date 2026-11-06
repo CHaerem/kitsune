@@ -18,8 +18,8 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 // page's (see ghost.js); an essential shows its short name if it has one.
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
-  active: t.active, loaded: !t.discarded && !isGhostUrl(t.url),
-  sound: ownSound(t), soundTabId: t.id, // with Tidier alone, the real page's (addSounds)
+  active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
+  sound: ownSound(t), soundTabId: t.id, // what a row shows; with Tidier alone, the real page's (addSounds)
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
