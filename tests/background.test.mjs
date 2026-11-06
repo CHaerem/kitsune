@@ -1178,3 +1178,19 @@ test("after a start the selected tab decides the space, whatever the window reme
   assert.equal(ff.tabs.get(other.id).hidden, true);
   x.kill();
 });
+
+test("a tab pinned and closed at once, reopened, is an essential and no synced tab", async () => {
+  const { ff, x, windows: [a] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.run(40); // its essential's key is on it, its synced key not yet gone
+  ff.closeTab(t.id);
+  await ff.clock.idle(60000);
+  const reopened = ff.reopenLast();
+  await ff.clock.idle(60000);
+  assert.equal(ff.values.get(reopened.id)?.syncKey, undefined);
+  assert.equal(ff.values.get(reopened.id)?.syncRole, undefined);
+  assert.equal(x.js("syncKeyByTab").get(reopened.id), undefined);
+  x.kill();
+});

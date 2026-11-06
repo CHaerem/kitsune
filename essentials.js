@@ -53,7 +53,8 @@ async function keyOf(tab) {
   if (value === null) return undefined; // closed meanwhile
   const shown = placeholderOf(tab.url);
   const key = value ?? (shown.kind === "essential" ? shown.key : undefined);
-  if (key) keyByTab.set(tab.id, key);
+  if (key && !value) await tagTab(tab.id, key); // for the next start too
+  else if (key) keyByTab.set(tab.id, key);
   return key;
 }
 
@@ -386,6 +387,8 @@ async function reopenedEssential(tab) {
   const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
   if (!key || busy.has(tab.id) || !(await getList()).some(e => e.key === key)) return;
   keyByTab.set(tab.id, key);
+  // Closed right after it was pinned, it can still have what it had as a synced tab.
+  await clearRole(tab.id);
   await dropDoubleCopies(tab.id, tab.windowId);
   await oneLoaded(key); // its load began before it was known as this essential
 }
