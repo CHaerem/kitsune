@@ -87,6 +87,8 @@ browser.runtime.onConnect.addListener(port => {
       await browser.tabs.create({ windowId, cookieStoreId: msg.space });
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
+    } else if (msg.type === "undo") {
+      await undoNote(windowId, msg.note); // quiet.js: taken at once, carried out in the queue
     } else if (tidierAlone) {
       await serial(() => sidebarAction(windowId, msg)).catch(() => {}); // logged by serial()
     }
@@ -106,7 +108,6 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "foldFolder") await foldFolder(msg.key, msg.collapsed);
   else if (msg.type === "deleteFolder") await deleteFolder(msg.key, windowId);
   else if (msg.type === "clearSpace") await clearSpace(windowId, msg.space); // quiet.js
-  else if (msg.type === "undo") await undoNote(windowId, msg.note); // quiet.js
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);

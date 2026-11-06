@@ -90,6 +90,15 @@ function twoWindows(ff, keys, { active = keys[0] } = {}) {
 const keysOf = (ff, windowId) => ff.list(windowId).filter(t => !t.pinned).map(t => ff.values.get(t.id)?.syncKey);
 const tabOf = (ff, windowId, k) => ff.list(windowId).find(t => ff.values.get(t.id)?.syncKey === k);
 
+const until = async (test, what = "the state waited for") => {
+  for (let i = 0; i < 400; i++) { if (test()) return; await realSleep(5); }
+  assert.fail(`never came: ${what}`);
+};
+const closed = async (x, port, ff, w, keys) => {
+  for (const k of keys) port.send({ type: "close", tabId: tabOf(ff, w.id, k).id });
+  await until(() => noteIn(x, w.id), "the line");
+};
+
 test("closes within a moment are one group, and the line offers to undo them", async () => {
   const ff = new FakeFirefox();
   const { w } = twoWindows(ff, ["a", "b", "c", "d"]);
@@ -258,6 +267,25 @@ test("the same address closed in another container does not come back as this ta
   assert.equal(tabOf(ff, w.id, "b").cookieStoreId, C1);
   assert.ok(tabOf(ff, w.id, "b").url.startsWith(GHOST("ghost", "b")));
   assert.equal(ff.list(w.id).filter(t => t.cookieStoreId === C2).length, 0, "the wrong one is closed again");
+  x.kill();
+});
+
+test("the same address closed in another container since: the tab's own entry is found behind it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { far: entry(addr("b"), { cookieStoreId: C2 }) };
+  const { w } = twoWindows(ff, ["a", "b", "c"]);
+  const far = ff.addTab(w.id, { url: addr("b"), cookieStoreId: C2 }, { syncKey: "far", syncRole: "live" });
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  await closed(x, port, ff, w, ["b", "c"]);
+  const note = x.js("quietNotes").get(w.id);
+  await x.b.tabs.remove(far.id); // newest in Recently Closed, with the same address
+  await until(() => !ff.synced.far, "gone from the record");
+  await x.js("serial")(note.undo);
+  await wait(1000);
+  assert.equal(tabOf(ff, w.id, "b").url, addr("b"), "its own entry, with its history, not a placeholder");
+  assert.equal(tabOf(ff, w.id, "b").cookieStoreId, C1);
+  assert.equal(ff.list(w.id).filter(t => t.cookieStoreId === C2).length, 0, "the other one is closed again");
   x.kill();
 });
 
@@ -477,4 +505,240 @@ test("with the setting off, a close only closes and nothing is said or remembere
   await wait(500);
   assert.equal(ff.list(w.id).length, left);
   x.kill();
+});
+
+// --- Found by trying to break it ------------------------------------------------------
+
+test("Undo clicked in time counts, however long the queue then keeps it waiting", async () => {
+  const ff = new FakeFirefox();
+  const { w, other } = twoWindows(ff, ["a", "b", "c"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  const before = keysOf(ff, w.id);
+  let free;
+  await closed(x, port, ff, w, ["b", "c"]);
+  x.js("serial")(() => new Promise(r => { free = r; })); // a long job, such as a page asking
+  port.send({ type: "undo", note: noteIn(x, w.id).id });
+  assert.equal(noteIn(x, w.id), null, "the line goes at once, not when the queue is free");
+  await wait(12000); // longer than the note lasts
+  free();
+  await until(() => keysOf(ff, w.id).length === 3, "the tabs back");
+  assert.deepEqual(keysOf(ff, w.id), before);
+  assert.deepEqual(keysOf(ff, other.id), before);
+  x.kill();
+});
+
+test("a second click on Undo, or one on a line already gone, does nothing", async () => {
+  const ff = new FakeFirefox();
+  const { w } = twoWindows(ff, ["a", "b", "c"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  await closed(x, port, ff, w, ["b", "c"]);
+  const { id } = noteIn(x, w.id);
+  port.send({ type: "undo", note: id + 1 });
+  assert.ok(noteIn(x, w.id), "another note's click leaves this one");
+  port.send({ type: "undo", note: id });
+  port.send({ type: "undo", note: id });
+  await until(() => keysOf(ff, w.id).length === 3, "the tabs back");
+  await wait(2500);
+  assert.equal(ff.restored.length, 2);
+  assert.deepEqual(keysOf(ff, w.id), ["a", "b", "c"]);
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+test("a tab reopened with ⌘⇧T before Undo is not there twice", async () => {
+  const ff = new FakeFirefox();
+  const { w, other } = twoWindows(ff, ["a", "b", "c"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  await closed(x, port, ff, w, ["b", "c"]);
+  await x.b.sessions.restore(ff.recentlyClosed.find(c => c.tab.url === addr("c")).tab.sessionId);
+  await until(() => Object.values(ff.synced).some(e => e.url === addr("c")), "it is a tab again");
+  await undoOf(x, w.id);
+  await wait(2500);
+  const rowsOf = (windowId, k) => ff.list(windowId).filter(t => t.url === addr(k) || t.url.startsWith(GHOST("ghost", k)));
+  assert.equal(rowsOf(w.id, "c").length, 1, "once in this window");
+  assert.equal(ff.list(other.id).filter(t => ff.synced[ff.values.get(t.id)?.syncKey]?.url === addr("c")).length, 1, "and once in the other");
+  assert.equal(Object.values(ff.synced).filter(e => e.url === addr("c")).length, 1);
+  assert.ok(tabOf(ff, w.id, "b"), "the other tab is back");
+  x.kill();
+});
+
+test("Undo from another space stays there: no window changes space while tabs come back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { y: entry(addr("y"), { cookieStoreId: C2 }), z: entry(addr("z"), { cookieStoreId: C2 }) };
+  const { w, other } = twoWindows(ff, ["a", "b", "c", "d"]);
+  ff.addTab(w.id, { url: addr("y"), title: "y", cookieStoreId: C2 }, { syncKey: "y", syncRole: "live" });
+  ff.addTab(other.id, { url: GHOST("ghost", "y"), title: "y", discarded: true, cookieStoreId: C2 }, { syncKey: "y", syncRole: "ghost" });
+  const zHere = ff.addTab(other.id, { url: addr("z"), title: "z", cookieStoreId: C2 }, { syncKey: "z", syncRole: "live" });
+  ff.addTab(w.id, { url: GHOST("ghost", "z"), title: "z", discarded: true, cookieStoreId: C2 }, { syncKey: "z", syncRole: "ghost" });
+  const x = await alone(ff);
+  const port = sidebar(x, w.id), far = sidebar(x, other.id);
+  await closed(x, port, ff, w, ["b", "c"]);
+  // Now somewhere else, in both windows.
+  ff.select(tabOf(ff, w.id, "y").id);
+  ff.select(zHere.id);
+  await until(() => port.views.at(-1)?.space === C2 && far.views.at(-1)?.space === C2, "both on the other space");
+  await wait(500);
+  const spaces = [];
+  x.b.sessions.setWindowValue = async (id, name, value) => { spaces.push(value); };
+  port.views.length = 0; far.views.length = 0;
+  await undoOf(x, w.id);
+  await wait(2500);
+  assert.ok(tabOf(ff, w.id, "b"), "they are back");
+  assert.deepEqual(spaces, [], "neither window's space is touched");
+  assert.ok([...port.views, ...far.views].every(v => v.space === C2), "nor shown otherwise for a moment");
+  assert.ok(tabOf(ff, w.id, "y").active && ff.tabs.get(zHere.id).active, "and each window is on the tab it was on");
+  x.kill();
+});
+
+test("a tab that goes while it comes back does not stop the others", async () => {
+  const ff = new FakeFirefox();
+  const { w, other } = twoWindows(ff, ["a", "b", "c", "d"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  await closed(x, port, ff, w, ["b", "c"]);
+  const restore = x.b.sessions.restore;
+  let first = true;
+  x.b.sessions.restore = async id => { const r = await restore(id); if (first) { first = false; ff.rm(r.tab.id); } return r; };
+  await undoOf(x, w.id);
+  await wait(1000);
+  assert.deepEqual(keysOf(ff, w.id), ["a", "b", "c", "d"], "what could not come back as a page is a placeholder");
+  assert.deepEqual(keysOf(ff, other.id), ["a", "b", "c", "d"]);
+  assert.equal(x.js("liveTabId")("c") === undefined, false);
+  const stale = [...x.js("syncKeyByTab").keys()].filter(id => !ff.tabs.has(id));
+  assert.deepEqual(stale, [], "nothing kept of the tab that went");
+  x.kill();
+});
+
+test("deleting a live folder does not make a page with unsaved input ask: it stays, as an ordinary tab", async () => {
+  const ff = new FakeFirefox();
+  const pr = addr("pr"), other = addr("pr2");
+  ff.store.liveFolders = { prs: { groupKey: "F", dismissed: [] } };
+  ff.store.syncedTabs = {
+    F: folder("PRs", 1, { live: "prs" }),
+    pr: entry(pr, { liveUrl: pr, liveFolder: "prs", parentKey: "F" }),
+    pr2: entry(other, { liveUrl: other, liveFolder: "prs", parentKey: "F" }),
+  };
+  const { w } = twoWindows(ff, ["a", "pr", "pr2"], { active: "a" });
+  ff.refuseDiscard = new Set([tabOf(ff, w.id, "pr").id]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  const t0 = Date.now();
+  port.send({ type: "deleteFolder", key: "F" });
+  await until(() => noteIn(x, w.id), "the line");
+  assert.ok(!ff.synced.F);
+  assert.ok(!ff.synced.pr2, "the search decides the others");
+  assert.ok(tabOf(ff, w.id, "pr"), "this one stays, without Firefox asking");
+  assert.equal(ff.synced.pr.parentKey, null);
+  assert.equal(ff.synced.pr.liveFolder, undefined, "it is not the search's any more");
+  assert.ok(ff.synced.pr.added >= t0, "and counts as new");
+  await undoOf(x, w.id);
+  await wait(500);
+  assert.equal(ff.synced.pr.parentKey, "F");
+  assert.equal(ff.synced.pr.liveFolder, "prs");
+  assert.equal(ff.synced.pr.liveUrl, pr);
+  assert.deepEqual(keysOf(ff, w.id), ["a", "pr", "pr2"]);
+  x.kill();
+});
+
+test("undo of a live folder that its next refresh has brought back adds nothing", async () => {
+  const ff = new FakeFirefox();
+  const pr = addr("pr");
+  ff.store.syncedTabs = { F: folder("PRs", 1, { live: "prs" }), pr: entry(pr, { liveUrl: pr, liveFolder: "prs", parentKey: "F" }) };
+  const { w } = twoWindows(ff, ["a", "pr"], { active: "a" });
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  port.send({ type: "deleteFolder", key: "F" });
+  await until(() => noteIn(x, w.id), "the line");
+  const { undo } = x.js("quietNotes").get(w.id);
+  await x.js("serial")(() => x.js("createFolder")("PRs", C1, { live: "prs" }));
+  await x.js("serial")(undo);
+  await wait(500);
+  assert.ok(!ff.synced.F, "not the old one beside the new one");
+  assert.equal(Object.values(ff.synced).filter(e => e.live === "prs").length, 1);
+  assert.ok(!tabOf(ff, w.id, "pr"), "and the refresh decides its tabs");
+  x.kill();
+});
+
+test("a tab you select while Clear is at work stays", async () => {
+  const ff = new FakeFirefox();
+  const { w } = twoWindows(ff, ["a", "b", "c", "d"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  const discard = x.b.tabs.discard;
+  let first = true;
+  x.b.tabs.discard = async id => { if (first) { first = false; ff.select(tabOf(ff, w.id, "c").id); } return discard(id); };
+  port.send({ type: "clearSpace", space: C1 });
+  await until(() => noteIn(x, w.id), "the line");
+  assert.ok(tabOf(ff, w.id, "c")?.active, "you are on it, and on it you stay");
+  assert.ok(!tabOf(ff, w.id, "b"));
+  x.kill();
+});
+
+test("an ordinary placeholder with no page anywhere has no ⌘⇧T, so the line offers it back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { p: entry(addr("p"), { title: "P" }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: addr("here"), active: true, cookieStoreId: C1 });
+  const ghost = ff.addTab(w.id, { url: GHOST("ghost", "p"), title: "P", discarded: true, cookieStoreId: C1 }, { syncKey: "p", syncRole: "ghost" });
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  port.send({ type: "close", tabId: ghost.id });
+  await until(() => noteIn(x, w.id), "the line");
+  assert.equal(noteIn(x, w.id).text, "Tab removed");
+  await undoOf(x, w.id);
+  await wait(500);
+  assert.ok(ff.synced.p);
+  assert.ok(tabOf(ff, w.id, "p").url.startsWith(GHOST("ghost", "p")));
+  x.kill();
+});
+
+test("a link from another app in the moment of an Undo still goes to the space you are in", async () => {
+  const ff = new FakeFirefox();
+  const { w } = twoWindows(ff, ["a", "b", "c"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  await closed(x, port, ff, w, ["b", "c"]);
+  const move = x.b.tabs.move;
+  let link = null;
+  x.b.tabs.move = async (id, to) => {
+    if (!link) {
+      link = ff.addTab(w.id, { url: "about:blank" });
+      x.b.tabs.onCreated.fire(ff.snap(link));
+    }
+    return move(id, to);
+  };
+  await undoOf(x, w.id);
+  assert.ok(link, "tabs were moved back into place");
+  ff.navigate(link.id, addr("link"), "Link");
+  await until(() => !ff.tabs.has(link.id), "the link opened again in the space");
+  assert.ok(ff.list(w.id).some(t => t.url === addr("link") && t.cookieStoreId === C1));
+  x.kill();
+});
+
+test("a tab dragged out of a folder counts as new, or archiving could take it at its next look", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: folder("Work", 1), G: folder("Other", 2), a: entry(addr("a"), { parentKey: "F", saved: { url: addr("a") }, added: 5 }), b: entry(addr("b"), { added: 6 }) };
+  const { w } = twoWindows(ff, ["here", "a", "b"], { active: "here" });
+  const x = await alone(ff);
+  const t0 = Date.now();
+  const move = (k, folderKey) => x.js("serial")(() => x.js("moveTab")(w.id, tabOf(ff, w.id, k).id, null, folderKey));
+  await move("b", null);
+  assert.equal(ff.synced.b.added, 6, "it was in no folder");
+  await move("a", undefined);
+  assert.equal(ff.synced.a.added, 5, "a move within its place changes nothing");
+  await move("a", "G");
+  assert.equal(ff.synced.a.added, 5, "from one folder to another it stays kept");
+  await move("a", null);
+  await wait(500); // the record is written a moment later
+  assert.ok(ff.synced.a.added >= t0);
+  x.kill();
+});
+
+test("quiet.js comes after spaces.js, whose listener for a new tab it follows", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { scripts } = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8")).background;
+  assert.ok(scripts.indexOf("quiet.js") > scripts.indexOf("spaces.js"));
 });

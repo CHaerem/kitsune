@@ -37,7 +37,9 @@ async function foldFolder(key, collapsed) {
 }
 
 // Deleting a folder loses nothing: its tabs become ordinary tabs, which archiving
-// then tidies as usual. (A live folder's tabs go with it: the search decides them.)
+// then tidies as usual. (A live folder's tabs go with it: the search decides them. But a
+// page with unsaved input must not make Firefox ask at a moment you did not choose, so
+// that one stays, as an ordinary tab.)
 // Archiving would otherwise take a tab last used over 12 hours ago at its next look,
 // so "its tabs stay" would not be true: a tab that leaves counts as new from here.
 // In the sidebar (`windowId`) the line offers to undo it (quiet.js).
@@ -47,8 +49,10 @@ async function deleteFolder(key, windowId) {
   const undo = windowId === undefined ? undefined : await rememberFolder(all, key, windowId);
   const gone = Object.keys(all).filter(k => all[k].parentKey === key);
   for (const k of gone) {
-    if (all[k].liveFolder) await closeEverywhere(k, { dismiss: false });
-    else Object.assign(all[k], { parentKey: all[key].parentKey ?? null, added: Date.now() });
+    if (all[k].liveFolder && await closesQuietly(k)) { await closeEverywhere(k, { dismiss: false }); continue; }
+    Object.assign(all[k], { parentKey: all[key].parentKey ?? null, added: Date.now() });
+    delete all[k].liveFolder;
+    delete all[k].liveUrl;
   }
   delete all[key];
   noteSaved(all);
@@ -75,6 +79,8 @@ async function moveTab(windowId, tabId, beforeTabId, folderKey) {
   const key = syncKeyByTab.get(tabId), beforeKey = beforeTabId ? syncKeyByTab.get(beforeTabId) : null;
   if (key && all[key]) {
     if (folderKey !== undefined && !all[key].liveFolder && !all[folderKey]?.live) {
+      // Out of its folder it counts as new, or archiving could take it at its next look.
+      if (!folderKey && all[key].parentKey) all[key].added = Date.now();
       all[key].parentKey = folderKey;
       noteSaved(all, [key]);
       saveSynced(all);
