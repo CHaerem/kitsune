@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>Tidier</title>
+  <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="sidebar.css">
 </head>
 <body>
@@ -12,13 +13,13 @@
   <section id="essentials" aria-label="Essentials"></section>
   <div id="space-name"></div>
   <div id="actions">
-    <button id="new-tab" title="New tab">＋ New tab</button>
-    <button id="new-folder" title="New folder">＋</button>
+    <button id="new-tab" title="New tab">New tab</button>
+    <button id="new-folder" title="New folder" aria-label="New folder"></button>
   </div>
   <main id="tabs" aria-label="Tabs"></main>
   <div id="problem" class="notice" hidden></div>
   <nav id="spaces" aria-label="Spaces"></nav>
-  <div id="menu" hidden></div>
+  <div id="menu" class="raised" hidden></div>
   <script src="sidebar.js"></script>
   <script src="menu.js"></script>
   <script src="drag.js"></script>

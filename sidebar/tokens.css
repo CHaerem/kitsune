@@ -1,0 +1,111 @@
+/* Tidier's look, in one place: everything it draws links this file (the sidebar,
+ * the settings page, and whatever opens above them, such as a command bar), so they
+ * are one design. A page only says how things are laid out and uses these names.
+ *
+ * The idea, from Arc: the window is a tinted surface, and what is on it lifts towards
+ * white. Nothing on it is darker than the surface, so a light sidebar never looks
+ * dirty; only the selected thing is a card, with a whisper of shadow. Text is
+ * see-through rather than grey, so it takes on the space's tint by itself. */
+
+:root {
+  color-scheme: light dark;
+
+  /* The surface. The window's own colour (userChrome.css's --zen-frame): a sidebar
+   * cannot be transparent, so the owner's tidier.css repeats the tint per space, keyed
+   * on html[data-space], which is why this stays a plain :root rule it can override. */
+  --frame: light-dark(#ececf0, #1f1f23);
+
+  /* The one colour: the active space's, set by sidebar.js. For what must be found at
+   * a glance (the active space, where a drop lands, the keyboard's place), not for decoration. */
+  --accent: #7a7a80;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 62%, transparent);
+
+  /* Text. --muted keeps 4.5:1 on all four light tints: the title of an unloaded tab is
+   * still something you read, only quieter. */
+  --text: light-dark(rgb(28 25 23 / .93), rgb(255 252 248 / .93));
+  --muted: light-dark(rgb(28 25 23 / .64), rgb(255 252 248 / .58));
+  --faint: light-dark(rgb(28 25 23 / .42), rgb(255 252 248 / .38));
+
+  /* What lifts off the surface, least to most. */
+  --tile: light-dark(rgb(255 255 255 / .4), rgb(255 255 255 / .055));
+  --hover: light-dark(rgb(255 255 255 / .46), rgb(255 255 255 / .065));
+  --tile-hover: light-dark(rgb(255 255 255 / .72), rgb(255 255 255 / .105));
+  --selected: light-dark(rgb(255 255 255 / .97), rgb(255 255 255 / .14));
+  /* A small button on something lifted, where another lift would not show. */
+  --press: light-dark(rgb(40 30 20 / .065), rgb(255 255 255 / .11));
+  --line: light-dark(rgb(40 30 20 / .085), rgb(255 255 255 / .085));
+  /* Warm, as shadows are on a warm surface; a hairline first, so the card has an edge
+   * on the white-ish tints too. */
+  --shadow-card:
+    0 0 0 .5px light-dark(rgb(40 30 20 / .05), rgb(255 255 255 / .045)),
+    0 1px 2px light-dark(rgb(40 30 20 / .07), rgb(0 0 0 / .28)),
+    0 2px 10px light-dark(rgb(40 30 20 / .05), rgb(0 0 0 / .16));
+
+  /* What opens above the surface (menus, a command bar): take it with class="raised". */
+  --raised: light-dark(#fff, #2d2c30);
+  --shadow-raised:
+    0 0 0 .5px light-dark(rgb(40 30 20 / .1), rgb(255 255 255 / .09)),
+    0 2px 4px light-dark(rgb(40 30 20 / .06), rgb(0 0 0 / .24)),
+    0 10px 28px light-dark(rgb(40 30 20 / .14), rgb(0 0 0 / .4));
+
+  /* Shape. --radius is the same as the page card's and the address bar's corners
+   * (userChrome.css's --zen-radius), so the sidebar's corners rhyme with the window's. */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 13px;
+
+  /* The grid. A row is 8 + icon + 10, then the title, so the icons stand under the
+   * address bar's shield and the titles under its text; a folder's tabs are indented by
+   * exactly one icon and gap, so their icons stand under the folder's name. */
+  --pad: 8px;
+  --row: 32px;
+  --row-gap: 2px;
+  --icon: 16px;
+  --icon-gap: 10px;
+  --indent: calc(var(--icon) + var(--icon-gap));
+  --button: 22px; /* a small button in a row, centred in it: (32 - 22) / 2 from the edges */
+
+  /* Type. The system's own: it loads instantly and reads as part of the Mac. */
+  --font: system-ui, -apple-system, sans-serif;
+  --size: 13px;
+  --size-small: 11.5px;
+  --line-height: 18px;
+
+  /* Motion: short, and only for what you caused. */
+  --quick: .12s ease;
+  --soft: .18s cubic-bezier(.2, .7, .2, 1);
+  --spring: .24s cubic-bezier(.3, 1.5, .6, 1); /* the one playful thing: a small overshoot */
+
+  /* Icons, drawn here and used as masks, so they take the colour of the text. */
+  --icon-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.75v8.5M3.75 8h8.5' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  --icon-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5l7 7m0-7l-7 7' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  --icon-folder: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 4.75C2 3.78 2.78 3 3.75 3h2.13c.46 0 .9.18 1.23.51L8.1 4.5h4.15c.97 0 1.75.78 1.75 1.75v5c0 .97-.78 1.75-1.75 1.75h-8.5C2.78 13 2 12.22 2 11.25z' fill='%23000' fill-opacity='.2' stroke='%23000' stroke-width='1.35' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --icon-folder-open: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.35' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M2.2 11.9V4.75C2.2 3.78 2.98 3 3.95 3h1.93c.46 0 .9.18 1.23.51L8.1 4.5h3.15c.97 0 1.75.78 1.75 1.75V7'/%3E%3Cpath d='M4.72 7h8.72c.7 0 1.2.68 1 1.35l-1.03 3.4c-.22.74-.9 1.25-1.67 1.25H3.2c-.7 0-1.2-.68-1-1.35l1.03-3.4C3.45 7.51 4.06 7 4.72 7z'/%3E%3C/g%3E%3C/svg%3E");
+  --icon-folder-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.35' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M2 4.75C2 3.78 2.78 3 3.75 3h2.13c.46 0 .9.18 1.23.51L8.1 4.5h4.15c.97 0 1.75.78 1.75 1.75v5c0 .97-.78 1.75-1.75 1.75h-8.5C2.78 13 2 12.22 2 11.25z'/%3E%3Cpath d='M8 7v3.6M6.2 8.8h3.6'/%3E%3C/g%3E%3C/svg%3E");
+  --icon-live: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 8a5 5 0 0 1-8.7 3.36M3 8a5 5 0 0 1 8.7-3.36'/%3E%3Cpath d='M12.2 2.2v2.6H9.6M3.8 13.8v-2.6h2.6'/%3E%3C/g%3E%3C/svg%3E");
+  --icon-sound: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 6.4v3.2c0 .39.31.7.7.7h1.8l2.86 2.4c.46.38 1.14.06 1.14-.53V3.83c0-.6-.68-.92-1.14-.54L4.5 5.7H2.7c-.39 0-.7.31-.7.7z'/%3E%3Cpath d='M10.9 5.9a3 3 0 0 1 0 4.2M12.8 4.1a5.6 5.6 0 0 1 0 7.8' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+  --icon-muted: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 6.4v3.2c0 .39.31.7.7.7h1.8l2.86 2.4c.46.38 1.14.06 1.14-.53V3.83c0-.6-.68-.92-1.14-.54L4.5 5.7H2.7c-.39 0-.7.31-.7.7z'/%3E%3Cpath d='M11 6.2l3.4 3.6m0-3.6L11 9.8' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+
+  font: var(--size) / var(--line-height) var(--font);
+  /* As native Mac text is drawn: without it Firefox thickens light text on dark. */
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* On what opens above the surface a lift towards white would not show, so here
+ * things lift by darkening instead. */
+.raised {
+  --hover: light-dark(rgb(40 30 20 / .06), rgb(255 255 255 / .085));
+  --press: light-dark(rgb(40 30 20 / .1), rgb(255 255 255 / .13));
+  --selected: light-dark(rgb(40 30 20 / .09), rgb(255 255 255 / .12));
+  background: var(--raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text);
+}
+
+/* The colour of a selected piece of text, anywhere. */
+::selection { background: color-mix(in srgb, var(--accent) 32%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after { transition: none !important; animation: none !important; }
+}

@@ -1,117 +1,245 @@
-/* Tidier's sidebar: calm and plain, like Zen and Arc. The window's own
- * background (userChrome.css in dotfiles) shows through, so the sidebar and
- * the window are one surface; the active space's colour is the accent. */
+/* Tidier's sidebar, on the window's own surface: the list floats on the tint, the
+ * selected tab is a soft card. The names and values are in tokens.css. */
 
-:root {
-  color-scheme: light dark;
-  --text: light-dark(#1d1d1f, #ececf0);
-  --muted: light-dark(#6e6e73, #a1a1a6);
-  --hover: light-dark(rgba(0, 0, 0, .05), rgba(255, 255, 255, .07));
-  --selected: light-dark(rgba(255, 255, 255, .85), rgba(255, 255, 255, .12));
-  --tile: light-dark(rgba(0, 0, 0, .045), rgba(255, 255, 255, .06));
-  --accent: #7a7a80; /* the active space's colour, set by sidebar.js */
-  --radius: 8px;
-  --row: 32px;
-  font: 13px/1.3 system-ui, -apple-system, sans-serif;
-}
-
-/* The window's own colour (userChrome.css's --zen-frame); a sidebar cannot be
- * transparent, so your tidier.css (dotfiles) sets it per space. */
-html { --frame: light-dark(#ececf0, #1f1f23); background: var(--frame); transition: background-color .25s ease; }
+html { background: var(--frame); transition: background-color .25s ease; } /* as the window's own (userChrome.css) */
 html, body { height: 100%; margin: 0; }
 body {
-  display: flex; flex-direction: column;
+  display: flex; flex-direction: column; box-sizing: border-box;
+  padding: 4px var(--pad) 0; overflow: hidden;
   background: transparent; color: var(--text);
-  padding: 4px 8px 0; box-sizing: border-box;
-  user-select: none; overflow: hidden;
+  user-select: none;
 }
+button { font: inherit; color: inherit; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
 
-/* Essentials: a grid of tiles, as in Zen and Arc. */
+/* --- Essentials ------------------------------------------------------------------
+ * Generous tiles that fill their row, as in Arc: four across at usual widths, up to six
+ * in the widest sidebar, and a space with only a few has them wide, not huddled in a
+ * corner. Their height moves in whole steps, so an edge never lands between two pixels. */
 #essentials {
-  display: grid; gap: 6px; padding: 4px 0 10px;
-  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  display: grid; gap: 6px; margin: 4px 0 10px;
+  grid-template-columns: repeat(auto-fit, minmax(max(46px, min(19%, 72px)), 1fr));
+  transition: background-color var(--quick), box-shadow var(--quick);
 }
 #essentials:empty { display: none; }
 .tile {
-  height: 40px; border-radius: var(--radius); background: var(--tile);
-  display: grid; place-items: center; cursor: default;
+  position: relative; height: clamp(42px, round(14.5vw, 2px), 50px);
+  display: grid; place-items: center;
+  border-radius: var(--radius-lg); background: var(--tile); cursor: default;
+  transition: background-color var(--quick), box-shadow var(--quick), transform var(--quick);
 }
-.tile:hover { background: var(--hover); }
-.tile.active { background: var(--selected); box-shadow: 0 0 0 1.5px var(--accent) inset; }
-.tile img, .tile .letter { width: 18px; height: 18px; }
-.tile.unloaded img { opacity: .55; }
+.tile:hover { background: var(--tile-hover); }
+.tile:active { transform: scale(.97); }
+.tile.active { background: var(--selected); box-shadow: var(--shadow-card); }
+.tile img, .tile .letter { width: 20px; height: 20px; }
+.tile .letter { border-radius: var(--radius-sm); font-size: 11px; }
 
-/* Folders and tabs. */
-#tabs { flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }
+/* --- Icons --------------------------------------------------------------------- */
+/* The halo: an icon that is all white or all black would vanish on one scheme's card.
+ * On any other it does not show. */
+img { filter: drop-shadow(0 0 .5px light-dark(rgb(40 30 20 / .3), rgb(255 255 255 / .34))); }
+/* A live folder's tabs all have GitHub's mark (livefolders.js), black when Firefox got it
+ * from the placeholder and white once the page has set its own for dark. On dark, a row of
+ * black ones would be a row of holes, so there it is a pale mark whichever it got. */
+@media (prefers-color-scheme: dark) { .folder.live .tab img { filter: brightness(0) invert(.9); } }
+/* An unloaded tab is quieter, and wakes up under the mouse. */
+.unloaded :is(img, .letter) { opacity: .66; transition: opacity var(--quick); }
+.unloaded:hover :is(img, .letter) { opacity: 1; }
+/* A page with no icon gets its first letter: a placeholder, so no louder than an icon. */
+.letter {
+  display: grid; place-items: center; border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 20%, var(--tile));
+  color: color-mix(in srgb, var(--accent) 45%, var(--text));
+  font-size: 10px; line-height: 1; font-weight: 600; text-transform: uppercase;
+}
+
+/* --- The list ---------------------------------------------------------------------
+ * The list reaches the sidebar's edges, its rows kept in by padding, or the selected
+ * card's shadow would be cut off at its sides. It fades out where it ends instead of
+ * being cut by a line: the bottom always, as a list that goes on, and the top in the
+ * little padding that is there at rest, so only what scrolled up fades. */
+#tabs:focus-visible { outline: none; } /* a scrolling list takes the keyboard's focus; the keys have .cursor */
+#tabs {
+  flex: 1; min-height: 0; overflow: hidden auto;
+  margin: 0 calc(-1 * var(--pad)); padding: 6px var(--pad) 20px;
+  scroll-padding: 6px 0 22px; /* so the keys' place, scrolled to, stays clear of the fades */
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  mask-image: linear-gradient(to bottom, transparent, #000 6px, #000 calc(100% - 20px), transparent);
+}
 .row {
-  height: var(--row); display: flex; align-items: center; gap: 8px;
-  padding: 0 8px; border-radius: var(--radius); cursor: default;
+  position: relative; box-sizing: border-box;
+  height: var(--row); margin-bottom: var(--row-gap);
+  display: flex; align-items: center; gap: var(--icon-gap);
+  padding: 0 var(--pad); border-radius: var(--radius); cursor: default;
+  transition: background-color var(--quick), box-shadow var(--quick), transform var(--quick);
 }
 .row:hover { background: var(--hover); }
-.row.active { background: var(--selected); }
-.row img, .row .letter { width: 16px; height: 16px; flex: none; }
-.row .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row.unloaded .title { color: var(--muted); }
-.row.unloaded img { opacity: .55; }
-.row .close {
-  visibility: hidden; border: 0; background: none; color: var(--muted);
-  width: 20px; height: 20px; border-radius: 5px; font-size: 14px; line-height: 1;
-}
-.row:hover .close { visibility: visible; }
-.row .close:hover { background: var(--hover); color: var(--text); }
-.letter {
-  display: grid; place-items: center; border-radius: 4px;
-  background: var(--accent); color: white; font-size: 10px; font-weight: 600;
-}
+.row:active { transform: scale(.992); }
+.row.active { background: var(--selected); box-shadow: var(--shadow-card); }
+.row img, .row .letter, .row .chevron { width: var(--icon); height: var(--icon); flex: none; }
 
-.folder > .row .chevron { width: 16px; text-align: center; color: var(--muted); transition: transform .15s ease; }
-.folder.collapsed > .row .chevron { transform: rotate(-90deg); }
-.folder > .children { padding-left: 14px; }
-.folder.collapsed > .children { display: none; }
+/* A long title fades out, as in Arc, rather than ending in dots; and under the mouse
+ * it fades sooner, so the close button has room without anything in the row moving. */
+.row .title {
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.row.tab:hover .title { mask-image: linear-gradient(to right, #000 calc(100% - 42px), transparent calc(100% - 20px)); }
+.row.active .title { font-weight: 500; }
+.row.unloaded .title { color: var(--muted); transition: color var(--quick); }
+.row.unloaded:hover .title { color: var(--text); }
+
+/* The close button lies over the row's end, so a mark for sound can be at the end when
+ * the mouse is not there. */
+.row .close, .row .sound, #new-folder {
+  width: var(--button); height: var(--button); flex: none; padding: 0; border: 0;
+  border-radius: var(--radius-sm); background: none; color: var(--muted);
+  font-size: 0; line-height: 0; /* the character in the markup has no size; what shows is drawn */
+  display: flex; align-items: center; justify-content: center;
+  transition: background-color var(--quick), color var(--quick), opacity var(--quick), transform var(--quick);
+}
+.row .close::before, .row .sound::before, #new-folder::before {
+  content: ""; width: var(--icon); height: var(--icon); background: currentColor;
+  mask: var(--icon-close) center / 14px no-repeat;
+}
+.row .close {
+  position: absolute; right: calc((var(--row) - var(--button)) / 2); top: calc((var(--row) - var(--button)) / 2);
+  visibility: hidden; opacity: 0;
+}
+.row:hover .close { visibility: visible; opacity: 1; }
+.row .close:hover, .row .sound:hover, #new-folder:hover { background: var(--press); color: var(--text); }
+
+/* Sound: where the close button is, and one place in when that comes. The mark says
+ * muted or not in its title. */
+.row .sound { margin-right: -3px; color: var(--muted); }
+.row .sound::before { mask-image: var(--icon-sound); mask-size: 15px; }
+.row .sound[title="Unmute"]::before { mask-image: var(--icon-muted); }
+/* Playing is worth finding at a glance, so it has the space's colour. */
+.row .sound:not([title="Unmute"]) { color: color-mix(in srgb, var(--accent) 60%, var(--text)); }
+.row.tab:hover .sound { transform: translateX(-24px); }
+
+/* --- Folders: an icon in the icons' column, its tabs indented only in their content,
+ * so every card in the list has the same two edges. ------------------------------- */
+.folder > .row .chevron { font-size: 0; background: var(--muted); mask: var(--icon-folder-open) center / contain no-repeat; transition: background-color var(--quick); }
+.folder.collapsed > .row .chevron { mask-image: var(--icon-folder); }
+.folder.live > .row .chevron { mask-image: var(--icon-live); mask-size: 14px; }
+.folder > .row:hover .chevron { background: var(--text); }
+/* The selected tab is in this closed folder: that is where you are. */
+.folder.collapsed:has(.tab.active) > .row { background: var(--hover); }
+.folder.collapsed:has(.tab.active) > .row .chevron { background: var(--accent); }
 .folder > .row .title { font-weight: 500; }
+.folder > .children .row { padding-left: calc(var(--pad) + var(--indent)); }
+.folder.collapsed > .children { display: none; }
+.folder > .children { transition: opacity var(--soft); @starting-style { opacity: 0; } }
+.row .count { flex: none; min-width: var(--icon); text-align: center; color: var(--muted); font-size: var(--size-small); font-variant-numeric: tabular-nums; }
+.row .count:empty { display: none; }
+.row .rename {
+  flex: 1; min-width: 0; height: 26px; box-sizing: border-box;
+  margin: 0 -3px 0 -6px; padding: 0 6px; /* so the name stays where it was */
+  font: inherit; font-weight: 500; color: inherit; user-select: text;
+  background: var(--selected); border: 0; border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1.5px var(--accent-line); outline: none;
+}
 
 /* A thin line between the folders (the kept part) and the other tabs. */
-.divider { height: 1px; margin: 8px 8px; background: var(--hover); }
+.divider { height: 1px; margin: 8px var(--pad) 9px; background: var(--line); }
 
-/* Spaces, at the bottom. */
-#spaces {
-  display: flex; justify-content: center; gap: 4px;
-  padding: 6px 0 8px; border-top: 1px solid var(--hover);
+/* --- The space's name, and what makes a new thing ------------------------------- */
+#space-name:empty, #actions { display: none; }
+#space-name {
+  padding: 0 var(--pad); height: 24px; line-height: 24px;
+  font-size: var(--size-small); font-weight: 600; letter-spacing: .01em;
+  color: color-mix(in srgb, var(--accent) 30%, var(--muted)); white-space: nowrap; overflow: hidden;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
 }
+.alone #actions { display: block; position: relative; }
+#new-tab {
+  width: 100%; height: var(--row); box-sizing: border-box;
+  display: flex; align-items: center; gap: var(--icon-gap); padding: 0 var(--pad);
+  border: 0; border-radius: var(--radius); background: none; color: var(--muted); text-align: left;
+  transition: background-color var(--quick), color var(--quick);
+}
+#new-tab::before { content: ""; width: var(--icon); height: var(--icon); flex: none; background: currentColor; mask: var(--icon-plus) center / contain no-repeat; }
+#actions:hover #new-tab { background: var(--hover); color: var(--text); }
+/* A new folder is not often needed: it shows with the row it belongs to. */
+#new-folder {
+  position: absolute; right: calc((var(--row) - var(--button)) / 2); top: calc((var(--row) - var(--button)) / 2);
+  opacity: 0;
+}
+#new-folder::before { mask-image: var(--icon-folder-plus); mask-size: var(--icon); }
+#actions:hover #new-folder, #new-folder:focus-visible { opacity: 1; }
+
+/* --- Spaces: dots, the active one full and the others a tint of theirs ------------ */
+#spaces { display: flex; justify-content: center; gap: 2px; padding: 2px 0 10px; }
 .space {
-  width: 30px; height: 30px; border-radius: var(--radius); border: 0;
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%;
   background: none; display: grid; place-items: center; cursor: default;
+  transition: background-color var(--quick), transform var(--quick);
 }
 .space:hover { background: var(--hover); }
-.space .dot { width: 10px; height: 10px; border-radius: 50%; background: color-mix(in srgb, var(--color) 45%, transparent); }
-.space.active .dot { background: var(--color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color) 30%, transparent); }
+.space:active { transform: scale(.92); }
+.space .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: color-mix(in srgb, var(--color) 42%, transparent);
+  transition: background-color var(--soft), box-shadow var(--soft), transform var(--spring);
+}
+.space:hover .dot { background: color-mix(in srgb, var(--color) 80%, transparent); transform: scale(1.12); }
+.space.active .dot {
+  background: var(--color); transform: scale(1.25);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--color) 22%, transparent);
+}
 
-/* Tidier alone: the rest of what makes it the sidebar. */
-#space-name:empty, #actions { display: none; }
-#space-name { padding: 2px 8px 6px; font-weight: 600; color: var(--muted); font-size: 12px; }
-.alone #actions { display: flex; gap: 4px; padding-bottom: 6px; }
-#actions button {
-  border: 0; background: none; color: var(--muted); height: 28px; border-radius: var(--radius);
-  padding: 0 8px; font: inherit; text-align: left; cursor: default;
+/* --- Notices: quiet, in the same soft shape as everything else ------------------- */
+.notice {
+  padding: 8px 10px; margin-bottom: 8px; border-radius: var(--radius);
+  background: var(--tile); color: var(--muted); font-size: 12px; line-height: 16px;
 }
-#actions button:hover { background: var(--hover); color: var(--text); }
-#new-tab { flex: 1; }
-#new-folder { flex: none; width: 28px; text-align: center !important; padding: 0 !important; }
-.notice { padding: 6px 8px; margin-bottom: 6px; border-radius: var(--radius); background: var(--tile); color: var(--muted); font-size: 12px; }
 .notice[hidden], #menu[hidden] { display: none; }
-.notice button { width: 100%; border: 0; background: var(--selected); color: var(--text); padding: 6px; border-radius: 6px; font: inherit; }
-.row .sound { border: 0; background: none; width: 20px; height: 20px; padding: 0; font-size: 11px; line-height: 1; border-radius: 5px; }
-.row .sound:hover { background: var(--hover); }
-.row .count { color: var(--muted); font-size: 11px; }
-.row .rename { flex: 1; min-width: 0; font: inherit; color: inherit; background: var(--selected); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 4px; }
-.folder.live > .row .title::after { content: " ⟳"; color: var(--muted); }
-#menu {
-  position: fixed; z-index: 10; min-width: 140px; padding: 4px; border-radius: var(--radius);
-  background: Canvas; color: CanvasText; box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+/* Only a question that takes your click: the button is the whole notice. */
+#hiding { padding: 0; background: none; margin-top: 4px; }
+.notice button {
+  display: block; width: 100%; min-height: var(--row); padding: 6px 10px; border: 0; border-radius: var(--radius);
+  background: var(--selected); box-shadow: var(--shadow-card); color: var(--text); line-height: 16px; text-align: center;
 }
-#menu .item { display: block; width: 100%; border: 0; background: none; color: inherit; padding: 5px 8px; border-radius: 5px; text-align: left; font: inherit; }
+.notice button:hover { background-image: linear-gradient(var(--press), var(--press)); }
+
+/* --- The small menu ------------------------------------------------------------- */
+#menu {
+  position: fixed; z-index: 10; min-width: 150px; padding: 5px; border-radius: var(--radius);
+  transition: opacity .1s ease, scale .1s ease; transform-origin: top left;
+  @starting-style { opacity: 0; scale: .98; }
+}
+#menu .item {
+  display: block; width: 100%; height: 28px; padding: 0 9px; border: 0;
+  border-radius: var(--radius-sm); background: none; color: inherit; text-align: left; white-space: nowrap;
+}
 #menu .item:hover { background: var(--hover); }
-.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
-.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
-.drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
-.cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
+
+/* --- While dragging, and the keyboard's place ------------------------------------
+ * The drop line is drawn on its own, in the gap between rows and from where the content
+ * starts, with a small round end, so it says where and at what depth. */
+.drop-before::after, .drop-after::after {
+  content: ""; position: absolute; z-index: 1; pointer-events: none;
+  left: var(--pad); right: var(--pad); height: 2px; border-radius: 1px; background: var(--accent);
+}
+.drop-before::before, .drop-after::before {
+  content: ""; position: absolute; z-index: 1; pointer-events: none;
+  left: calc(var(--pad) - 2px); width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+.drop-before::after { top: -2px; }
+.drop-before::before { top: -4px; }
+.drop-after::after { bottom: -2px; }
+.drop-after::before { bottom: -4px; }
+.children .row.drop-before::after, .children .row.drop-after::after { left: calc(var(--pad) + var(--indent)); }
+.children .row.drop-before::before, .children .row.drop-after::before { left: calc(var(--pad) + var(--indent) - 2px); }
+.folder.drop-before, .folder.drop-after { position: relative; }
+/* Essentials are side by side, so there the line stands up. */
+.tile.drop-before::after { left: -4px; right: auto; top: 8px; bottom: 8px; width: 2px; height: auto; }
+.tile.drop-before::before { display: none; }
+
+.drop-into { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent-line); }
+.row.drop-into { background: var(--accent-soft); }
+#essentials.drop-into { border-radius: calc(var(--radius-lg) + 4px); box-shadow: 0 0 0 4px var(--accent-soft); }
+#tabs.drop-into { box-shadow: none; mask-image: none; }
+.space.drop-into { box-shadow: inset 0 0 0 1.5px var(--accent-line); }
+.cursor { outline: 1.5px solid var(--accent-line); outline-offset: -1.5px; }
