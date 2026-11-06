@@ -177,13 +177,11 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   throwaway pinned tab holds that spot while the essentials are created.
 - A tab that exists before a new window's sidebar has started gets the last
   active space, whatever its container, and a pinned tab keeps its space. So a
-  new window's essentials are created unpinned, and pinned only once Sidebery's
-  sidebar there has started: their placeholders are loaded again every 0.5 s,
-  so Sidebery moves them to their spaces once it runs, until Sidebery shows
-  that it has (it hides the tabs of the other spaces, or sets which tab to
-  select after closing the current one; at most 4 s; `PROBE_MS` and
-  `SIDEBAR_WAIT_MS` in `common.js`). Just
-  before pinning, each loads its placeholder once more and gets 0.6 s for
+  new window gets its ghosts first and its essentials only once Sidebery shows
+  that its sidebar there has started (it hides the tabs of the other spaces,
+  or sets which tab to select after closing the current one; at most 4 s,
+  `SIDEBAR_WAIT_MS` in `common.js`). Essentials are created unpinned, and just
+  before pinning each loads its placeholder once more and gets 0.6 s for
   Sidebery's container rule. The smoke test opens three windows to check. Up
   to Sidebery 5.6.1 a failure of that check is reported as `KNOWN` and does
   not block a release (`KNOWN_SIDEBERY_BUGS` in `tests/smoke.py`). The fix is
@@ -193,8 +191,8 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
 ## Performance (Firefox 159, Sidebery 5.6, 33 essentials + 53 tabs)
 
 - New window: essentials after ~1.6 s, all tabs after ~1.6 s, sorted after
-  ~3 s (measured before essentials waited for Sidebery's sidebar; pinning
-  now comes ~0.7 s later). Placeholders load briefly and unload themselves;
+  ~3 s (measured before essentials waited for Sidebery's sidebar; they now
+  come ~1.4 s later). Placeholders load briefly and unload themselves;
   only folder copies stay loaded.
 - Selecting a ghost: the live tab is in place after ~50 ms.
 

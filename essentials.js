@@ -60,9 +60,9 @@ async function initList() {
 // real page's title and icon, unloads itself, and opens the real page when
 // you select it. They are created unpinned, so Sidebery puts each in its
 // container's space, and pinned together a moment later; a pinned tab keeps
-// its space (see PIN_SETTLE_MS). In a new window `settle` waits for Sidebery's
-// sidebar there first (see fillWindow), so it is passed in.
-async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
+// its space (see PIN_SETTLE_MS). In a new window they are created only once
+// Sidebery's sidebar there has started (see fillWindow).
+async function createEssentials(windowId, items) { // [{ entry, index }]
   const tabs = [];
   for (const { entry, index } of items) {
     const tab = await browser.tabs.create({
@@ -76,18 +76,17 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
   }
   if (!tabs.length) return;
   try {
-    await settle(tabs);
+    await sleep(PIN_SETTLE_MS);
     await pinEssentialCopies(tabs);
   } finally {
     setTimeout(() => tabs.forEach(({ tab }) => busy.delete(tab.id)), 1500);
   }
 }
 
-// Sidebery gives a tab that existed before a window's sidebar was ready the
-// last active space, ignoring its container rules, and a pinned tab keeps its
-// space (mbnuqw/sidebery#2497). Its container rules are applied again when an
-// unpinned tab's address changes, so each copy loads its placeholder once
-// more, gets a moment to be moved to its own space, and is pinned only then.
+// A pinned tab keeps its space, and Sidebery's container rules are applied
+// again when an unpinned tab's address changes, so before pinning each copy
+// loads its placeholder once more and gets a moment to be moved to its own
+// space (in case it came while Sidebery was busy; see also fillWindow).
 async function pinEssentialCopies(tabs) {
   await reloadPlaceholders(tabs);
   await sleep(RULE_SETTLE_MS);
@@ -104,7 +103,7 @@ async function reloadPlaceholders(tabs) {
 }
 
 // Add any essentials a window is missing. Safe to run repeatedly.
-async function ensureWindow(windowId, settle) {
+async function ensureWindow(windowId) {
   const list = await getList();
   if (!list.length) return;
   const win = await browser.windows.get(windowId).catch(() => null);
@@ -135,7 +134,7 @@ async function ensureWindow(windowId, settle) {
     if (!isWeb(entry.url)) continue;
     missing.push({ entry, index: index++ });
   }
-  await createEssentials(windowId, missing, settle);
+  await createEssentials(windowId, missing);
 }
 
 async function ensureAllWindows() {

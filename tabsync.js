@@ -163,9 +163,11 @@ async function withPinnedPlaceholder(windowId, fn) {
 // Give a window everything it is missing: essentials first, then a ghost or
 // copy of every synced tab, in the reference window's order.
 //
-// In a new window the essentials wait to be pinned until Sidebery's sidebar
-// there has started (see pinEssentialCopies); the ghosts are created
-// meanwhile.
+// In a new window the ghosts come first, and the essentials only once
+// Sidebery's sidebar there has started: a tab that exists before then gets
+// the last active space, whatever its container, and a pinned tab keeps its
+// space (mbnuqw/sidebery#2497). Created after, an essential is placed by
+// Sidebery's container rules as in any other window.
 async function fillWindow(windowId, { fresh = false } = {}) {
   let created = 0;
   const addReps = async () => {
@@ -182,10 +184,11 @@ async function fillWindow(windowId, { fresh = false } = {}) {
     }
   };
   if (fresh) {
-    await withPinnedPlaceholder(windowId, () => ensureWindow(windowId, async essentials => {
+    await withPinnedPlaceholder(windowId, async () => {
       await addReps();
-      await sidebarStarted(windowId, essentials);
-    }));
+      await sidebarStarted(windowId);
+      await ensureWindow(windowId);
+    });
   } else {
     await ensureWindow(windowId);
   }
@@ -201,19 +204,15 @@ async function fillWindow(windowId, { fresh = false } = {}) {
 // of the spaces you are not in (its setting "hide tabs of inactive panels"),
 // and it tells Firefox which tab to select when you close the current one
 // (successorTabId, unless "after closing the active tab" is set to nothing).
-// Meanwhile the essentials' placeholders are loaded again every PROBE_MS, so
-// once the sidebar runs it moves each to its container's space. Without either
-// sign it gives up after SIDEBAR_WAIT_MS.
-async function sidebarStarted(windowId, essentials) {
+// Without either sign it gives up after SIDEBAR_WAIT_MS.
+async function sidebarStarted(windowId) {
   const t0 = Date.now();
-  let probed = t0, probes = 0;
   while (Date.now() - t0 < SIDEBAR_WAIT_MS) {
     const sign = await sidebarSign(windowId);
-    if (sign) { noteSidebarWait({ ms: Date.now() - t0, probes, sign }); return; }
-    if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); probes++; await reloadPlaceholders(essentials); }
+    if (sign) { noteSidebarWait({ ms: Date.now() - t0, sign }); return; }
     await sleep(100);
   }
-  noteSidebarWait({ ms: Date.now() - t0, probes, sign: null });
+  noteSidebarWait({ ms: Date.now() - t0, sign: null });
 }
 
 async function sidebarSign(windowId) {
