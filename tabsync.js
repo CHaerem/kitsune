@@ -112,8 +112,8 @@ async function createRep(windowId, key, entry, parentId, index) {
   if (index !== undefined) props.index = index;
   const tab = await browser.tabs.create({ ...props, url: entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key) });
   syncBusy.add(tab.id);
-  await setRole(tab.id, key, entry.group ? "copy" : "ghost");
   setTimeout(() => syncBusy.delete(tab.id), SETTLE_MS);
+  await setRole(tab.id, key, entry.group ? "copy" : "ghost");
   return tab;
 }
 
