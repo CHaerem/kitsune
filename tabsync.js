@@ -379,8 +379,10 @@ async function pull(ghostId) {
     await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index });
     await browser.tabs.update(live.id, { active: true });
 
-    // Bookkeeping.
+    // Bookkeeping. A tab moved before it was ever loaded (a live folder's pull
+    // request) can arrive without its sessions values, so they are set again.
     forget(ghostId);
+    await setRole(live.id, key, "live");
     const all = await getSynced();
     const entry = all[key];
     const tabsHere = await browser.tabs.query({ windowId: ghost.windowId });

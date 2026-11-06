@@ -8,9 +8,10 @@
 //
 // Every few minutes (and at startup) each folder is brought in line with the
 // search: new pull requests get a tab (an unloaded placeholder that opens the
-// pull request when you select it), merged or closed ones are removed. Tab
-// sync shows the folder and its tabs in every window. A tab you close stays
-// closed until the pull request leaves the search.
+// pull request when you select it), merged or closed ones are removed (the
+// one you are looking at only once you have left it). Tab sync shows the
+// folder and its tabs in every window. A tab you close stays closed until the
+// pull request leaves the search.
 
 const NATIVE_HOST = "kitsune_github";
 const GITHUB_ICON = "https://github.githubassets.com/favicons/favicon.svg";
@@ -104,7 +105,12 @@ async function refreshLiveFolder(folder, res) {
   const all = await getSynced();
   const have = new Map();
   for (const [k, e] of Object.entries(all)) if (e.liveFolder === folder.id) have.set(e.liveUrl, k);
-  for (const [url, k] of have) if (!wanted.has(url)) await closeEverywhere(k, { dismiss: false });
+  // A pull request you are looking at is removed at a later refresh, once its
+  // tab is no longer the selected tab in any window (merged while you read it).
+  const tabs = await browser.tabs.query({});
+  for (const [url, k] of have) {
+    if (!wanted.has(url) && !repsOf(k, tabs).some(t => t.active)) await closeEverywhere(k, { dismiss: false });
+  }
   for (const item of res.items) {
     if (have.has(item.url)) await renameLiveItem(have.get(item.url), item);
     else if (!state.dismissed.includes(item.url)) await createLiveItem(folder, groupKey, item);
