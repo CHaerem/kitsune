@@ -78,18 +78,19 @@ async function lastUsedIn(windowId, space, exceptId) {
 }
 
 // The tab to land on when the selected one closes. You did not ask for this tab, so it
-// should not load a page by itself or open up a folder you closed: first the tab used
-// last among those already loaded in this window and outside closed folders, then among
-// those outside closed folders, then any. An essential counts. (Switching space is
-// different: there you asked for that space, and lastUsedIn takes you back to the tab you
-// were on, loaded or not.)
+// should not load a page by itself or open up a folder you closed: the tabs outside closed
+// folders if there are any, else all of them, and among those the one used last that is
+// already loaded in this window, else the one used last. An essential counts. (Switching
+// space is different: there you asked for that space, and lastUsedIn takes you back to the
+// tab you were on, loaded or not.)
 async function nextAfterClosing(windowId, space, exceptId) {
   const here = (await browser.tabs.query({ windowId, cookieStoreId: space }).catch(() => [])).filter(t => t.id !== exceptId);
   const all = await getSynced();
   const outside = here.filter(t => !all[folderKeyOf(all, syncKeyByTab.get(t.id))]?.collapsed);
-  const loaded = outside.filter(t => !t.discarded && !isGhostUrl(t.url));
+  const choice = outside.length ? outside : here;
+  const loaded = choice.filter(t => !t.discarded && !isGhostUrl(t.url));
   if (loaded.length) return loaded.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
-  return usedLastOf(outside.length ? outside : here);
+  return usedLastOf(choice);
 }
 
 // The one used last among tabs that may be placeholders. A placeholder's own lastAccessed
@@ -143,7 +144,8 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   closedIn.delete(windowId);
   serial(async () => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
+    if (!tab) { viewSoon(windowId); return; }
+    if (tab.cookieStoreId === NO_CONTAINER) { await setSuccessor(tab); viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const next = await nextAfterClosing(windowId, stay);
       if (next) await browser.tabs.update(next.id, { active: true }).catch(() => {});
@@ -157,28 +159,32 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
 });
 
 // What Firefox selects when the selected tab closes: see nextAfterClosing, not the
-// next tab it happens to be able to show.
+// next tab it happens to be able to show. A page without a container (about:, Tidier's
+// settings) is shown in the space you are in, so closing it lands there too; left to
+// Firefox, it would land on whatever is beside it, an unloaded tab or a closed folder's.
 async function setSuccessor(tab) {
   if (!tidierAlone) return;
-  const next = await nextAfterClosing(tab.windowId, tab.cookieStoreId, tab.id);
+  const space = tab.cookieStoreId === NO_CONTAINER ? activeSpace.get(tab.windowId) : tab.cookieStoreId;
+  if (!space) return;
+  const next = await nextAfterClosing(tab.windowId, space, tab.id);
   await browser.tabs.update(tab.id, { successorTabId: next ? next.id : browser.tabs.TAB_ID_NONE }).catch(() => {});
 }
 
 // The choice is made when a tab is selected, and Firefox cannot ask at the moment it
 // closes. So while you stay on a tab, what the choice rests on is looked at again when
-// it changes: a folder folded (foldFolder), a tab unloaded, or moved to another window
-// and leaving a placeholder here.
-const successorTimers = new Map();
+// it changes: a folder folded (foldFolder), a tab put in a folder (moveTab), a tab unloaded,
+// or moved to another window and leaving a placeholder here. At most one look waits per
+// window, however long the queue is busy (filling a new window is a tab event per tab):
+// it reads what is true when its turn comes, and only a change after that asks for another.
+const successorDue = new Set(); // windows with a look on its way
 function successorSoon(windowId) {
-  if (!tidierAlone || !started) return;
-  clearTimeout(successorTimers.get(windowId));
-  successorTimers.set(windowId, setTimeout(() => {
-    successorTimers.delete(windowId);
-    serial(async () => {
-      const [active] = await browser.tabs.query({ windowId, active: true }).catch(() => []);
-      if (active && active.cookieStoreId !== NO_CONTAINER) await setSuccessor(active);
-    });
-  }, SPACE_DEBOUNCE_MS));
+  if (!tidierAlone || !started || successorDue.has(windowId)) return;
+  successorDue.add(windowId);
+  setTimeout(() => serial(async () => {
+    successorDue.delete(windowId);
+    const [active] = await browser.tabs.query({ windowId, active: true }).catch(() => []);
+    if (active) await setSuccessor(active);
+  }), SPACE_DEBOUNCE_MS);
 }
 browser.tabs.onCreated.addListener(tab => successorSoon(tab.windowId));
 browser.tabs.onMoved.addListener((tabId, { windowId }) => successorSoon(windowId));
@@ -202,8 +208,6 @@ browser.windows.onRemoved.addListener(windowId => {
   activeSpace.delete(windowId);
   clearTimeout(showTimers.get(windowId));
   showTimers.delete(windowId);
-  clearTimeout(successorTimers.get(windowId));
-  successorTimers.delete(windowId);
 });
 // A new window starts in the space you are in, and keeps Firefox's first tab there.
 browser.windows.onCreated.addListener(win => {
@@ -310,6 +314,6 @@ async function startSpaces() {
     const space = await spaceOf(w.id, tabs, await spaceList(used));
     await showSpace(w.id);
     const active = tabs.find(t => t.active);
-    if (active && active.cookieStoreId === space) await setSuccessor(active);
+    if (active && (active.cookieStoreId === space || active.cookieStoreId === NO_CONTAINER)) await setSuccessor(active);
   }
 }

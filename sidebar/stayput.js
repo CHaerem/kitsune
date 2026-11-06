@@ -25,6 +25,7 @@
 
   port.onMessage.addListener(next => {
     if (!next.alone) return;
+    cursor?.classList.add("cursor"); // a row drawn again has lost its mark, and you your place
     if (next.space !== shown) {
       shown = next.space;
       list.scrollTop = positions.get(shown) ?? 0;

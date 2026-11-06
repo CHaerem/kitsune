@@ -86,6 +86,17 @@ test("with only tabs in closed folders left, one of them is chosen; with nothing
   x.kill();
 });
 
+test("with only closed folders left, a loaded tab there goes before an unloaded one used later", async () => {
+  const ff = new FakeFirefox();
+  const { w, selected, made } = fill(ff, [
+    ["loaded", { lastAccessed: 1000, parentKey: "shut" }],
+    ["discarded", { lastAccessed: 5000, parentKey: "shut", discarded: true }],
+  ]);
+  const x = await start(ff);
+  assert.equal(await next(x, w, selected), made.loaded.id);
+  x.kill();
+});
+
 test("an essential counts, and an unloaded copy of one by its real page", async () => {
   const ff = new FakeFirefox();
   ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
@@ -137,6 +148,64 @@ test("what Firefox is told follows a fold, an unload and a tab's closing while y
   x.kill();
 });
 
+test("a page without a container is told the next tab of the space you are in", async () => {
+  const ff = new FakeFirefox();
+  const { w, selected, made } = fill(ff, [
+    ["used", { lastAccessed: 5000 }],
+    ["unloaded", { lastAccessed: 8000, discarded: true }],
+    ["inShut", { lastAccessed: 8500, parentKey: "shut" }],
+  ]);
+  const other = ff.addTab(w.id, { url: "https://c2.example/", cookieStoreId: C2, lastAccessed: 8700 });
+  const page = ff.addTab(w.id, { url: "about:robots", lastAccessed: 1 });
+  const x = await start(ff);
+  ff.select(page.id);
+  for (let i = 0; i < 100 && ff.tabs.get(page.id).successorTabId === undefined; i++) await wait(100);
+  assert.equal(ff.tabs.get(page.id).successorTabId, selected.id, "the space's last used, not its other tabs, nor another space's");
+  ff.select(selected.id);
+  await wait(300);
+  ff.select(page.id);
+  ff.tabs.get(selected.id).discarded = true;
+  x.b.tabs.onUpdated.fire(selected.id, { discarded: true }, ff.snap(ff.tabs.get(selected.id)));
+  for (let i = 0; i < 100 && ff.tabs.get(page.id).successorTabId !== made.used.id; i++) await wait(100);
+  assert.equal(ff.tabs.get(page.id).successorTabId, made.used.id, "looked at again while you stay on it");
+  assert.notEqual(other.id, made.used.id);
+  x.kill();
+});
+
+test("a tab put into a closed folder where it already is changes what Firefox is told", async () => {
+  const ff = new FakeFirefox();
+  const { w, selected, made } = fill(ff, [
+    ["moving", { lastAccessed: 8000 }],
+    ["beside", { lastAccessed: 2000 }],
+  ]);
+  const x = await start(ff);
+  const told = async want => { for (let i = 0; i < 100 && ff.tabs.get(selected.id).successorTabId !== want; i++) await wait(100); assert.equal(ff.tabs.get(selected.id).successorTabId, want); };
+  await told(made.moving.id);
+  const moves = ff.log.filter(l => l[0] === "move").length;
+  await x.js("moveTab")(w.id, made.moving.id, made.beside.id, "shut"); // it is right before that tab: nothing moves
+  assert.equal(ff.log.filter(l => l[0] === "move").length, moves, "no move for Firefox to report");
+  await told(made.beside.id);
+  x.kill();
+});
+
+test("a burst while the queue is busy makes one look, for what is true by then, and leaves nothing behind", async () => {
+  const ff = new FakeFirefox();
+  const { w, selected, made } = fill(ff, [["other", { lastAccessed: 2000 }]]);
+  const x = await start(ff);
+  await wait(300);
+  const jobs = x.js("work.jobs");
+  let done;
+  x.js("serial")(() => new Promise(r => { done = r; }));
+  for (let i = 0; i < 12; i++) { x.b.tabs.onUpdated.fire(made.other.id, { discarded: false }, ff.snap(ff.tabs.get(made.other.id))); await wait(50); }
+  const fresh = ff.addTab(w.id, { url: "https://fresh.example/", cookieStoreId: C1, lastAccessed: 3000 });
+  done();
+  for (let i = 0; i < 100 && ff.tabs.get(selected.id).successorTabId !== fresh.id; i++) await wait(100);
+  assert.equal(ff.tabs.get(selected.id).successorTabId, fresh.id);
+  assert.ok(x.js("work.jobs") - jobs <= 3, `${x.js("work.jobs") - jobs} jobs`); // the held one, and one look (a last event may ask for a second)
+  assert.equal(x.js("successorDue.size"), 0);
+  x.kill();
+});
+
 test("with the setting off, Firefox is told nothing and nothing waits", async () => {
   const ff = new FakeFirefox();
   const { w, selected, made } = fill(ff, [["other", {}]]);
@@ -150,7 +219,7 @@ test("with the setting off, Firefox is told nothing and nothing waits", async ()
   await wait(1000);
   assert.equal(x.js("tidierAlone"), false);
   assert.equal(ff.tabs.get(made.other.id).successorTabId, undefined);
-  assert.equal(x.js("successorTimers.size"), 0);
+  assert.equal(x.js("successorDue.size"), 0);
   x.kill();
 });
 

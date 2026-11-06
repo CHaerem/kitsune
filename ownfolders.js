@@ -79,6 +79,7 @@ async function moveTab(windowId, tabId, beforeTabId, folderKey) {
       const tabs = await browser.tabs.query({ windowId: w.id });
       const reps = repMap(tabs);
       if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : null);
+      successorSoon(w.id); // spaces.js: into a closed folder, perhaps with no move Firefox would report
     }
   } else {
     await moveInWindow(await browser.tabs.query({ windowId }), tabId, beforeTabId);

@@ -12,6 +12,9 @@ function moveCursor(to) {
 addEventListener("keydown", e => {
   if (e.target.closest?.("input, #menu") || e.metaKey || e.ctrlKey || e.altKey) return;
   const all = reachable(), at = all.indexOf(cursor);
+  // Its row has gone, or is out of sight in a folder folded since: Enter and ⌫ must not act
+  // on a tab you cannot see.
+  if (at < 0 && view?.alone) moveCursor(null);
   const tab = cursor?.dataset.tab && Number(cursor.dataset.tab);
   // The first key starts at the tab you are on, not at the top of the sidebar. (Also after
   // the cursor's row has gone, or the sidebar lost the focus: stayput.js.)
