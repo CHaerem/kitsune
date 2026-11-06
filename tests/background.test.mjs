@@ -1160,3 +1160,21 @@ test("a tab dragged to a window that then closes at once is not lost", async () 
   assert.ok(ff.list(a.id).some(y => ff.values.get(y.id)?.syncKey === key), "and in the window left");
   x.kill();
 });
+
+test("after a start the selected tab decides the space, whatever the window remembers", async () => {
+  const C2 = "firefox-container-2";
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/", { cookieStoreId: C2 }) };
+  const w = ff.addWindow({ focused: true });
+  ff.winValues.set(w.id, { space: C2 });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addTab(w.id, { url: "https://b.example/", discarded: true, cookieStoreId: C2 }, { syncKey: "b", syncRole: "live" });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.idle(60000);
+  assert.equal(x.js("activeSpace").get(w.id), C1);
+  assert.equal(ff.winValues.get(w.id).space, C1);
+  assert.equal(ff.tabs.get(other.id).hidden, true);
+  x.kill();
+});

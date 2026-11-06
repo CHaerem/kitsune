@@ -49,8 +49,10 @@ function tagTab(tabId, key) {
 
 async function keyOf(tab) {
   if (keyByTab.has(tab.id)) return keyByTab.get(tab.id);
+  const value = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(err => { ifGone(err); return null; });
+  if (value === null) return undefined; // closed meanwhile
   const shown = placeholderOf(tab.url);
-  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(ifGone) ?? (shown.kind === "essential" ? shown.key : undefined);
+  const key = value ?? (shown.kind === "essential" ? shown.key : undefined);
   if (key) keyByTab.set(tab.id, key);
   return key;
 }

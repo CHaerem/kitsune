@@ -271,10 +271,17 @@ async function startSpaces() {
 async function startSpaceIn(windowId) {
   const tabs = await browser.tabs.query({ windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
-  const space = await spaceOf(windowId, tabs, await spaceList(used));
+  const spaces = await spaceList(used);
+  const space = await spaceOf(windowId, tabs, spaces);
   await showSpace(windowId);
   const active = tabs.find(t => t.active);
   if (active && active.cookieStoreId === space) await setSuccessor(active);
+  // The selected tab decides. What the window remembers can be behind (a job cut off by an
+  // update or a crash), and it would show you a list without the tab you are looking at.
+  else if (active && spaces.some(s => s.id === active.cookieStoreId)) {
+    await setSpace(windowId, active.cookieStoreId);
+    await setSuccessor(active);
+  }
 }
 // A window that opens with no other window to take its space from (reopened after the
 // last one closed), or whose first tab has no container, still has one: without it the
