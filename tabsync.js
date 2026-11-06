@@ -290,6 +290,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
+    closingOrder,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
@@ -694,7 +695,9 @@ browser.tabs.onCreated.addListener(tab => {
 });
 
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!started || syncBusy.has(tabId)) return;
+  // Only you pin a tab with Tidier alone, so a pin counts even on a tab just pulled in or
+  // just created: missed, the tab would be an essential and an ordinary tab, for good.
+  if (!started || (syncBusy.has(tabId) && !(tidierAlone && change.pinned === true))) return;
   const key = syncKeyByTab.get(tabId);
   if (!key) {
     // A new tab that has navigated to a page, e.g. "New Tab" -> a URL.
@@ -872,13 +875,30 @@ browser.tabs.onDetached.addListener((tabId, { oldWindowId }) => noteOrder(oldWin
 browser.tabs.onUpdated.addListener((tabId, change, tab) => noteOrder(tab.windowId), { properties: ["discarded", "url"] });
 browser.windows.onRemoved.addListener(windowId => lastOrder.delete(windowId));
 
+// Tabs closed together (several picked in Tidier's sidebar): by the time the next one
+// closes, the one before it has left the order and lost its key, so each saved tab would
+// come back next to the same neighbour, and they would stand reversed in this window and
+// in the right order in the others. While tabs keep closing in a window, the order from
+// when the first of them closed holds, with the keys it had then. (With Sidebery, which
+// closes its own selection, this stays as it was.)
+const CLOSING_MS = 500;
+const closingOrder = new Map(); // windowId -> { order, timer }
+function orderWhileClosing(windowId) {
+  const burst = closingOrder.get(windowId) ?? { order: (lastOrder.get(windowId) || []).map(t => ({ ...t, key: syncKeyByTab.get(t.id) })) };
+  clearTimeout(burst.timer);
+  burst.timer = setTimeout(() => closingOrder.delete(windowId), CLOSING_MS);
+  closingOrder.set(windowId, burst);
+  return burst.order;
+}
+
 // Where a closed tab was: whether it was unloaded, and the synced tabs of its
 // space before and after it (nearest first), for placeNextTo.
 function closedPlace(windowId, tabId) {
-  const order = lastOrder.get(windowId) || [];
+  const held = tidierAlone ? orderWhileClosing(windowId) : [];
+  const order = held.some(t => t.id === tabId) ? held : lastOrder.get(windowId) || [];
   const i = order.findIndex(t => t.id === tabId);
   if (i < 0) return null;
-  const keysOf = list => list.filter(t => t.cookieStoreId === order[i].cookieStoreId && syncKeyByTab.has(t.id)).map(t => syncKeyByTab.get(t.id));
+  const keysOf = list => list.filter(t => t.cookieStoreId === order[i].cookieStoreId).map(t => t.key ?? syncKeyByTab.get(t.id)).filter(Boolean);
   return { unloaded: order[i].unloaded, before: keysOf(order.slice(0, i).reverse()), after: keysOf(order.slice(i + 1)) };
 }
 

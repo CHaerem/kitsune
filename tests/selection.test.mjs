@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { FakeFirefox, wait, GHOST } from "./fake_firefox.mjs";
 
 const SOURCE = readFileSync(new URL("../sidebar/selection.js", import.meta.url), "utf8");
 const MOD = { mac: "metaKey", linux: "ctrlKey" };
@@ -39,6 +40,7 @@ async function sidebar({ os = "mac", alone = true, rows = [1, 2, 3, 4, 5], tiles
     document: {
       documentElement: new El(0, ""),
       getElementById: id => (id === "menu" ? ctx.menu : { lastElementChild: els.filter(e => e.classes.has(id === "essentials" ? "tile" : "tab")).at(-1) }),
+      querySelector: () => els.find(e => e.classes.has("active")) ?? null,
       querySelectorAll: sel => els.filter(e => (sel === ".picked" ? e.classes.has("picked") : sel.endsWith(".tile") ? e.classes.has("tile") : e.classes.has("tab")) && (sel === ".picked" || e.offsetParent !== null)),
     },
     menu: { hidden: true },
@@ -288,4 +290,192 @@ test("nothing happens on a view with nothing picked: no look at the page", async
   s.view({});
   s.ctx.document.querySelectorAll = () => { throw new Error("looked at the page"); };
   s.view({});
+});
+
+test("the cursor goes when its row has gone or is folded away, so ⌫ is the selection's again", async () => {
+  const s = await sidebar();
+  s.view({});
+  s.add(2);
+  s.ctx.cursor = s.el(4);
+  s.el(4).offsetParent = null; // gone, or in a closed folder
+  s.view({});
+  assert.equal(s.ctx.cursor, null);
+  s.fire("keydown", { closest: () => null }, { key: "Backspace" });
+  assert.deepEqual(s.sent.map(m => m.tabId), [2, 1], "picked tabs, the selected one last");
+});
+
+test("another tab selected ends the selection; the same tab drawn again does not", async () => {
+  const s = await sidebar();
+  s.view({});
+  s.add(2);
+  s.view({});
+  assert.deepEqual(s.picked(), [1, 2]);
+  s.el(1).classes.delete("active");
+  s.el(4).classes.add("active");
+  s.view({});
+  assert.deepEqual(s.picked(), []);
+  assert.deepEqual([...s.ctx.selectedTabs(2)], [2]);
+});
+
+test("the row being dragged has gone: the others do not stay faded", async () => {
+  const s = await sidebar();
+  const root = s.ctx.document.documentElement;
+  s.view({});
+  s.add(2);
+  s.add(3);
+  s.ctx.dragging = { kind: "tab", tabId: 3 };
+  s.fire("dragstart", s.el(3));
+  assert.equal(root.classes.has("carrying"), true);
+  s.view({});
+  assert.equal(root.classes.has("carrying"), true, "a redraw during a drag changes nothing");
+  s.el(3).offsetParent = null;
+  s.view({});
+  assert.equal(root.classes.has("carrying"), false);
+  assert.deepEqual(s.picked(), [1, 2]);
+});
+
+// --- What the background does with many at once, on the fake Firefox ---------------------
+const C1 = "firefox-container-1";
+const entry = (url, more = {}) => ({ url, title: url, cookieStoreId: C1, parentKey: null, group: false, added: 1, ...more });
+const savedIn = (folder, url) => entry(url, { parentKey: folder, saved: { url, title: url } });
+const FOLDER = { group: true, own: true, name: "Work", cookieStoreId: C1, parentKey: null, rank: 1 };
+
+async function start(ff, alone = true) {
+  if (alone) ff.managed = { tidierAlone: true };
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire({ reason: "update" });
+  await wait(1200);
+  for (let i = 0; i < 300 && !x.started(); i++) await wait(1000);
+  await wait(1000);
+  return x;
+}
+
+// Window: the page you are on (with `prior`, a synced tab before the folder's), three loaded
+// saved tabs and an ordinary one after them. A second window has placeholders of them all.
+function savedRow(prior) {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = {
+    F: FOLDER, a: savedIn("F", "https://a.example/"), b: savedIn("F", "https://b.example/"), c: savedIn("F", "https://c.example/"), z: entry("https://z.example/"),
+    ...(prior ? { p: entry("https://p.example/") } : {}),
+  };
+  const w = ff.addWindow({ focused: true }), o = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  if (prior) ff.addTab(w.id, { url: "https://p.example/", cookieStoreId: C1 }, { syncKey: "p", syncRole: "live" });
+  const tabs = Object.fromEntries(["a", "b", "c", "z"].map(k => [k, ff.addTab(w.id, { url: `https://${k}.example/`, cookieStoreId: C1 }, { syncKey: k, syncRole: "live" })]));
+  ff.addTab(o.id, { url: "about:blank", active: true });
+  for (const k of [...(prior ? ["p"] : []), "a", "b", "c", "z"]) ff.addTab(o.id, { url: GHOST("ghost", k), discarded: true, cookieStoreId: C1 }, { syncKey: k, syncRole: "ghost" });
+  return { ff, w, o, tabs };
+}
+const keysIn = (ff, w) => ff.list(w.id).map(t => ff.values.get(t.id)?.syncKey).filter(Boolean);
+
+for (const [name, prior, closing] of [
+  ["in order", true, ["a", "b", "c"]],
+  ["in order, with nothing before them", false, ["a", "b", "c"]],
+  ["with the selected tab last", true, ["b", "c", "a"]],
+  ["with the selected tab last, nothing before them", false, ["b", "c", "a"]],
+  ["last to first", true, ["c", "b", "a"]],
+]) {
+  test(`saved tabs closed together stay in order, in every window: ${name}`, async () => {
+    const { ff, w, o, tabs } = savedRow(prior);
+    const x = await start(ff);
+    await wait(100); // the window's order is noted
+    for (const k of closing) ff.rm(tabs[k].id);
+    await wait(2000);
+    const want = [...(prior ? ["p"] : []), "a", "b", "c", "z"];
+    assert.deepEqual(keysIn(ff, w), want);
+    assert.deepEqual(keysIn(ff, o), want);
+    assert.equal(x.js("closingOrder").size, 0, "kept only for a moment");
+    x.kill();
+  });
+}
+
+test("with the setting off, a place is read as before", async () => {
+  const { ff, w, tabs } = savedRow(true);
+  // Sidebery's own folder page, since that is what a folder is then.
+  ff.store.syncedTabs.F = entry("moz-extension://sb/sidebery/group.html#F", { group: true });
+  ff.addTab(w.id, { url: "moz-extension://sb/sidebery/group.html#F", cookieStoreId: C1, index: 2 }, { syncKey: "F", syncRole: "copy" });
+  const x = await start(ff, false);
+  await wait(100);
+  ff.rm(tabs.a.id);
+  assert.equal(x.js("closingOrder").size, 0, "nothing is held");
+  await wait(2000);
+  x.kill();
+});
+
+test("a tab pinned right after a move, or while Tidier is busy with it, leaves the tab record", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/"), n: entry("https://n.example/") };
+  const w = ff.addWindow({ focused: true }), o = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const n = ff.addTab(w.id, { url: "https://n.example/", cookieStoreId: C1 }, { syncKey: "n", syncRole: "live" });
+  ff.addTab(o.id, { url: "about:blank", active: true });
+  for (const k of ["a", "b", "n"]) ff.addTab(o.id, { url: GHOST("ghost", k), discarded: true, cookieStoreId: C1 }, { syncKey: k, syncRole: "ghost" });
+  const x = await start(ff);
+  await x.js("moveTab")(w.id, a.id, n.id, null);
+  assert.equal(x.js("syncBusy").has(a.id), false, "a move is not marked as Tidier's own");
+  await x.b.tabs.update(a.id, { pinned: true });
+  await wait(1000);
+  assert.equal(ff.synced.a, undefined, "an essential now, not an ordinary tab as well");
+  assert.ok(ff.store.essentials.some(e => e.url === "https://a.example/"));
+  // The same for a tab Tidier has just pulled in or created.
+  x.js("syncBusy").add(b.id);
+  await x.b.tabs.update(b.id, { pinned: true });
+  await wait(1000);
+  assert.equal(ff.synced.b, undefined);
+  assert.deepEqual(keysIn(ff, o), ["n"], "the other window has no placeholder left of either");
+  x.kill();
+});
+
+test("with the setting off, a tab Tidier is busy with is left alone when pinned, as before", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await start(ff, false);
+  x.js("syncBusy").add(a.id);
+  await x.b.tabs.update(a.id, { pinned: true });
+  await wait(1000);
+  assert.ok(ff.synced.a);
+  x.kill();
+});
+
+test("tabs opened together keep their order in another window, whichever settles first", async () => {
+  const order = async alone => {
+    const ff = new FakeFirefox();
+    ff.store.syncedTabs = { h: entry("https://h.example/") };
+    const w = ff.addWindow({ focused: true }), o = ff.addWindow();
+    ff.addTab(w.id, { url: "https://h.example/", active: true, cookieStoreId: C1 }, { syncKey: "h", syncRole: "live" });
+    ff.addTab(o.id, { url: "about:blank", active: true });
+    ff.addTab(o.id, { url: GHOST("ghost", "h"), discarded: true, cookieStoreId: C1 }, { syncKey: "h", syncRole: "ghost" });
+    const x = await start(ff, alone);
+    const t = ["a", "b", "c"].map(n => ff.addTab(w.id, { url: `https://${n}.example/`, cookieStoreId: C1 }));
+    for (const i of [2, 0, 1]) await x.js("register")(t[i].id);
+    await x.js("flushWrites")();
+    const got = ff.list(o.id).filter(y => y.url.includes("ghost.html")).map(y => ff.synced[ff.values.get(y.id).syncKey].url[8]);
+    x.kill();
+    return got.join("");
+  };
+  assert.equal(await order(true), "habc");
+  assert.equal(await order(false), "hcab", "with the setting off, each is simply added at the end");
+});
+
+test("a tab with no record is a place too: a move lands right before it, in its window", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true }), o = ff.addWindow();
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const blank = ff.addTab(w.id, { url: "about:newtab" });
+  ff.addTab(w.id, { url: "about:config" });
+  ff.addTab(o.id, { url: "about:blank", active: true });
+  for (const k of ["a", "b"]) ff.addTab(o.id, { url: GHOST("ghost", k), discarded: true, cookieStoreId: C1 }, { syncKey: k, syncRole: "ghost" });
+  const x = await start(ff);
+  await x.js("moveTab")(w.id, a.id, blank.id, undefined);
+  const here = ff.list(w.id).map(t => t.id);
+  assert.equal(here.indexOf(a.id), here.indexOf(blank.id) - 1);
+  assert.deepEqual(keysIn(ff, o), ["b", "a"], "elsewhere it goes last");
+  x.kill();
 });

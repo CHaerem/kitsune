@@ -6,8 +6,8 @@
 //
 // These listeners run in the capture phase, before what row(), tile(), keys.js and
 // drag.js have on the same events, so that those stay as they are for one tab and
-// with the setting off. No new background code either: what goes for many is the same
-// message once per tab, and the messages already go through one queue.
+// with the setting off. What goes for many is the same message once per tab: the
+// background has no idea of a selection.
 //
 // A function around it, so that its names cannot meet those of the other scripts here:
 // they share one scope, and a name declared twice stops the second script.
@@ -21,11 +21,13 @@
   let anchor = null; // where a ⇧-click starts
   let base = new Set(); // what stays besides the range, so that a second ⇧-click can change it
   let shownSpace = null;
+  let startedOn = null; // the selected tab when the selection began
 
   const idOf = e => Number(e.dataset.tab);
   const kindOf = e => (e.classList.contains("tile") ? "tile" : "tab");
   const element = id => kept.get(`${kind}:${id}`);
   const root = document.documentElement;
+  const selectedTab = () => document.querySelector("[data-tab].active")?.dataset.tab;
 
   // Tabs as they are drawn, which is not the window's order. A row in a closed folder is
   // not drawn, so nothing here can act on a tab you cannot see.
@@ -53,6 +55,7 @@
   function startOver(k) {
     clear();
     kind = k;
+    startedOn = selectedTab();
     const current = shown(k).find(e => e.classList.contains("active"));
     return current ? idOf(current) : null;
   }
@@ -198,11 +201,21 @@
       shownSpace = view.space;
       if (picked.size) clear();
     }
-    if (view.alone && cursor?.isConnected) cursor.classList.add("cursor");
+    // A cursor on a row that has gone or is folded away would take the next ⌫, and keys.js
+    // would then close a tab you cannot see, or jump to the first tile.
+    if (view.alone && cursor) {
+      if (cursor.offsetParent === null) moveCursor(null);
+      else cursor.classList.add("cursor");
+    }
     if (!picked.size) return;
+    // Another tab selected (⌃Tab, a link, an essential): you have moved on, as with Firefox's
+    // own selection. A tint left behind would make × on one of them close them all.
+    if (selectedTab() !== startedOn) { clear(); return; }
     const here = new Set(shown(kind).map(idOf));
     for (const set of [picked, base]) for (const id of [...set]) if (!here.has(id)) set.delete(id);
     if (picked.size) paint();
     else clear();
+    // The row you were dragging has gone: its dragend no longer reaches this window.
+    if (!picked.has(dragging?.tabId)) root.classList.remove("carrying");
   });
 })();

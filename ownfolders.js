@@ -92,9 +92,10 @@ async function moveInWindow(tabs, tabId, beforeId) {
   let index = before ? before.index : -1;
   if (before && tab.index < before.index) index--;
   if (index === tab.index) return;
-  syncBusy.add(tabId);
+  // Not marked as Tidier's own (syncBusy): without Sidebery nothing listens to a move, and for
+  // that moment a pin or a new title would go unseen. A tab dragged on to the essentials
+  // right after a move stayed in the tab record too, and so was there twice.
   await browser.tabs.move(tabId, { index }).catch(() => {});
-  setTimeout(() => syncBusy.delete(tabId), SETTLE_MS);
 }
 
 // A tab moved to another space: Firefox cannot change a tab's container, so it is
