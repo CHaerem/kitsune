@@ -410,10 +410,10 @@ async function pull(ghostId) {
 // of it in the other windows (the parent is read with treeParent, common.js).
 // Sidebery takes a parent from another extension only when a tab is created,
 // so the ghost there is replaced by a new one under its new parent, and then
-// put next to the same synced tab of its space. A live tab
-// or folder copy there keeps its place. (Only the parent is copied, not the
-// order: Sidebery gives a tab another extension moves the space of the tab
-// it lands on, so moving tabs around in other windows could change spaces.)
+// put next to the same synced tab of its space. A live tab, a folder copy or
+// the selected tab there keeps its place. (Only the parent is copied, not the
+// order: Sidebery gives a tab another extension moves the space of the tab it
+// lands on, so moving tabs around in other windows could change spaces.)
 async function applyMoves(windowId, ids) {
   const all = await getSynced();
   const here = (await browser.tabs.query({ windowId, pinned: false })).sort((a, b) => a.index - b.index);
@@ -437,7 +437,7 @@ async function applyMoves(windowId, ids) {
       const reps = repMap(tabs);
       const rep = tabs.find(x => x.id === reps.get(key));
       const parentRep = parentKey ? reps.get(parentKey) : undefined;
-      if (!rep || syncRoleByTab.get(rep.id) !== "ghost" || (parentKey && parentRep === undefined)) continue;
+      if (!rep || rep.active || syncRoleByTab.get(rep.id) !== "ghost" || (parentKey && parentRep === undefined)) continue;
       syncBusy.add(rep.id); forget(rep.id);
       await browser.tabs.remove(rep.id);
       const ghost = await createRep(w.id, key, entry, parentRep, rep.index);
@@ -466,10 +466,9 @@ async function placeNextTo(windowId, tabId, before, after) {
   await browser.tabs.move(tabId, { windowId, index }).catch(() => {});
 }
 
-// Sidebery sets the new parent just after it moves a tab, and moves a branch
-// one tab at a time, so the moves are taken together a moment later. Only
-// moves you make count: in the window you are using, of tabs that are not
-// new (Sidebery places a new tab, and a new window's tabs, itself).
+// A tab moved above its stored parent is out of that folder, whatever its
+// opener says once folders first has moved the folder above it again (see
+// treeParent, common.js).
 async function leftParentSoon(tabId, windowId) {
   const entry = (await getSynced())[syncKeyByTab.get(tabId)];
   if (!entry?.parentKey) return;
@@ -477,6 +476,11 @@ async function leftParentSoon(tabId, windowId) {
   const tab = tabs.find(t => t.id === tabId), parent = tabs.find(t => t.id === repMap(tabs).get(entry.parentKey));
   if (tab && parent && parent.index > tab.index) staleOpener.set(tab.id, parent.id);
 }
+
+// Sidebery sets the new parent just after it moves a tab, and moves a branch
+// one tab at a time, so the moves are taken together a moment later. Only
+// moves you make count: in the window you are using, of tabs that are not
+// new (Sidebery places a new tab, and a new window's tabs, itself).
 const movedTabs = new Map(); // windowId -> tab IDs you moved there
 const moveTimers = new Map();
 const createdAt = new Map(); // tabId -> when it was created
@@ -485,8 +489,6 @@ browser.tabs.onRemoved.addListener(tabId => createdAt.delete(tabId));
 browser.tabs.onMoved.addListener((tabId, { windowId }) => {
   if (!started || pulling || windowId !== focusedWindowId || syncBusy.has(tabId) || !syncKeyByTab.has(tabId)) return;
   if (Date.now() - (createdAt.get(tabId) || 0) < NEW_TAB_QUIET_MS) return;
-  // Moved above its parent: out of the folder, whatever its opener says once
-  // folders first has moved the folder above it again (see treeParent).
   leftParentSoon(tabId, windowId);
   if (!movedTabs.has(windowId)) movedTabs.set(windowId, new Set());
   movedTabs.get(windowId).add(tabId);
