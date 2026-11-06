@@ -57,7 +57,11 @@ async function keyOf(tab) {
 // First run: take the essentials from the window with the most pinned tabs.
 async function initList() {
   const existing = await getList();
-  if (existing.length) return existing;
+  // A list with a key in it twice (see onEssentialMoved) stops later moves
+  // being saved: repaired here, keeping the first of each.
+  const once = [...new Map([...existing].reverse().map(e => [e.key, e])).values()].reverse();
+  if (once.length !== existing.length) setList(once);
+  if (once.length) return once;
   const wins = await browser.windows.getAll({ populate: true, windowTypes: ["normal"] });
   wins.sort((a, b) => b.tabs.filter(t => t.pinned).length - a.tabs.filter(t => t.pinned).length);
   const list = [];
@@ -79,10 +83,13 @@ async function initList() {
 async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
   const tabs = [];
   for (const { entry, index } of items) {
+    // Refused if its container was removed while Tidier was not running. One bad
+    // entry must not keep a window from getting the others, or stop Tidier starting.
     const tab = await browser.tabs.create({
       windowId, url: ghostUrl("essential", entry.key), active: false,
       cookieStoreId: entry.cookieStoreId, index,
-    });
+    }).catch(err => { console.error("Tidier:", err); return null; });
+    if (!tab) continue;
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
     tabs.push({ tab, entry });
@@ -130,6 +137,7 @@ async function ensureWindow(windowId, settle) {
   const keys = await Promise.all(pinned.map(keyOf));
   const known = new Set(list.map(e => e.key));
   const have = new Set();
+  const copies = new Map(); // key -> this window's copies
   for (const [i, t] of pinned.entries()) {
     let key = keys[i];
     if (!key || !known.has(key)) {
@@ -141,9 +149,21 @@ async function ensureWindow(windowId, settle) {
     }
     if (key) {
       have.add(key);
+      copies.set(key, [...(copies.get(key) || []), t]);
       const entry = list.find(e => e.key === key);
       if (entry && !entry.icon && t.favIconUrl && isWeb(t.url)) { entry.icon = t.favIconUrl; setList([...list]); }
     }
+  }
+  // Two copies in one window (see reopenedEssential, from before it existed):
+  // the extra placeholders go; a loaded copy is yours and stays.
+  const extra = [...copies.entries()].flatMap(([, ts]) => {
+    const keep = ts.find(t => !isGhostUrl(t.url)) || ts[0];
+    return ts.filter(t => t !== keep && isGhostUrl(t.url)).map(t => t.id);
+  });
+  if (extra.length) {
+    extra.forEach(id => busy.add(id));
+    await browser.tabs.remove(extra).catch(() => {});
+    await forgetClosedPlaceholders("essential", [...copies.keys()].filter(k => copies.get(k).length > 1));
   }
   let index = 0;
   const missing = [];
@@ -294,7 +314,9 @@ async function onEssentialMoved(windowId) {
   const list = await getList();
   const here = await browser.tabs.query({ windowId, pinned: true });
   const known = new Set(list.map(e => e.key));
-  const order = (await Promise.all(here.map(keyOf))).filter(k => known.has(k));
+  // Once each: two copies of one essential here would otherwise take two places
+  // in the list, and push another essential out of it for good.
+  const order = [...new Set((await Promise.all(here.map(keyOf))).filter(k => known.has(k)))];
   // The essentials in this window take their new order in the places they
   // had in the list; essentials missing from this window stay where they are.
   const byKey = new Map(list.map(e => [e.key, e]));
@@ -331,6 +353,31 @@ browser.tabs.onDetached.addListener((tabId, info) => {
 browser.tabs.onAttached.addListener((tabId, info) => {
   if (!keyByTab.has(tabId) || busy.has(tabId)) return;
   serial(() => dropDoubleCopies(tabId, info.newWindowId));
+});
+
+// An essential reopened with ⌘⇧T: Firefox brings it back pinned, with its key,
+// so no pinned event marks it, while its placeholder is already back in its
+// place. Without this the window has it twice, for good. The reopened tab stays;
+// Firefox sets the tab's values just after the event, so they are read in the queue.
+browser.tabs.onCreated.addListener(tab => {
+  if (started && tab.pinned && !busy.has(tab.id)) serial(() => reopenedEssential(tab));
+});
+
+async function reopenedEssential(tab) {
+  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
+  if (!key || busy.has(tab.id) || !(await getList()).some(e => e.key === key)) return;
+  keyByTab.set(tab.id, key);
+  await dropDoubleCopies(tab.id, tab.windowId);
+}
+
+// A container removed: its essentials go with it. Firefox refuses to create tabs
+// in it, and Firefox closes its tabs, which onClosed would try to bring back.
+browser.contextualIdentities.onRemoved.addListener(({ contextualIdentity }) => {
+  serial(async () => {
+    const list = await getList();
+    const left = list.filter(e => e.cookieStoreId !== contextualIdentity.cookieStoreId);
+    if (left.length !== list.length) setList(left);
+  });
 });
 
 async function dropDoubleCopies(tabId, windowId) {

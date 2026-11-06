@@ -93,10 +93,12 @@ function liveTabId(key) {
 async function loadRoles() {
   const tabs = await browser.tabs.query({});
   await Promise.all(tabs.map(async t => {
+    // Firefox refuses a tab closed since the query. That tab is simply gone;
+    // the others must still be read, or reconcileAll would see half the roles.
     const [key, role] = await Promise.all([
       browser.sessions.getTabValue(t.id, SYNC_KEY),
       browser.sessions.getTabValue(t.id, SYNC_ROLE),
-    ]);
+    ]).catch(() => []);
     if (key && role) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); }
   }));
 }
@@ -205,7 +207,11 @@ async function fillWindow(windowId, { fresh = false } = {}) {
     for (const key of fillOrder(all, tabs, windowId)) {
       if (reps.has(key)) continue;
       const entry = all[key];
-      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined);
+      // One refused tab (its container was removed, say) must not leave the
+      // window without all the tabs after it.
+      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined)
+        .catch(err => { console.error("Tidier:", err); return null; });
+      if (!tab) continue;
       reps.set(key, tab.id);
       created++;
       await sleep(CREATE_GAP_MS);
@@ -311,9 +317,20 @@ async function reconcileAll() {
   }
   if (gone.length) await forgetClosedPlaceholders("ghost", gone);
 
+  // No synced tab at all means the session is not here, not that every tab was
+  // closed: on a Mac, closing the last window and quitting restores no windows,
+  // and an update can arrive with none open. The record is then the only copy
+  // of the tabs, so it is kept, and windows are filled from it.
+  const sessionHere = Object.keys(all).some(key => repsOf(key, tabs).length);
   for (const key of Object.keys(all)) {
     const reps = repsOf(key, tabs);
-    if (!reps.length) { delete all[key]; continue; } // nothing left anywhere: the tab is gone
+    if (!reps.length) {
+      // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
+      // a placeholder that is loaded when Tidier updates, and it may have been
+      // the tab's last copy. fillWindow gives it a new placeholder.
+      if (sessionHere && !all[key].saved) delete all[key];
+      continue;
+    }
     if (!all[key].group) {
       const live = reps.filter(t => syncRoleByTab.get(t.id) === "live");
       // Exactly one live tab: prefer a loaded one.
@@ -330,13 +347,14 @@ async function reconcileAll() {
       const here = reps.filter(t => t.windowId === w.id);
       const ghosts = here.filter(t => syncRoleByTab.get(t.id) === "ghost");
       const extra = here.length > ghosts.length ? ghosts : ghosts.slice(1);
-      for (const t of extra) { syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id); }
+      for (const t of extra) { syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
       if (extra.length) await forgetClosedPlaceholders("ghost", [key]);
     }
   }
   noteSaved(all); // also gives tabs that were in folders before saved tabs existed their address
   saveSynced(all);
-  for (const w of wins) await fillWindow(w.id);
+  // A window closed meanwhile must not keep the others from being filled.
+  for (const w of wins) await fillWindow(w.id).catch(err => console.error("Tidier:", err));
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -881,15 +899,21 @@ async function initSynced() {
 // Session restore and Sidebery need a moment after startup before we act.
 async function start(delayMs) {
   await sleep(delayMs);
+  // Every listener waits for `started`, so an error here must not stop the rest:
+  // with it false a selected ghost stays blank and nothing syncs until Firefox
+  // restarts, with no sign of why. This runs at every update, in the middle of work.
+  const step = fn => Promise.resolve().then(fn).then(() => true, err => { console.error("Tidier:", err); return false; });
   await serial(async () => {
-    await initList();
-    await loadRoles();
-    await initSynced();
-    await reconcileAll(); // also adds missing essentials, via fillWindow
-    await foldersFirstAll(); // folders.js
-    await oneLoadedEach(); // essentials.js: Firefox may have restored a page in several windows
+    await step(initList);
+    // Without the roles every tab looks unsynced, and reconcileAll would act on that.
+    if (await step(loadRoles)) {
+      await step(initSynced);
+      await step(reconcileAll); // also adds missing essentials, via fillWindow
+    }
+    await step(foldersFirstAll); // folders.js
+    await step(oneLoadedEach); // essentials.js: Firefox may have restored a page in several windows
   });
-  for (const w of await normalWindows()) noteOrder(w.id);
+  await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
 }
 let startRequested = false;

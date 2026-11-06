@@ -61,6 +61,11 @@ function keepReason(all, key, reps, tabsById, now, since, hours) {
   if (reps.some(t => t.active)) return "selected";
   if (reps.some(t => t.audible)) return "sound";
   if (!live) return "no live tab";
+  // A live tab that is only a placeholder (it became live when the window with
+  // the real page closed) has no page for Recently Closed to keep, and its
+  // lastAccessed says nothing about when you last used the tab. It is kept until
+  // you select it, and from then on it ages like any other tab.
+  if (isGhostUrl(live.url)) return "placeholder";
   // A tab opened in the background and never selected has no lastAccessed;
   // then the time counts from when it was opened.
   const lastUsed = Math.max(live.lastAccessed || 0, entry.added || 0, since);
