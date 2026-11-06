@@ -74,6 +74,16 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Firefox refuses a whole list if one tab in it is gone by now, and closes none of them:
 // the others would stay open, already forgotten by Tidier. So one at a time.
 const removeTabs = ids => Promise.all(ids.map(id => browser.tabs.remove(id).catch(() => {})));
+// A tab moved to another window: Firefox announces the move while it is still closing the
+// tab in the old window, under the same ID, so for a moment the old window lists it. Looked
+// at then, the window it left seems to have it still, and is not given its copy. (`stale`
+// says whether a tab listed with that ID is still the old one.)
+async function movedAway(tabId, stale) {
+  for (let i = 0; i < 40; i++) {
+    if (!(await browser.tabs.query({}).catch(() => [])).some(t => t.id === tabId && stale(t))) return;
+    await sleep(25);
+  }
+}
 // A new tab, or nothing if its window has closed meanwhile: a window you close at any
 // moment is no error, and must not stop the work for the other windows. Any other
 // refusal is passed on.

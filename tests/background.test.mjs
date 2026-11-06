@@ -863,3 +863,28 @@ test("a tab pinned and closed at once leaves no error and no essential", async (
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("a tab moved to a new window leaves its copy in the window it came from, though Firefox still lists it there for a moment", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const from = ff.addWindow({ focused: true });
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  ff.addTab(from.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const tab = ff.addTab(from.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const to = ff.addWindow();
+  // For a moment the old window lists the tab, under the same ID: long enough for a whole
+  // look at every window (each query({}) in reconcileAll and fillWindow).
+  let stale = 6;
+  const query = x.b.tabs.query;
+  x.b.tabs.query = async q => {
+    const tabs = await query(q);
+    if (q.windowId === undefined && stale-- > 0) tabs.push({ ...ff.snap(ff.tabs.get(tab.id)), windowId: from.id });
+    return tabs;
+  };
+  await x.b.tabs.move(tab.id, { windowId: to.id, index: 0 });
+  await wait(2000);
+  assert.ok(ff.urls(from.id).includes(GHOST("ghost", "a").replace("moz-extension://tidier/", "")), "the old window has a ghost");
+  x.kill();
+});

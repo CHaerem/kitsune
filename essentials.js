@@ -356,7 +356,7 @@ async function sortEssentials(windowId, list) {
 // brought (it may be loaded) and put it in the copy's place.
 browser.tabs.onDetached.addListener((tabId, info) => {
   if (!keyByTab.has(tabId)) return;
-  serial(() => ensureWindow(info.oldWindowId));
+  serial(async () => { await movedAway(tabId, t => t.windowId === info.oldWindowId); await ensureWindow(info.oldWindowId); });
 });
 browser.tabs.onAttached.addListener((tabId, info) => {
   if (!keyByTab.has(tabId) || busy.has(tabId)) return;

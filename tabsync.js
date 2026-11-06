@@ -921,10 +921,11 @@ browser.windows.onFocusChanged.addListener(windowId => {
 // You dragged a tab to another window: fix up both windows. Only the tab a pull moves
 // is not yours. Any pull under way or a ghost made a moment ago is no reason to ignore
 // this: nothing else would notice, and the window it left would lack the tab for good.
-browser.tabs.onAttached.addListener(tabId => {
+browser.tabs.onAttached.addListener((tabId, { newWindowId }) => {
   if (!started || pulled.has(tabId) || !syncKeyByTab.has(tabId)) return;
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   serial(async () => {
+    await movedAway(tabId, t => t.windowId !== newWindowId);
     // Firefox loses the sessions values of an unloaded tab moved to another window;
     // after a restart it would be a stranger, and a duplicate of itself.
     await setRole(tabId, key, role).catch(() => {});
