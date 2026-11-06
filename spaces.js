@@ -41,8 +41,8 @@ async function spaceOf(windowId, tabs, spaces) {
     const selected = tabs.find(t => t.active);
     space = spaces.some(s => s.id === selected?.cookieStoreId) ? selected.cookieStoreId : spaces[0]?.id;
   }
-  // No tabs: the window has closed meanwhile, and nothing would remove it from here again.
-  if (tabs.length) activeSpace.set(windowId, space);
+  // Asked for a window that has closed meanwhile, nothing would remove it from here again.
+  if (activeSpace.get(windowId) !== space && await browser.windows.get(windowId).catch(() => null)) activeSpace.set(windowId, space);
   return space;
 }
 
@@ -81,6 +81,7 @@ async function lastUsedIn(windowId, space, exceptId) {
 // Switching: back to the tab you used last in that space, else a new tab there.
 async function switchSpace(windowId, space) {
   const last = await lastUsedIn(windowId, space);
+  if (!await browser.windows.get(windowId).catch(() => null)) return; // closed meanwhile
   activeSpace.set(windowId, space); // before the tab is selected, so onActivated agrees
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
   else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space });
