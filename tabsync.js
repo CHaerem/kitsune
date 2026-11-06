@@ -41,6 +41,7 @@ const syncKeyByTab = new Map();  // tabId -> key
 const syncRoleByTab = new Map(); // tabId -> role
 const syncBusy = new Set();      // tab IDs we are changing ourselves
 let pulling = 0;                 // pulls in progress: tabs being moved are not moves you made
+const pulled = new Set();        // the tabs those pulls move to another window
 let started = false;             // tab sync waits for startup before reacting
 
 const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
@@ -526,6 +527,7 @@ async function pull(ghostId) {
     return;
   }
   pulling++;
+  pulled.add(live.id);
   syncBusy.add(live.id); syncBusy.add(ghostId);
   try {
     const fromWindow = live.windowId, fromIndex = live.index, fromOpener = live.openerTabId;
@@ -562,7 +564,7 @@ async function pull(ghostId) {
       await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
     }
   } finally {
-    setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);
+    setTimeout(() => { pulled.delete(live.id); syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);
   }
 }
 
@@ -884,9 +886,11 @@ browser.windows.onFocusChanged.addListener(windowId => {
   if (started && windowId !== browser.windows.WINDOW_ID_NONE) pullSelected(windowId);
 });
 
-// You dragged a tab to another window: fix up both windows.
+// You dragged a tab to another window: fix up both windows. Only the tab a pull moves
+// is not yours. Any pull under way or a ghost made a moment ago is no reason to ignore
+// this: nothing else would notice, and the window it left would lack the tab for good.
 browser.tabs.onAttached.addListener(tabId => {
-  if (!started || pulling || syncBusy.has(tabId) || !syncKeyByTab.has(tabId)) return;
+  if (!started || pulled.has(tabId) || !syncKeyByTab.has(tabId)) return;
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   serial(async () => {
     // Firefox loses the sessions values of an unloaded tab moved to another window;

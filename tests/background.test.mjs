@@ -692,3 +692,25 @@ test("a new tab dragged in the sidebar and given an address at once is synced", 
   assert.ok(ff.list(other.id).some(t => t.url === GHOST("ghost", key)), "and a ghost in the other window");
   x.kill();
 });
+
+test("a tab dragged to another window during a pull, or just after it was made, leaves no gap", async () => {
+  for (const mark of ["pulling++", id => `syncBusy.add(${id})`]) {
+    const ff = new FakeFirefox();
+    ff.store.syncedTabs = { a: entry("https://a.example/") };
+    const home = ff.addWindow({ focused: true });
+    ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+    const from = ff.addWindow();
+    ff.addTab(from.id, { url: "about:blank", active: true });
+    const ghost = ff.addTab(from.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+    const to = ff.addWindow();
+    ff.addTab(to.id, { url: "about:blank", active: true });
+    ff.addTab(to.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+    const x = await run(ff);
+    x.js(typeof mark === "string" ? mark : mark(ghost.id));
+    await x.b.tabs.move(ghost.id, { windowId: to.id, index: 1 });
+    await wait(3000);
+    assert.equal(ff.urls(from.id).filter(u => u.startsWith("ghost.html")).length, 1, "the window it left gets it back");
+    assert.equal(ff.urls(to.id).filter(u => u.startsWith("ghost.html")).length, 1, "and the window it came to has it once");
+    x.kill();
+  }
+});
