@@ -24,6 +24,7 @@ const tabItem = (t, title) => ({
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
 
 async function viewFor(windowId) {
+  await aloneRead;
   const tabs = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
   const list = await getList();
   // Spaces in use: a container with essentials or tabs (with Tidier alone, also the empty ones).
@@ -45,13 +46,27 @@ async function viewFor(windowId) {
     ? foldersOf(all, space).map(f => ({ key: f.key, name: f.name, collapsed: !!f.collapsed, live: f.live || null, tabs: [] }))
     : here.filter(t => isSideberyGroup(t.url)).map(t => ({ key: syncKeyByTab.get(t.id), id: t.id, name: folderName(t.url), tabs: [] }));
   const byKey = new Map(folders.map(f => [f.key, f]));
+  const rowKey = await rowKeys(here);
   const loose = [];
   for (const t of here) {
     if (isSideberyGroup(t.url)) continue;
-    const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
-    (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
+    const folder = byKey.get(folderKeyOf(all, rowKey.get(t.id)));
+    (folder ? folder.tabs : loose).push(tabItem(t, all[rowKey.get(t.id)]?.title));
   }
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
+}
+
+// Which entry of the record each row is. Until Tidier has started (the first seconds after
+// Firefox starts, or after the background part starts again behind an open sidebar) the
+// roles have not been read, and every tab would be drawn outside its folder and jump into
+// it a moment later. So they are read here, for this view only: the rest of Tidier must
+// not act on them before it starts (start, tabsync.js). Each tab is asked once: a session
+// being restored brings a view after every burst of tabs.
+const earlyKeys = new Map(); // tabId -> its key, until Tidier has started
+async function rowKeys(tabs) {
+  if (started || !tidierAlone) { earlyKeys.clear(); return syncKeyByTab; }
+  await Promise.all(tabs.filter(t => !earlyKeys.has(t.id)).map(async t => earlyKeys.set(t.id, await browser.sessions.getTabValue(t.id, SYNC_KEY).catch(() => undefined))));
+  return earlyKeys;
 }
 
 function viewSoon(windowId) {
@@ -88,7 +103,10 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (tidierAlone) {
-      await serial(() => sidebarAction(windowId, msg)).catch(() => {}); // logged by serial()
+      // Rows are drawn before Tidier has started; what you do with them waits for that,
+      // since a move before the roles are read would act on a row, not on its tab.
+      for (let i = 0; i < 300 && !started; i++) await sleep(100);
+      if (started) await serial(() => sidebarAction(windowId, msg)).catch(() => {}); // logged by serial()
     }
   });
   port.onDisconnect.addListener(() => {

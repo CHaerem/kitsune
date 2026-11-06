@@ -583,6 +583,114 @@ test("a live folder set up for a removed space does not come back in the record,
   x.kill();
 });
 
+// --- A sidebar open while Tidier starts -------------------------------------------
+// The sidebar's side of the connection, as sidebar.js has it.
+function aPort(x, windowId) {
+  const ls = { message: [], disconnect: [] }, views = [];
+  const port = { name: "sidebar", sender: { id: "tidier" }, postMessage: v => views.push(v),
+    onMessage: { addListener: f => ls.message.push(f) }, onDisconnect: { addListener: f => ls.disconnect.push(f) } };
+  x.b.runtime.onConnect.fire(port);
+  const send = msg => ls.message.forEach(f => f(msg));
+  send({ type: "hello", windowId });
+  return { views, send };
+}
+const realWait = ms => new Promise(r => setTimeout(r, ms));
+const until = async test => { for (let i = 0; i < 500 && !test(); i++) await realWait(2); assert.ok(test()); };
+
+// Boots the real scripts with Tidier's start held back, as in the seconds after Firefox starts.
+function bootHeld(ff) {
+  ff.managed = { tidierAlone: true };
+  const x = ff.boot();
+  x.js("startRequested = true");
+  return x;
+}
+const letStart = async x => { x.js("startRequested = false; requestStart(0)"); await until(() => x.started()); };
+
+function withFolder(ff) {
+  const made = aWindow(ff);
+  ff.store.syncedTabs.F = { group: true, own: true, name: "Folder", cookieStoreId: A, parentKey: null, rank: 1, added: 1 };
+  Object.assign(ff.store.syncedTabs.moved, { parentKey: "F", saved: { url: SITE, title: "Moved" } });
+  return made;
+}
+
+test("the first view, before Tidier has started, is the one that stays: the setting known, tabs in their folders", async () => {
+  const ff = new FakeFirefox();
+  const { w, tab, other } = withFolder(ff);
+  ff.containers.add("firefox-container-3");
+  const x = bootHeld(ff);
+  const { views } = aPort(x, w.id);
+  await until(() => views.length);
+  assert.equal(x.started(), false);
+  const plain = v => JSON.parse(JSON.stringify(v)); // (from the scripts' own realm)
+  const first = plain(views[0]);
+  assert.equal(first.alone, true, "or its rows cannot be dragged");
+  assert.deepEqual(first.folders.map(f => [f.name, f.tabs.map(t => t.id)]), [["Folder", [tab.id]]]);
+  assert.deepEqual(first.tabs.map(t => t.id), [other.id]);
+  assert.equal(first.spaces.length, 3, "empty spaces too, or they would appear later");
+  await letStart(x);
+  await x.js("serial")(() => {});
+  const later = plain(await x.js("viewFor")(w.id));
+  assert.deepEqual(later.folders, first.folders);
+  assert.deepEqual(later.tabs, first.tabs);
+  assert.deepEqual(later.spaces, first.spaces);
+  x.kill();
+});
+
+test("what the first view reads stays with it: Tidier does not act on roles before it starts", async () => {
+  const ff = new FakeFirefox();
+  const { w } = withFolder(ff);
+  const x = bootHeld(ff);
+  const { views } = aPort(x, w.id);
+  await until(() => views.length);
+  assert.equal(x.js("syncKeyByTab.size"), 0);
+  x.kill();
+});
+
+test("a move made before Tidier has started waits for it, and then moves the tab with its record", async () => {
+  const ff = new FakeFirefox();
+  const { w, tab } = withFolder(ff);
+  const second = ff.addWindow();
+  const ghost = ff.addTab(second.id, { url: GHOST("ghost", "moved"), cookieStoreId: A, discarded: true }, { syncKey: "moved", syncRole: "ghost" });
+  ff.addTab(second.id, { url: GHOST("ghost", "home"), cookieStoreId: A, discarded: true }, { syncKey: "home", syncRole: "ghost" });
+  const x = bootHeld(ff);
+  const { views, send } = aPort(x, w.id);
+  await until(() => views.length);
+  send({ type: "moveToSpace", tabId: tab.id, space: B });
+  await realWait(30);
+  assert.ok(ff.tabs.has(tab.id), "nothing yet");
+  assert.ok(!ff.list(w.id).some(t => t.cookieStoreId === B));
+  await letStart(x);
+  await until(() => !ff.tabs.has(tab.id));
+  assert.ok(!ff.tabs.has(ghost.id), "in every window");
+  await x.js("serial")(() => {});
+  await x.js("flushWrites")();
+  assert.ok(!ff.synced.moved);
+  assert.deepEqual(ff.list(w.id).filter(t => t.url === SITE).map(t => t.cookieStoreId), [B]);
+  x.kill();
+});
+
+test("a session restored while Tidier starts does not take you off the tab it selected", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const blank = ff.addTab(w.id, { url: "about:blank", active: true });
+  const there = ff.addTab(w.id, { url: "https://there.example/", cookieStoreId: B, lastAccessed: 2000 }, { syncKey: "there", syncRole: "live" });
+  const here = ff.addTab(w.id, { url: "https://home.example/", cookieStoreId: A, lastAccessed: 1000 }, { syncKey: "home", syncRole: "live" });
+  ff.store.syncedTabs = {
+    there: { url: "https://there.example/", title: "There", cookieStoreId: B, parentKey: null, group: false, added: 1 },
+    home: { url: "https://home.example/", title: "Home", cookieStoreId: A, parentKey: null, group: false, added: 1 },
+  };
+  const x = bootHeld(ff);
+  const { views } = aPort(x, w.id);
+  await until(() => views.length);
+  x.js("activeSpace").set(w.id, A); // what a first view with no window value may have decided
+  ff.rm(blank.id); // Firefox replaces the window's first tab with what it restores: the first in order, here
+  await realWait(10);
+  await x.js("serial")(() => {});
+  assert.equal(ff.tabs.get(there.id).active, true);
+  assert.equal(ff.tabs.get(here.id).active, false);
+  x.kill();
+});
+
 // --- The sidebar comes back -------------------------------------------------------
 // reconnect.js on a stand-in for the sidebar page: what is under test is when it
 // reloads, and how often. The smoke test does it for real (alone_safe_moves).

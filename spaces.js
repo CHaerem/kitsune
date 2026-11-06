@@ -105,7 +105,8 @@ browser.commands.onCommand.addListener(name => {
 // selects any tab it can show, and you stay in the space, with a new tab.
 const closedIn = new Map(); // windowId -> the space a tab was closed in, for a moment
 browser.tabs.onRemoved.addListener((tabId, { windowId, isWindowClosing }) => {
-  if (!tidierAlone || isWindowClosing || !activeSpace.has(windowId)) return;
+  // (Not while Firefox starts: restoring a session closes the window's first tab, which is no tab you left.)
+  if (!tidierAlone || !started || isWindowClosing || !activeSpace.has(windowId)) return;
   closedIn.set(windowId, activeSpace.get(windowId));
   setTimeout(() => closedIn.delete(windowId), 200);
 });

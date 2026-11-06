@@ -53,6 +53,11 @@ async function readAlone() {
   const local = await browser.storage.local.get("tidierAlone");
   tidierAlone = !!(managed.tidierAlone ?? local.tidierAlone);
 }
+// Read at once too, and not only when Tidier starts (tabsync.js), seconds later: a sidebar
+// open when Firefox starts asks for its first view long before that. Drawn without the
+// setting, its rows could not be dragged until it was closed, and its folders, tabs and
+// spaces all moved when the setting came (viewFor, sidebar-view.js).
+const aloneRead = readAlone().catch(noteError);
 
 // Something you should know and would otherwise not see, such as a live folder that
 // has stopped: shown on Tidier's button (in the Extensions menu) and in its sidebar.

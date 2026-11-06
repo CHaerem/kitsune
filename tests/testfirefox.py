@@ -72,6 +72,7 @@ TEST_PREFS = {
 # a site for the checks that use them.
 PAGES = {
     "/unsaved": "<title>Unsaved</title><input autofocus><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
+    "/plain": "<title>Plain</title>a plain page",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
 }
 

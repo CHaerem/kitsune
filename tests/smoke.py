@@ -1553,6 +1553,31 @@ def alone_safe_moves(m):
     where = registered_where("smoke-safe-selected")
     check("the selected tab can be moved, and you stay in your space", r["dropped"] and r["on"] == here and r["active"] == here and where["at"] == [there] and not where["selected"], f"{r} {where}")
 
+    # A web app changes its own address, which the record does not follow: a move takes the page you see.
+    open_in(m.pages + "/plain?smoke-safe-app", here)
+    registered_where("smoke-safe-app")
+    in_page("smoke-safe-app", """history.pushState({}, "", "?smoke-safe-deeper"); return 1;""")
+    moved = sidebar_page(m, drop_on_space + """return await dropOnSpace(await tabWith("smoke-safe-deeper"), args[0]);""", there)
+
+    def deeper():
+        state = m.js(where_script, "smoke-safe-deeper")
+        return {**state, "done": state["at"] == [there]}
+    r = until(deeper)
+    left = m.js(where_script, "smoke-safe-app")
+    check("a tab moved takes the address it has now, not the one it loaded", moved is True and r["at"] == [there] and left["at"] == [], f"{moved} {r} {left}")
+
+    # A space that is gone by the time of the move: nothing happens to the tab, selected or not.
+    open_in("https://example.org/?smoke-safe-nowhere", here)
+    registered_where("smoke-safe-nowhere")
+    for selected in (False, True):
+        if selected:
+            select_tab("smoke-safe-nowhere")
+        r = sidebar_page(m, drop_on_space + """const id = await tabWith("smoke-safe-nowhere"); send({type: "moveToSpace", tabId: id, space: "firefox-container-99"}); await wait(300);
+          await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "stats"})));
+          const t = await page.browser.tabs.get(id); return {active: t.active, loaded: !t.discarded};""")
+        where = m.js(where_script, "smoke-safe-nowhere")
+        check(f"a move to a space that is gone leaves the tab {'selected' if selected else 'where it is'}, loaded", r == {"active": selected, "loaded": True} and where["at"] == [here], f"{r} {where}")
+
     # A page with unsaved input stays, unasked: first in the background, then selected.
     open_in(m.pages + "/unsaved?smoke-safe-input", here)
     r = registered_where("smoke-safe-input")
@@ -1588,6 +1613,16 @@ def alone_safe_moves(m):
     set_rules([])
     gone = sidebar_page(m, """const p = doc.getElementById("problem"); for (let i = 0; i < 30 && !p.hidden; i++) await wait(100); return p.hidden;""")
     check("and it says so no longer once the rule is changed", gone is True, str(gone))
+    # In the settings such a rule shows as it is, and saving another rule does not send it elsewhere.
+    set_rules([{"url": "smoke-safe-dead", "space": "firefox-container-99"}])
+    r = ext_page(m, "/settings/settings.html?safe-moves", """const select = () => doc.querySelector("#rules select"); for (let i = 0; i < 40 && !select(); i++) await wait(100);
+      const shown = select().selectedOptions[0].textContent;
+      doc.querySelector("#rules input").dispatchEvent(new page.Event("change")); await wait(300);
+      return {shown, saved: (await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "settings:get"})))).rules};""")
+    check("the settings show a rule whose space is gone as gone, and saving keeps it", "gone" in r["shown"] and r["saved"] == [{"url": "smoke-safe-dead", "space": "firefox-container-99"}], str(r))
+    m.chrome()
+    m.js(H + """await removeWhere((w, t) => url(t).includes("settings.html?safe-moves")); return 1;""")
+    set_rules([])
 
     # A removed container takes its rules, folders and saved tabs along.
     made = sidebar_page(m, """const c = await page.browser.contextualIdentities.create(page.JSON.parse(JSON.stringify({name: "smoke-gone", color: "blue", icon: "circle"})));
@@ -1610,8 +1645,28 @@ def alone_safe_moves(m):
         return {**state, "done": not state["tabs"] and not state["record"] and len(state["rules"]) == 1}
     r = until(after_removal)
     check("a removed container's rules, folders and tabs go with it, and other rules stay", r["done"] and r["rules"] == [keep], str(r))
-    no_problems(m, "after moves and a removed container")
     set_rules([])
+
+    # The space you are in is removed: you land in another one, with its tabs shown.
+    made = sidebar_page(m, """return (await page.browser.contextualIdentities.create(page.JSON.parse(JSON.stringify({name: "smoke-gone-here", color: "red", icon: "circle"})))).cookieStoreId;""")
+    open_in("https://example.org/?smoke-gone-here-tab", made)
+    registered_where("smoke-gone-here-tab")
+    r = sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100);
+      return spaces().find(s => s.active)?.id;""", made)
+    check("a new space can be gone into", r == made, str(r))
+    sidebar_page(m, """await page.browser.contextualIdentities.remove(args[0]); return 1;""", made)
+
+    def fell_back():
+        state = sidebar_page(m, """const windowId = (await page.browser.windows.getCurrent()).id, active = spaces().find(s => s.active)?.id;
+          const [on] = await page.browser.tabs.query({active: true, windowId}), tabs = await page.browser.tabs.query({windowId, pinned: false});
+          return {active, on: on.cookieStoreId, left: (await page.browser.tabs.query({cookieStoreId: args[0]})).length,
+                  hiddenHere: tabs.filter(t => t.cookieStoreId === active && t.hidden).length,
+                  shownElsewhere: tabs.filter(t => t.cookieStoreId !== active && t.cookieStoreId !== "firefox-default" && !t.hidden && !t.active).length};""", made)
+        return {**state, "done": state["left"] == 0 and state["active"] not in (None, made) and state["on"] == state["active"]}
+    r = until(fell_back)
+    check("the space you are in removed: you are in another space, on one of its tabs, with only its tabs shown", r["done"] and r["hiddenHere"] == 0 and r["shownElsewhere"] == 0, str(r))
+    sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", here)
+    no_problems(m, "after moves and a removed container")
 
     # The background part starts again: the sidebar's connection is dead, and it comes back.
     views = """page.browser.extension.getViews({type: "sidebar"})"""
@@ -1661,16 +1716,21 @@ def alone_restart(m):
         return
     no_problems(m, "before a restart with Tidier alone")
     before = m.js(SNAP_ALONE)
+    # Also in the extension's own storage, as a browser moved over has it: this test Firefox is
+    # only pointed at its managed storage once it has started (USE_TEST_MANAGED_STORAGE), too
+    # late for the first view of a sidebar that is open, which a real file is not.
+    sidebar_page(m, """await page.browser.storage.local.set(page.JSON.parse(JSON.stringify({tidierAlone: true}))); return 1;""")
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
     # Its rows, not only the tabs: in a sidebar page opened now, and in the window's own sidebar.
     r = ext_page(m, "/sidebar/sidebar.html?after-restart", """for (let i = 0; i < 40 && !rows().length; i++) await wait(250);
-      const reals = page.browser.extension.getViews({type: "sidebar"}).map(v => v.document.querySelectorAll("#tabs .tab").length);
-      return {rows: rows().length, spaces: spaces().length, reals};""")
+      const own = page.browser.extension.getViews({type: "sidebar"}).map(v => [...v.document.querySelectorAll("#tabs .tab")]);
+      return {rows: rows().length, spaces: spaces().length, reals: own.map(list => list.length), fixed: own.flat().filter(e => !e.draggable).length};""")
     check("after a restart the sidebar shows its list", r["rows"] > 0 and r["spaces"] > 0, str(r))
     check("after a restart the window's own sidebar has connected and shows its list", any(r["reals"]), str(r))
+    check("after a restart the rows of the window's own sidebar can be dragged", r["fixed"] == 0, str(r))
 
 
 def more_tabs_here(m, name):
