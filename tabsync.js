@@ -209,7 +209,7 @@ async function sidebarStarted(windowId, essentials) {
   let probed = t0, probes = 0;
   while (Date.now() - t0 < SIDEBAR_WAIT_MS) {
     const sign = await sidebarSign(windowId);
-    if (sign) { noteSidebarWait({ ms: Date.now() - t0, probes, sign }); return; }
+    if (sign) { noteSidebarWait({ ms: Date.now() - t0, probes, sign }); await sleep(500); return; }
     if (Date.now() - probed >= PROBE_MS) { probed = Date.now(); probes++; await reloadPlaceholders(essentials); }
     await sleep(100);
   }
