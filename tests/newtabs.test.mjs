@@ -314,6 +314,24 @@ test("a link that takes longer than the wait shows in the one place meanwhile, a
   x.kill();
 });
 
+test("a blank tab already in the one place is drawn after the wait too, with nothing moved to say so", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: folder() };
+  const w = ff.addWindow({ focused: true });
+  const [kept] = fill(ff, w, [["kept", C1, { parentKey: "F" }]]);
+  kept.active = true;
+  const x = await start(ff);
+  const send = await sidebar(x, w.id);
+  const blank = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(blank));
+  await wait(50);
+  send.views.length = 0;
+  await wait(3200);
+  assert.equal(send.views.at(-1)?.tabs[0]?.id, blank.id);
+  assert.ok(!ff.log.some(([what]) => what === "move"));
+  x.kill();
+});
+
 test("a page that stays as it is keeps its place: nothing moves it after the wait", async () => {
   const ff = new FakeFirefox();
   const w = ff.addWindow({ focused: true });
