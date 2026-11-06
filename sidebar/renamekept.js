@@ -59,7 +59,8 @@ function renameKept(id) {
   for (const event of ["click", "auxclick", "dblclick", "contextmenu"]) input.addEventListener(event, e => e.stopPropagation());
   input.onkeydown = e => {
     e.stopPropagation();
-    if (e.key === "Enter" && !e.isComposing) finish(true);
+    if (e.isComposing) return; // Enter and Esc are the input method's while it composes
+    if (e.key === "Enter") finish(true);
     else if (e.key === "Escape") finish(false);
   };
   input.focus();
@@ -68,10 +69,22 @@ function renameKept(id) {
 
 // After each view (this listener runs after render). What was being named can be gone:
 // its tab closed, its space left with a key, its folder folded from another window. What
-// you typed is saved, as when you leave the box any other way. A row that only had to
-// move loses the focus without any event, or you would be typing into nothing.
+// you typed is saved, as when you leave the box any other way. A box that only had to move
+// with its row or folder (a folder's own box too) has lost the focus without any event, or
+// you would be typing into nothing. It only ever lost it to the move: leaving a box closes it.
 port.onMessage.addListener(() => {
-  if (!naming) return;
-  if (!naming.target.isConnected || !naming.input.offsetParent) naming.finish(true);
-  else if (document.activeElement !== naming.input) naming.input.focus();
+  if (naming && (!naming.target.isConnected || !naming.input.offsetParent)) naming.finish(true);
+  const box = document.querySelector("input.rename");
+  if (box && document.activeElement !== box) box.focus();
 });
+
+// Text dragged in a box (all of it is selected at first) starts its drag in the row or the
+// folder head around the box, which would pick that up: a drop on the list would take the
+// tab out of its folder, and with it its name. A folder's own box is the same.
+addEventListener("dragstart", e => { if (e.target.matches?.("input.rename")) e.stopPropagation(); }, true);
+
+// The middle button pressed in the box and released beside it is a click on the row to
+// Firefox, which would close the tab. (The left button's stays with the box.)
+addEventListener("auxclick", e => {
+  if (naming && e.target !== naming.input && e.target.contains?.(naming.input)) e.stopPropagation();
+}, true);

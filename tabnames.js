@@ -32,14 +32,18 @@ async function redrawPlaceholders(tabs) {
 }
 
 // From the sidebar, for the tab shown there. The tab is only how it was pointed at:
-// the name belongs to the essential or the saved tab, in every window.
+// the name belongs to the essential or the saved tab, in every window. An essential is
+// what is pinned: Firefox gives a duplicate its tab's values, so a key alone would name
+// the essential for its unpinned duplicate, and keep treating that tab as a copy of it.
 async function renameTab(tabId, name) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
   const text = (name || "").trim().slice(0, NAME_MAX);
-  const essentialKey = await keyOf({ id: tabId }).catch(() => undefined);
-  const list = await getList();
-  const essential = essentialKey && list.find(e => e.key === essentialKey);
-  if (essential) {
-    if (!setName(essential, text)) return;
+  if (tab.pinned) {
+    const essentialKey = await keyOf(tab).catch(() => undefined);
+    const list = await getList();
+    const essential = essentialKey && list.find(e => e.key === essentialKey);
+    if (!essential || !setName(essential, text)) return;
     setList([...list]);
     viewAllSoon(); // the list, unlike the record, tells no sidebar by itself
     await redrawPlaceholders(await copiesOf(essentialKey));

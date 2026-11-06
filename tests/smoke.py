@@ -1491,11 +1491,28 @@ def alone_restart(m):
         print("SKIP  alone_restart (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
         return
     no_problems(m, "before a restart with Tidier alone")
+    # Names, as the record and the list keep them: an essential's, and a saved tab's.
+    named = sidebar_page(m, """
+      const until = async f => { for (let t = 0; t < 8000 && !f(); t += 50) await wait(50); return f(); };
+      const tile = doc.querySelector("#essentials .tile"), space = spaces().find(s => s.active).id;
+      send({type: "newFolder", space, name: "Named"});
+      const head = await until(() => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Named"));
+      const tab = Number(plainTabs()[0].dataset.tab);
+      send({type: "moveTab", tabId: tab, folder: head.dataset.folderHead, before: null});
+      await until(() => doc.querySelector(`#tabs .tab[data-tab="${tab}"]`)?.dataset.folder);
+      send({type: "renameTab", tabId: Number(tile.dataset.tab), name: "Named essential"});
+      send({type: "renameTab", tabId: tab, name: "Named tab"});
+      return await until(() => tile.title.startsWith("Named essential") && rows().includes("Named tab"));""")
+    check("names: an essential and a saved tab named before the restart", named, str(named))
     before = m.js(SNAP_ALONE)
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+    r = sidebar_page(m, """await wait(500); return {tiles: tiles().map(t => t.split("\\n")[0]), rows: rows()};""")
+    check("after a restart, an essential and a saved tab keep their names", "Named essential" in r.get("tiles", []) and "Named tab" in r.get("rows", []), str(r))
+    r = m.js(H + """const labels = w => w.gBrowser.tabs.filter(t => !t.selected && !t.linkedPanel).map(t => t.label); return wins().map(labels).flat();""")
+    check("after a restart, their placeholders still show them", "Named essential" in r and "Named tab" in r, str(r))
 
 
 def more_tabs_here(m, name):
@@ -1565,6 +1582,7 @@ def alone_tab_names(m):
     UNTIL = """const until = async (f, ms = 10000) => { for (let t = 0; t < ms; t += 50) { const v = f(); if (v) return v; await wait(50); } return f(); };
       const row = id => doc.querySelector(`#tabs .tab[data-tab="${id}"]`), tile = id => doc.querySelector(`#essentials .tile[data-tab="${id}"]`);
       const nameOf = id => row(id)?.querySelector(".title")?.textContent;
+      const tip = e => e?.title.split("\\n")[0];
       const box = () => doc.querySelector("input.rename");
       const state = () => ({open: !!box(), value: box()?.value ?? null, focused: !!box() && doc.activeElement === box(), caret: box()?.selectionStart ?? null});"""
 
@@ -1615,7 +1633,7 @@ def alone_tab_names(m):
       send({type: "moveTab", tabId: tabs[0], folder: headOf("Names"), before: null});
       await until(() => row(tabs[0])?.dataset.folder);
       const tileEl = doc.querySelector("#essentials .tile");
-      return {above: headOf("Above"), names: headOf("Names"), saved: tabs[0], plain: tabs[1], tile: Number(tileEl.dataset.tab), tileTitle: tileEl.title, page: nameOf(tabs[0])};""")
+      return {above: headOf("Above"), names: headOf("Names"), saved: tabs[0], plain: tabs[1], tile: Number(tileEl.dataset.tab), tileTitle: tip(tileEl), page: nameOf(tabs[0])};""")
     check("names: a folder with a saved tab to name", setup.get("saved") and setup.get("page") and setup.get("tile"), str(setup))
     m.js(H + """if (!other()) { const w = main().OpenBrowserWindow(); w.__smoke = true; await wait(4000); } return 1;""")
     saved, tile_id, page_title = setup["saved"], setup["tile"], setup["page"]
@@ -1680,16 +1698,17 @@ def alone_tab_names(m):
         check("a folder above removed leaves the open box alone", side.get("gone", {}).get("open") and side["gone"]["focused"] and side["gone"]["value"] == "Sprint" and side["gone"]["caret"] == 6, str(side))
         check("its own folder moved: the box stays open, with the focus", side.get("moved", {}).get("open") and side["moved"]["focused"] and side["moved"]["value"] == "Sprint", str(side))
         keys(" board", ENTER)
-        r = in_front("""await until(() => !box() && row(args[0]).title === "Sprint board");
-          return {name: nameOf(args[0]), tip: row(args[0]).title, open: !!box(), renaming: row(args[0]).classList.contains("renaming"), draggable: row(args[0]).draggable, close: !!row(args[0]).querySelector(".close")};""", saved)
+        r = in_front("""await until(() => !box() && tip(row(args[0])) === "Sprint board");
+          return {name: nameOf(args[0]), tip: tip(row(args[0])), open: !!box(), renaming: row(args[0]).classList.contains("renaming"), draggable: row(args[0]).draggable, close: !!row(args[0]).querySelector(".close")};""", saved)
         check("Enter saves a saved tab's name, typed with real keys", r == {"name": "Sprint board", "tip": "Sprint board", "open": False, "renaming": False, "draggable": True, "close": True}, str(r))
         m.chrome()
         r = m.js(H + """const named = async () => Object.entries((await storage("%s", ["syncedTabs"])).syncedTabs).find(([, e]) => e.name === "Sprint board")?.[0];
           let k = await named(); for (let i = 0; i < 100 && !k; i++) { await wait(100); k = await named(); }
-          const label = async () => { for (let i = 0; i < 100; i++) { const t = other().gBrowser.tabs.find(x => key(other(), x) === JSON.stringify(k)); if (t?.label === "Sprint board") return t.label; await wait(100); } return other().gBrowser.tabs.find(x => key(other(), x) === JSON.stringify(k))?.label; };
+          const there = () => other().gBrowser.tabs.find(x => key(other(), x) === JSON.stringify(k));
+          for (let i = 0; i < 100 && (there()?.label !== "Sprint board" || there()?.linkedPanel); i++) await wait(100);
           const e = (await storage("%s", ["syncedTabs"])).syncedTabs[k];
-          return {k, label: await label(), title: e?.title, name: e?.name};""" % (EXT_ID, EXT_ID))
-        check("the name is kept apart from the page's title, and the other window's placeholder takes it", r.get("name") == "Sprint board" and r.get("title") == page_title and r.get("label") == "Sprint board", str(r))
+          return {k, label: there()?.label, loaded: !!there()?.linkedPanel, title: e?.title, name: e?.name};""" % (EXT_ID, EXT_ID))
+        check("the name is kept apart from the page's title, and the other window's placeholder takes it and unloads again", r.get("name") == "Sprint board" and r.get("title") == page_title and r.get("label") == "Sprint board" and r.get("loaded") is False, str(r))
         front()
 
         # Esc cancels; leaving the box saves; empty brings back the page's title.
@@ -1708,6 +1727,44 @@ def alone_tab_names(m):
         r = in_front("""await until(() => !box() && nameOf(args[0]) === args[1]); return nameOf(args[0]);""", saved, page_title)
         check("an empty box brings back the page's title", r == page_title, str(r))
 
+        # What starts in the box stays there. Text dragged in it (all of it is selected at first) is not its
+        # row: a drop on the list would take the tab out of its folder, and its name with it. A folder's box is
+        # the same. Headless Firefox starts no drag of its own for a real pointer, so these events are made here.
+        # While an input method composes, Enter and Esc are its own.
+        drag_in_box = """const dragInBox = over_what => { const data = new page.DataTransfer();
+            box().dispatchEvent(new page.DragEvent("dragstart", {bubbles: true, cancelable: true, dataTransfer: data}));
+            const over = new page.DragEvent("dragover", {bubbles: true, cancelable: true, dataTransfer: data, clientX: 5, clientY: 5});
+            over_what.dispatchEvent(over);
+            page.dispatchEvent(new page.DragEvent("dragend", {bubbles: true}));
+            return over.defaultPrevented; };"""
+        r = in_front(drag_in_box + """
+          page.renameKept(args[0]);
+          const droppable = dragInBox(doc.getElementById("tabs"));
+          for (const key of ["Enter", "Escape"]) box().dispatchEvent(new page.KeyboardEvent("keydown", {key, isComposing: true, bubbles: true}));
+          return {droppable, ...state()};""", saved)
+        check("text dragged in the box does not pick up its row, and Enter or Esc while composing leave the box open", r.get("droppable") is False and r.get("open") and r.get("focused"), str(r))
+        keys(ESC)
+        r = in_front(drag_in_box + """await until(() => !box());
+          page.rename(args[0]);
+          const other = [...doc.querySelectorAll("#tabs .folder")].find(f => f.dataset.key !== args[0]);
+          return {droppable: dragInBox(other.querySelector(".head")), open: !!box()};""", setup["names"])
+        check("nor in a folder's box", r == {"droppable": False, "open": True}, str(r))
+        # And a folder's box keeps the focus when its folder is moved, as a tab's does.
+        r = in_front("""
+          const port = page.browser.runtime.connect({name: "sidebar"});
+          port.postMessage(page.JSON.parse(JSON.stringify({type: "hello", windowId: (await page.browser.windows.getCurrent()).id})));
+          await wait(100);
+          const keysNow = () => [...doc.querySelectorAll("#tabs .folder")].map(f => f.dataset.key);
+          const other = keysNow().find(k => k !== args[0]);
+          port.postMessage(page.JSON.parse(JSON.stringify({type: "moveFolder", key: args[0], before: other})));
+          await until(() => keysNow()[0] === args[0]);
+          await wait(300);
+          port.disconnect();
+          return state();""", setup["names"])
+        check("a folder's box moved with its folder keeps the focus", r.get("open") and r.get("focused"), str(r))
+        keys(ESC)
+        in_front("await until(() => !box()); return 1;")
+
         # A tile: the line with the space's name becomes the box, at its height, and the list stays where it was.
         r = in_front("""
           const line = doc.getElementById("space-name"), top = doc.getElementById("tabs").getBoundingClientRect().top, left = line.getBoundingClientRect().left;
@@ -1722,8 +1779,8 @@ def alone_tab_names(m):
         r = in_front("""return {...state(), line: doc.getElementById("space-name").hidden, boxes: doc.querySelectorAll("input.rename").length};""")
         check("a view does not disturb a tile's box", r.get("open") and r.get("focused") and r.get("value") == "Ji" and r.get("line") and r.get("boxes") == 1, str(r))
         keys("ra", ENTER)
-        r = in_front("""await until(() => !box() && tile(args[0]).title === "Jira");
-          return {tip: tile(args[0]).title, open: !!box(), line: doc.getElementById("space-name").hidden, text: doc.getElementById("space-name").textContent, marked: tile(args[0]).classList.contains("renaming")};""", tile_id)
+        r = in_front("""await until(() => !box() && tip(tile(args[0])) === "Jira");
+          return {tip: tip(tile(args[0])), open: !!box(), line: doc.getElementById("space-name").hidden, text: doc.getElementById("space-name").textContent, marked: tile(args[0]).classList.contains("renaming")};""", tile_id)
         check("Enter saves a tile's name, shown as its tooltip, and the space's name is back", r.get("tip") == "Jira" and not r.get("open") and not r.get("line") and r.get("text") and not r.get("marked"), str(r))
         m.chrome()
 
@@ -1734,19 +1791,21 @@ def alone_tab_names(m):
             m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
             if "?second" in m.cmd("WebDriver:GetCurrentURL"):
                 break
-        r = in_front("""await until(() => [...doc.querySelectorAll("#essentials .tile")].some(t => t.title === "Jira")); return [...doc.querySelectorAll("#essentials .tile")].map(t => t.title);""")
+        r = in_front("""await until(() => [...doc.querySelectorAll("#essentials .tile")].some(t => tip(t) === "Jira")); return [...doc.querySelectorAll("#essentials .tile")].map(tip);""")
         check("a second window's sidebar shows the same name", "Jira" in (r or []), str(r))
         m.chrome()
         r = m.js(H + """const list = (await storage("%s", ["essentials"])).essentials, e = list.find(x => x.name === "Jira");
-          let label; for (let i = 0; i < 100 && label !== "Jira"; i++) { label = other().gBrowser.tabs.find(t => t.pinned && ek(other(), t) === e?.key)?.label; if (label !== "Jira") await wait(100); }
+          const there = () => other().gBrowser.tabs.find(t => t.pinned && ek(other(), t) === e?.key);
+          for (let i = 0; i < 100 && (there()?.label !== "Jira" || there()?.linkedPanel); i++) await wait(100);
+          const label = there()?.label, loaded = !!there()?.linkedPanel;
           for (const t of [...other().gBrowser.tabs]) if (url(t).includes("?second")) other().gBrowser.removeTab(t);
           await wait(300);
-          return {name: e?.name, title: e?.title, label};""" % EXT_ID)
-        check("an essential's name is in its list entry, and its placeholder in the other window takes it", r.get("name") == "Jira" and r.get("label") == "Jira", str(r))
+          return {name: e?.name, title: e?.title, label, loaded};""" % EXT_ID)
+        check("an essential's name is in its list entry, and its placeholder in the other window takes it and unloads again", r.get("name") == "Jira" and r.get("label") == "Jira" and r.get("loaded") is False, str(r))
         front()
         in_front("page.renameKept(args[0]); return 1;", tile_id)
         keys(BACKSPACE, ENTER)
-        r = in_front("""await until(() => !box() && tile(args[0]).title !== "Jira"); return tile(args[0]).title;""", tile_id)
+        r = in_front("""await until(() => !box() && tip(tile(args[0])) !== "Jira"); return tip(tile(args[0]));""", tile_id)
         check("an empty box brings back an essential's title", r == setup["tileTitle"], str(r))
 
         # What is being named goes away without the box losing the focus: an essential unpinned
@@ -1766,10 +1825,74 @@ def alone_tab_names(m):
           page.__names.send({type: "pin", tabId: args[0], pinned: false});
           await until(() => !tile(args[0]) && !box());
           const out = {open: !!box(), line: doc.getElementById("space-name").hidden};
-          await until(() => row(args[0])?.title && row(args[0]).title !== "Typed", 5000);
+          await until(() => row(args[0])?.title && tip(row(args[0])) !== "Typed", 5000);
           page.__names.port.disconnect();
-          return {...out, tip: row(args[0])?.title};""", setup["plain"])
+          return {...out, tip: tip(row(args[0]))};""", setup["plain"])
         check("what is being named goes away: the box closes, and an ordinary tab has no name", r.get("open") is False and r.get("line") is False and r.get("tip") and r.get("tip") != "Typed", str(r))
+
+        # The same in the real sidebar, which a page in a tab cannot stand in for: the page beside it can
+        # take the focus, and a key can take its space away. Its contents can be read through the extension's
+        # own views. Tidier's menu is another file's; here a real click on the name line stands in for its item.
+        m.chrome()
+        panel = lambda script, *args: sidebar_page(m, """
+          const [view] = page.browser.extension.getViews({type: "sidebar", windowId: (await page.browser.windows.getCurrent()).id});
+          const side = view.wrappedJSObject || view;
+          return await (async doc => { """ + UNTIL + script + """ })(side.document);""", *args)
+        base = m.js(H + """const w = main(); w.focus(); await wait(300);
+          for (const p of w.document.querySelectorAll("panel, menupopup")) if (p.state === "open") p.hidePopup();
+          await wait(300); const r = w.SidebarController.browser.getBoundingClientRect(); return {x: r.left, y: r.top, right: r.right};""")
+
+        def open_in_panel(tab):
+            at = panel("""const line = doc.getElementById("space-name"), b = line.getBoundingClientRect();
+              line.addEventListener("click", () => side.renameKept(args[0]), {once: true});
+              return {x: b.left + b.width / 2, y: b.top + b.height / 2};""", tab)
+            click(base["x"] + at["x"], base["y"] + at["y"])
+
+        def press_in_box_release_on_icon(button):
+            at = panel("""const b = box().getBoundingClientRect(), i = row(args[0]).querySelector("img, .letter").getBoundingClientRect();
+              return {x0: b.left + 20, y0: b.top + b.height / 2, x1: i.left + 4, y1: i.top + i.height / 2};""", saved)
+            m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+                {"type": "pointerMove", "x": int(base["x"] + at["x0"]), "y": int(base["y"] + at["y0"]), "duration": 0, "origin": "viewport"}, {"type": "pointerDown", "button": button},
+                {"type": "pointerMove", "x": int(base["x"] + at["x1"]), "y": int(base["y"] + at["y1"]), "duration": 50, "origin": "viewport"}, {"type": "pointerUp", "button": button}]}]})
+            m.cmd("WebDriver:ReleaseActions")
+
+        open_in_panel(saved)
+        r = panel("return {...state(), document: doc.hasFocus()};")
+        check("in the real sidebar, a real click opens the box, and the focus is really in it", r.get("focused") and r.get("document"), str(r))
+        keys("In the panel", ENTER)
+        r = panel("""await until(() => !box() && tip(row(args[0])) === "In the panel"); return {open: !!box(), tip: tip(row(args[0]))};""", saved)
+        check("in the real sidebar, real keys type the name and Enter saves it", r == {"open": False, "tip": "In the panel"}, str(r))
+
+        # A press in the box and a release beside it, on its row: a middle click there would close the tab.
+        selected = """const w = main(); return w.gBrowser.selectedTab.linkedPanel;"""
+        before = m.js(H + selected)
+        open_in_panel(saved)
+        press_in_box_release_on_icon(1)
+        press_in_box_release_on_icon(0)
+        r = panel("""await wait(500); return {...state(), there: !!row(args[0])};""", saved)
+        check("in the real sidebar, a press in the box and a release on its row neither close nor select the tab", r.get("open") and r.get("there") and r.get("focused") and m.js(H + selected) == before, str(r))
+
+        # The page beside it takes the focus: what was typed is saved, and the box is gone.
+        panel("box().select(); return 1;")
+        keys("Left for the page")
+        free = sidebar_page(m, """return [...doc.querySelectorAll("#tabs .row")].at(-1).getBoundingClientRect().bottom + 40;""")
+        click(base["right"] + 300, base["y"] + free)
+        r = panel("""await until(() => !box() && tip(row(args[0])) === "Left for the page"); return {open: !!box(), tip: tip(row(args[0]))};""", saved)
+        check("in the real sidebar, a real click in the page saves what was typed", r == {"open": False, "tip": "Left for the page"}, str(r))
+
+        # A space left by a real key closes a tile's box, whose line would otherwise never come back.
+        m.js(H + """main().focus(); await wait(200); return 1;""")
+        open_in_panel(tile_id)
+        keys("Short")
+        at = panel("""return {index: [...doc.querySelectorAll("#spaces .space")].findIndex(s => s.classList.contains("active")), name: doc.getElementById("space-name").textContent, ...state()};""")
+        press(m, "2" if at["index"] == 0 else "1", CTRL)
+        r = panel("""await until(() => !box()); await until(() => doc.getElementById("space-name").textContent !== args[0]);
+          return {open: !!box(), hidden: doc.getElementById("space-name").hidden, text: doc.getElementById("space-name").textContent};""", at["name"])
+        check("in the real sidebar, a space left by a key closes a tile's box and its line is back", r.get("open") is False and r.get("hidden") is False and r.get("text") and r.get("text") != at["name"], str(r))
+        press(m, str(at["index"] + 1), CTRL)
+        r = panel("""await until(() => tip(tile(args[0])) === "Short"); const out = tip(tile(args[0]));
+          send({type: "renameTab", tabId: args[0], name: ""}); await until(() => tip(tile(args[0])) !== "Short"); return out;""", tile_id)
+        check("what was typed before the space was left is saved", r == "Short", str(r))
     finally:
         m.chrome()
         m.js(H + """const w = main(); if (w.__beforeNames && !w.__beforeNames.closing) w.gBrowser.selectedTab = w.__beforeNames; delete w.__beforeNames; await wait(500); return 1;""")

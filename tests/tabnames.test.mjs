@@ -199,6 +199,67 @@ test("a saved tab made an essential keeps its name, and an essential made an ord
   x.kill();
 });
 
+// Firefox gives a duplicate its tab's values, so this tab has the essential's key
+// (seen in a real Firefox) and is not that essential.
+test("a duplicate of an essential, saved in a folder, gets a name of its own", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "Sign in", icon: "x", name: "Jira" }];
+  ff.store.syncedTabs = { F: folder("Kept"), d: savedEntry("https://e.example/", "Sign in") };
+  const one = ff.addWindow({ focused: true });
+  const loaded = ff.addTab(one.id, { url: "https://e.example/", title: "Sign in", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const dup = ff.addTab(one.id, { url: "https://e.example/", title: "Sign in", active: true, cookieStoreId: C1 }, { essentialKey: "e", syncKey: "d", syncRole: "live" });
+  const x = await start(ff);
+  const a = sidebar(x, one.id);
+  await a.send({ type: "renameTab", tabId: dup.id, name: "Mine" });
+  await wait(200);
+  assert.equal((await x.js("getList()"))[0].name, "Jira", "the essential keeps its own");
+  assert.equal((await x.js("getSynced()")).d.name, "Mine");
+  assert.equal(row(a.last(), dup.id).title, "Mine");
+  assert.equal(a.last().essentials.find(t => t.id === loaded.id).title, "Jira");
+  assert.equal(await x.js(`keyByTab.has(${dup.id})`), false, "nor does it count as a copy of the essential from now on");
+  x.kill();
+});
+
+test("a pinned tab that is no essential stays as it is", async () => {
+  const ff = new FakeFirefox();
+  const one = ff.addWindow({ focused: true });
+  const pinned = ff.addTab(one.id, { url: "about:preferences", title: "Settings", pinned: true, active: true });
+  const x = await start(ff);
+  const a = sidebar(x, one.id);
+  await a.send({ type: "renameTab", tabId: pinned.id, name: "Mine" });
+  await wait(100);
+  assert.equal((await x.js("getList()")).length, 0);
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+// A name is often given because the title is noisy, so this is the case to get right.
+test("a named tab's new title reloads no placeholder, while its new icon does, and an unnamed tab's title too", async () => {
+  const ff = new FakeFirefox();
+  const { x, one, liveSaved, ghostSaved, liveOrdinary, ghostOrdinary } = await twoWindows(ff);
+  const a = sidebar(x, one.id);
+  await a.send({ type: "renameTab", tabId: liveSaved.id, name: "Sprint board" });
+  await wait(200);
+  const reloads = id => ff.log.filter(l => l[0] === "update-url" && l[1] === id).length;
+  const change = (tab, values) => {
+    Object.assign(ff.tabs.get(tab.id), values);
+    x.b.tabs.onUpdated.fire(tab.id, values, ff.snap(ff.tabs.get(tab.id)));
+  };
+  ff.tabs.get(ghostSaved.id).discarded = true; // the fake leaves it loaded
+  const before = reloads(ghostSaved.id);
+  change(liveSaved, { title: "Board (3 new)" });
+  await wait(5000);
+  assert.equal(reloads(ghostSaved.id), before, "its title is not what they show");
+  assert.equal((await x.js("getSynced()")).s.title, "Board (3 new)", "still followed, for when the name is cleared");
+  change(liveSaved, { favIconUrl: "https://a.example/new.png" });
+  await wait(5000);
+  assert.equal(reloads(ghostSaved.id), before + 1, "its icon is");
+  change(liveOrdinary, { title: "Plain (1)" });
+  await wait(5000);
+  assert.equal(reloads(ghostOrdinary.id), 1);
+  x.kill();
+});
+
 test("names travel with a copy", async () => {
   const ff = new FakeFirefox();
   const w = ff.addWindow({ focused: true });

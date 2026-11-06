@@ -702,7 +702,8 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       const all = await getSynced();
       const entry = all[key];
       if (!entry || !isWeb(tab.url)) return;
-      const changed = entry.title !== tab.title || (tab.favIconUrl && entry.icon !== tab.favIconUrl);
+      const newIcon = tab.favIconUrl && entry.icon !== tab.favIconUrl;
+      const changed = entry.title !== tab.title || newIcon;
       const moved = entry.url !== tab.url;
       if (!changed && !moved) return;
       Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
@@ -710,7 +711,9 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       if (entry.saved?.url === tab.url) Object.assign(entry.saved, { title: tab.title, icon: tab.favIconUrl || entry.saved.icon });
       noteSaved(all, [key]);
       saveSynced(all, { lazy: !moved });
-      if (changed) refreshGhostsSoon(key);
+      // A named tab's placeholders show its name, whatever its page's title says now
+      // (tabnames.js): a ticking title would reload them all day for nothing.
+      if (newIcon || (changed && !entry.name)) refreshGhostsSoon(key);
     });
   }
 });
