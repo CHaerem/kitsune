@@ -744,3 +744,25 @@ test("a page that finishes loading just after a pull still updates the record", 
   assert.equal(ff.synced.a.url, "https://a.example/next");
   x.kill();
 });
+
+test("a link put in its space is not in Recently Closed, so ⌘⇧T does not open it twice", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const x = await alone(ff);
+  await wait(200);
+  // The newest is the tab Tidier replaces; the one before it, with the same address, you closed.
+  ff.recentlyClosed = [
+    { tab: { url: "https://link.example/", sessionId: "replaced", windowId: w.id } },
+    { tab: { url: "https://b.example/", sessionId: "yours", windowId: w.id } },
+    { tab: { url: "https://link.example/", sessionId: "yours too", windowId: w.id } },
+  ];
+  const link = ff.addTab(w.id, { url: "about:blank", active: true });
+  x.b.tabs.onCreated.fire(ff.snap(link));
+  ff.navigate(link.id, "https://link.example/");
+  await wait(1000);
+  assert.ok(ff.list(w.id).some(t => t.url === "https://link.example/" && t.cookieStoreId === C1), "it is in the space");
+  assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["yours", "yours too"]);
+  x.kill();
+});

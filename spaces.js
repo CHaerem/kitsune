@@ -203,6 +203,7 @@ async function byRule(tabId, url) {
   newTabs.delete(tabId);
   await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
   await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPage(url);
 }
 
 async function intoSpace(tabId) {
@@ -217,6 +218,7 @@ async function intoSpace(tabId) {
   if (url !== undefined && !isWeb(url)) return;
   await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: tab.index + 1 });
   await browser.tabs.remove(tab.id).catch(() => {});
+  if (url !== undefined) await forgetClosedPage(url);
 }
 
 // --- When Tidier starts ------------------------------------------------------

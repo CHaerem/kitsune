@@ -19,7 +19,7 @@ function serial(fn) {
       })]);
     } finally { clearTimeout(limit); work.queueMs += performance.now() - t0; }
   });
-  queue = run.catch(noteError);
+  queue = run.catch(err => noteError(err, fn));
   return run;
 }
 
@@ -27,11 +27,13 @@ function serial(fn) {
 // so they are also kept for the smoke test ("stats" in tabsync.js), which fails
 // on any: an error there is a tab that was not handled.
 const problems = [];
-function noteError(err) {
+function noteError(err, job) {
   console.error("Tidier:", err);
   work.errors++;
   // Where it happened, shortly: a message alone does not say which of many calls it was.
-  const where = String(err?.stack ?? "").split("\n").filter(Boolean).slice(0, 3).map(f => f.replace(/@.*\//, " ").replace(/:\d+$/, "")).join(" < ");
+  // Firefox's own refusals have no stack, so the job they stopped says it instead.
+  const where = String(err?.stack ?? "").split("\n").filter(Boolean).slice(0, 3).map(f => f.replace(/@.*\//, " ").replace(/:\d+$/, "")).join(" < ")
+    || String(job ?? "").replace(/\s+/g, " ").slice(0, 80);
   problems.push(String(err?.message ?? err) + (where ? ` (${where})` : ""));
   if (problems.length > 20) problems.shift();
 }
@@ -88,19 +90,30 @@ const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.h
 // looked for again whenever that list changes, for FORGET_MS. (An essential
 // copy's address may end in "&placed=N", see essentials.js.)
 const FORGET_MS = 10000;
-const toForget = new Map(); // placeholder URL -> until when to look for it
+const toForget = new Map(); // placeholder URL -> { until when to look for it, once }
 async function forgetClosedPlaceholders(kind, keys) {
-  for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
+  for (const k of keys) toForget.set(ghostUrl(kind, k), { until: Date.now() + FORGET_MS });
   setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
   await forgetClosedNow();
 }
+// A page Tidier opened again elsewhere (a link put in its space): the tab it replaced is
+// no tab you closed, and ⌘⇧T would open the page a second time instead of bringing back
+// what you did close. Once only: closing the new tab a moment later is yours.
+async function forgetClosedPage(url) {
+  toForget.set(url, { until: Date.now() + FORGET_MS, once: true });
+  setTimeout(forgetClosedNow, FORGET_MS + 100);
+  await forgetClosedNow();
+}
 async function forgetClosedNow() {
-  for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
+  for (const [url, { until }] of toForget) if (until < Date.now()) toForget.delete(url);
   if (!toForget.size) return;
-  const ours = url => [...toForget.keys()].some(p => url === p || url?.startsWith(p + "&"));
+  const ours = url => [...toForget.keys()].find(p => url === p || url?.startsWith(p + "&"));
   const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
   for (const t of closed.map(item => item.tab).filter(Boolean)) {
-    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+    const p = ours(t.url);
+    if (!p) continue;
+    if (toForget.get(p).once) toForget.delete(p);
+    await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
   }
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
