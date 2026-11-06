@@ -1,0 +1,32 @@
+/* The view of archived tabs (archived.js): it slides over the list, in the window's
+ * own colour, so the sidebar stays one surface. Its place is set from the list's. */
+#archived {
+  position: fixed; left: 0; right: 0; z-index: 5; box-sizing: border-box; padding: 0 8px;
+  display: flex; flex-direction: column;
+  background: var(--frame);
+  transform: translateX(100%); visibility: hidden;
+  transition: transform .18s ease, visibility .18s, background-color .25s ease;
+}
+#archived.open { transform: none; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { #archived { transition: none; } }
+
+#archived .back {
+  flex: none; width: 100%; border: 0; background: none; color: var(--muted);
+  font: inherit; font-size: 12px; font-weight: 600; text-align: left;
+}
+#archived .back:hover { background: var(--hover); color: var(--text); }
+#archived .back .chevron { width: 16px; text-align: center; font-size: 14px; line-height: 1; }
+
+#archived .rows { flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }
+#archived .row img, #archived .row .letter { opacity: .75; }
+
+/* The age and the × share their place, so a row does not shift under the pointer. */
+#archived .rows .row { position: relative; }
+#archived .age {
+  flex: none; width: 40px; text-align: right; white-space: nowrap;
+  color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+#archived .rows .row:hover .age { visibility: hidden; }
+#archived .row .close { position: absolute; right: 6px; top: 6px; }
+
+#archived .empty { padding: 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }

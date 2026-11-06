@@ -91,7 +91,7 @@ export class FakeFirefox {
       create: async p => {
         if (!ff.wins.has(p.windowId)) throw new Error(`Invalid window ID: ${p.windowId}`);
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
-        const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
+        const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.title ?? p.url, discarded: !!p.discarded });
         ff.log.push(["create", t.id, p.windowId, p.url]);
         const s = ff.snap(t); b.tabs.onCreated.fire(s);
         return s;

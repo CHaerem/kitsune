@@ -1464,6 +1464,182 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+def alone_archived(m):
+    # Tidier's own list of what was closed: reached from the list's menu, on the real
+    # sidebar, with Firefox's own mouse where it matters (the × shows on hover only).
+    settled = """const settled = async (test, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await test(); if (v || Date.now() - t0 > ms) return v; await wait(50); } };"""
+    opened = m.js(H + settled + """if (other()) return false;
+      const a = main(), want = a.gBrowser.tabs.filter(t => !t.pinned && role(a, t)).length, w = a.OpenBrowserWindow(); w.__smoke = true;
+      await settled(() => w.gBrowser && w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length >= want, 20000);
+      a.focus(); await wait(500); return true;""")
+    space = sidebar_page(m, "return spaces().find(s => s.active).id;")
+    ctx = int(space.rsplit("-", 1)[1])
+    TITLE = "A page with a title"
+    s = m.js(H + settled + """const w = main(), [pages, ctx] = args, away = ctx === 1 ? 2 : 1;
+      const open = (q, c) => w.gBrowser.addTrustedTab(pages + "/titled?smoke-archived-" + q, {userContextId: c, inBackground: true});
+      const made = [open("forget", ctx), open("back", ctx), open("away", away)];
+      await settled(() => made.every(t => key(w, t) && t.label === %s && other().gBrowser.tabs.some(x => key(other(), x) === key(w, t))));
+      await wait(500);
+      return {keys: made.map(t => JSON.parse(key(w, t))), urls: made.map(url), away: "firefox-container-" + away, labels: made.map(t => t.label)};""" % json.dumps(TITLE), m.pages, ctx)
+    forget_url, back_url, away_url = s["urls"]
+
+    now = int(time.time() * 1000)
+    late = extension_message(m, {"type": "archiveNow", "now": now + 13 * 3600 * 1000, "keys": s["keys"], "explain": True})
+    check("archiving closes tabs unused for longer than the limit (for the list)", sorted(late.get("archived", [])) == sorted(s["urls"]), str(late))
+
+    # The sidebar page in front, as a sidebar always is: a page behind others is not drawn.
+    m.js(H + """const w = main(); w.focus(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
+
+    def mouse(x, y, click=True):
+        """Firefox's own mouse, on the sidebar page in front."""
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        acts = [{"type": "pointerMove", "x": round(x), "y": round(y), "duration": 0}]
+        if click:
+            acts += [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": acts}]})
+        m.cmd("WebDriver:ReleaseActions")
+        m.chrome()
+
+    box = settled + """const box = doc.getElementById("archived"), open = () => box.classList.contains("open");
+      const rowsHere = () => [...box.querySelectorAll(".rows .row")];
+      const middle = e => { const r = e.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; };
+      const describe = r => ({title: r.querySelector(".title").textContent, age: r.querySelector(".age").textContent, tip: r.title});
+      const key = k => page.dispatchEvent(new page.KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));"""
+
+    # The list's menu opens the view, over the list, and the list stays as it is.
+    r = sidebar_page(m, box + """
+      const list = doc.getElementById("tabs"), around = list.getBoundingClientRect();
+      const before = rows();
+      list.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, button: 2, clientX: around.left + 8, clientY: around.bottom - 4}));
+      const items = [...doc.querySelectorAll("#menu .item")], labels = items.map(b => b.textContent);
+      items.find(b => b.textContent === "Archived tabs").click();
+      await settled(() => open() && rowsHere().length);
+      await settled(() => box.getBoundingClientRect().left === 0);
+      const r = box.getBoundingClientRect(), actions = doc.getElementById("actions").getBoundingClientRect(), at = middle(rowsHere()[0]);
+      return {labels, rows: rowsHere().map(describe), under: doc.elementFromPoint(at.x, at.y) === rowsHere()[0] || rowsHere()[0].contains(doc.elementFromPoint(at.x, at.y)), covers: r.top === actions.top && r.bottom === around.bottom,
+              list: before.length === rows().length, back: box.querySelector(".back").textContent};""")
+    check("the list's menu has Archived tabs", "Archived tabs" in r.get("labels", []), str(r))
+    check("the view shows this space's tabs, newest first, each with its title and age", [x["tip"].split("\n")[1] for x in r.get("rows", [])] == [back_url, forget_url]
+          and all(x["title"] == TITLE and x["age"] == "now" for x in r["rows"]), str(r))
+    check("the view lies over the list, on top, and the list is still there under it", r.get("under") and r.get("covers") and r.get("list"), str(r))
+
+    # Esc goes back; the keys stay out of the list under it.
+    r = sidebar_page(m, box + """
+      key("ArrowDown");
+      const cursor = rowsHere()[0].classList.contains("cursor"), under = doc.querySelectorAll("#tabs .cursor").length;
+      key("Escape");
+      const closed = !open();
+      page.openArchived();
+      await settled(() => open());
+      await settled(() => box.getBoundingClientRect().left === 0);
+      return {cursor, under, closed, back: middle(box.querySelector(".back"))};""")
+    check("the arrow keys move in the view, not in the list under it", r.get("cursor") and r.get("under") == 0, str(r))
+    check("Esc goes back to the list", r.get("closed"), str(r))
+    mouse(r["back"]["x"], r["back"]["y"])
+    r = sidebar_page(m, box + """await settled(() => !open()); return {open: open()};""")
+    check("the back row goes back to the list", r["open"] is False, str(r))
+
+    # The × shows on hover, and forgets. Two rows, one for each.
+    r = sidebar_page(m, box + """
+      page.openArchived();
+      await settled(() => open() && rowsHere().length === 2);
+      await settled(() => box.getBoundingClientRect().left === 0);
+      const row = rowsHere().find(x => x.title.includes("smoke-archived-forget"));
+      return {x: row.getBoundingClientRect().right - 16, y: middle(row).y, shows: page.getComputedStyle(row.querySelector(".close")).visibility};""")
+    check("the × of a row does not show without the pointer on it", r.get("shows") == "hidden", str(r))
+    mouse(r["x"], r["y"], click=False)
+    h = sidebar_page(m, box + """const row = rowsHere().find(x => x.title.includes("smoke-archived-forget"));
+      return {close: page.getComputedStyle(row.querySelector(".close")).visibility, age: page.getComputedStyle(row.querySelector(".age")).visibility};""")
+    check("with the pointer on it, the × takes the age's place", h == {"close": "visible", "age": "hidden"}, str(h))
+    mouse(r["x"], r["y"])
+    r = sidebar_page(m, box + """await settled(() => rowsHere().length === 1);
+      return {tips: rowsHere().map(x => x.title), open: open(), reply: await page.browser.runtime.sendMessage({type: "archivedTabs", space: args[0]}).then(l => JSON.parse(JSON.stringify(l)))};""", space)
+    check("the × forgets it, and the view stays", r["open"] and len(r["tips"]) == 1 and [x["url"] for x in r["reply"]] == [back_url], str(r))
+
+    # A click brings it back: with its title from the very first view, selected, in its space,
+    # also with a rule for its address: it is coming back to where it was, not a new tab.
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "smoke-archived-back", "space": s["away"]}]})
+    r = sidebar_page(m, box + """
+      const seen = [];
+      port.onMessage.addListener(v => { for (const t of v.tabs) if (!seen.some(x => x.id === t.id)) seen.push({id: t.id, title: t.title}); });
+      const known = new Set(rows()), n0 = plainTabs().length;
+      await wait(200);
+      seen.length = 0;
+      const had = new Set([...doc.querySelectorAll("#tabs > .tab")].map(x => Number(x.dataset.tab)));
+      rowsHere()[0].click();
+      const closed = !open();
+      await settled(() => plainTabs().length === n0 + 1);
+      await settled(() => doc.querySelector("#tabs > .tab.active"));
+      const row = doc.querySelector("#tabs > .tab.active");
+      const fresh = seen.filter(x => !had.has(x.id));
+      return {closed, title: row.querySelector(".title").textContent, first: fresh.map(x => x.title),
+              list: await page.browser.runtime.sendMessage({type: "archivedTabs", space: args[0]}).then(l => JSON.parse(JSON.stringify(l)))};""", space)
+    check("a click on a row closes the view, and the tab comes back selected, with its title at once", r.get("closed") and r.get("title") == TITLE and r.get("first") and r["first"][0] == TITLE, str(r))
+    check("it leaves the list", r.get("list") == [], str(r))
+    t = m.js(H + settled + """const u = args[0];
+      await settled(() => wins().every(w => w.gBrowser.tabs.some(t => key(w, t) && (url(t) === u || value(w, t, "syncRole") === "ghost" && String(t.label) === %s))));
+      await settled(() => other().gBrowser.tabs.some(t => t.label === %s && !t.linkedPanel));
+      await wait(1500);
+      const a = main(), here = a.gBrowser.tabs.find(t => url(t) === u), k = here && key(a, here);
+      const there = other().gBrowser.tabs.filter(t => key(other(), t) === k);
+      const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
+      return {selected: here?.selected, ctx: here?.userContextId, role: here && role(a, here), there: there.map(t => ({role: role(other(), t), ctx: t.userContextId, label: t.label, unloaded: !t.linkedPanel})), record: k && all[JSON.parse(k)]?.title};""" % (json.dumps(TITLE), json.dumps(TITLE), EXT_ID), back_url)
+    check("it opens in its space, live here and a placeholder in the second window, with its title",
+          t["selected"] and t["ctx"] == ctx and t["role"] == "live" and t["record"] == TITLE and t["there"] == [{"role": "ghost", "ctx": ctx, "label": TITLE, "unloaded": True}], str(t))
+
+    extension_message(m, {"type": "settings:rules", "rules": []})
+
+    # Another space's list can be looked at without going there; opening a row goes there.
+    r = sidebar_page(m, box + """
+      page.openArchived(args[0]);
+      await settled(() => open() && rowsHere().length);
+      const shown = rowsHere().map(x => x.title.split("\\n")[1]), back = box.querySelector(".back").textContent, stayed = spaces().find(s => s.active).id;
+      rowsHere()[0].click();
+      await settled(() => spaces().find(s => s.active).id === args[0]);
+      return {shown, back, stayed, then: spaces().find(s => s.active).id};""", s["away"])
+    check("another space's list shows without going there", r.get("shown") == [away_url] and r.get("stayed") == space and "Archived tabs in" in r.get("back", ""), str(r))
+    check("opening a row from it goes to that space", r.get("then") == s["away"], str(r))
+    t = m.js(H + settled + """const u = args[0], ctx = args[1];
+      await settled(() => main().gBrowser.selectedTab.userContextId === ctx && url(main().gBrowser.selectedTab) === u);
+      const t = main().gBrowser.selectedTab; return {ctx: t.userContextId, url: url(t)};""", away_url, int(s["away"].rsplit("-", 1)[1]))
+    check("that tab is selected, in its own container", t == {"ctx": int(s["away"].rsplit("-", 1)[1]), "url": away_url}, str(t))
+    sidebar_page(m, """send({type: "space", space: args[0]}); await wait(1000); return 1;""", space)
+
+    # A tab whose real page was in a window you closed: only a placeholder is left, and the list has its real address.
+    h = m.js(H + settled + """const a = main(), [pages, ctx] = args, w = a.OpenBrowserWindow(); w.__extra = true;
+      await settled(() => w.gBrowser && w.gBrowser.tabs.some(t => role(w, t)));
+      const t = w.gBrowser.addTrustedTab(pages + "/titled?smoke-archived-held", {userContextId: ctx, inBackground: true});
+      await settled(() => key(w, t) && t.label === %s && wins().every(x => x.gBrowser.tabs.some(y => key(x, y) === key(w, t))));
+      await wait(500);
+      const k = key(w, t), u = url(t);
+      await close(w);
+      await settled(() => wins().some(x => x.gBrowser.tabs.some(y => key(x, y) === k && role(x, y) === "live")));
+      return {key: JSON.parse(k), url: u, live: wins().flatMap(x => x.gBrowser.tabs.filter(y => key(x, y) === k && role(x, y) === "live").map(url))};""" % json.dumps(TITLE), m.pages, ctx)
+    check("a closed window's tab is live as a placeholder elsewhere", len(h["live"]) == 1 and "ghost.html" in h["live"][0], str(h))
+    now = int(time.time() * 1000)
+    first = extension_message(m, {"type": "archiveNow", "now": now, "keys": [h["key"]], "explain": True})
+    check("a placeholder's time starts when it became one", str(first.get("kept", {}).get(h["key"])).startswith("used"), str(first))
+    late = extension_message(m, {"type": "archiveNow", "now": now + 13 * 3600 * 1000, "keys": [h["key"]], "explain": True})
+    check("a tab that is only a placeholder is archived after that time", late.get("archived") == [h["url"]], str(late))
+    r = sidebar_page(m, box + """page.openArchived(); await settled(() => open() && rowsHere().length);
+      const shown = rowsHere().map(describe); key("Escape"); return shown;""")
+    check("the list has its real address and title", [x["tip"].split("\n")[1] for x in r] == [h["url"]] and r[0]["title"] == TITLE, str(r))
+    c = m.js(H + """return {left: wins().flatMap(w => w.gBrowser.tabs.filter(t => key(w, t) === JSON.stringify(args[0]))).length,
+              recently: wins().flatMap(w => w.SessionStore.getClosedTabDataForWindow(w).map(c => c.state.entries.at(-1)?.url)).filter(u => u?.includes("ghost.html") && !u.includes("kind=test")).length};""", h["key"])
+    check("nothing of it is left, in the tabs or as a placeholder in Recently Closed", c == {"left": 0, "recently": 0}, str(c))
+
+    # What this group added goes again.
+    m.js(H + settled + """const a = main(), ours = (w, t) => url(t).includes("smoke-archived") || String(t.label) === %s;
+      await removeWhere(ours);
+      if (args[0]) await close(other());
+      return 1;""" % json.dumps(TITLE), opened)
+    no_problems(m, "after using the list of archived tabs")
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1491,11 +1667,13 @@ def alone_restart(m):
         print("SKIP  alone_restart (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
         return
     no_problems(m, "before a restart with Tidier alone")
+    archived = extension_message(m, {"type": "archivedTabs"})
     before = m.js(SNAP_ALONE)
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+    check("after a restart, the list of archived tabs is still there", extension_message(m, {"type": "archivedTabs"}) == archived, str(archived))
 
 
 def more_tabs_here(m, name):
@@ -1632,7 +1810,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_archived, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

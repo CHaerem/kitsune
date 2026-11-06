@@ -5,7 +5,10 @@ function folderMenu(key, live) {
     ["Delete folder (its tabs stay)", () => send({ type: "deleteFolder", key })],
   ];
 }
-const listMenu = () => [["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }]];
+const listMenu = () => [
+  ["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }],
+  ["Archived tabs", () => openArchived()], // archived.js
+];
 
 function openMenu(e, items) {
   e.preventDefault();

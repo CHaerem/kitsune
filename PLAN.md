@@ -122,7 +122,9 @@ What FEATURES.md has as Later, starting with what is missed most in use.
 
 Changed by saying so. All of them can be reversed.
 
-- A tab that is only a placeholder is not archived until you have selected it.
+- A tab that is only a placeholder is archived like any other (Tidier alone), the time counting
+  from when it became one, since Tidier's own list holds its address and can bring it back. With
+  Sidebery it is kept until you have selected it: Recently Closed would have nothing of it.
 - Closing the last window and quitting brings your tabs back unloaded.
 - A failed smoke test gets one more try, marked with a warning. To be looked at
   again once it is known how often the first try fails.
