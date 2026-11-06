@@ -1,6 +1,6 @@
 // A closed folder rests (Tidier alone): closed means out of the list, out of ⌃Tab and
-// out of memory. Sidebery has a setting and a timer for each of those; here it is one
-// fixed behaviour, with neither.
+// out of memory. Sidebery has settings for those and a delay before it unloads; here it
+// is one fixed behaviour, with neither.
 //
 // Hiding is showSpace's (spaces.js): a tab in a closed folder is not `visible`. Firefox
 // cannot hide the selected tab, so that one goes when you leave it. Selecting a hidden

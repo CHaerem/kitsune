@@ -71,6 +71,23 @@ test("opening a folder shows its tabs and loads nothing", async () => {
   x.kill();
 });
 
+test("opening a folder shows nothing in a window that is in another space", async () => {
+  const ff = new FakeFirefox();
+  const C2 = "firefox-container-2";
+  ff.store.syncedTabs = { F: folder({ collapsed: true }), a: inFolder("https://a.example/"), other: entry("https://other.example/", { cookieStoreId: C2 }) };
+  const w1 = ff.addWindow({ focused: true }), w2 = ff.addWindow();
+  const a = live(ff, w1, "a", { active: true }), otherGhost = ghost(ff, w1, "other", { cookieStoreId: C2 });
+  const other = live(ff, w2, "other", { active: true, cookieStoreId: C2 }), aGhost = ghost(ff, w2, "a");
+  const x = await alone(ff);
+  assert.equal(aGhost.hidden, true);
+  await fold(x, w1.id, false);
+  assert.equal(a.hidden, false);
+  assert.equal(aGhost.hidden, true, "that window is in another space");
+  assert.equal(otherGhost.hidden, true);
+  assert.equal(other.hidden, false);
+  x.kill();
+});
+
 test("a rested tab keeps the address it is on, not its saved one", async () => {
   const ff = new FakeFirefox();
   const s = twoWindows(ff);
@@ -236,7 +253,7 @@ test("a start hides a closed folder's tabs and unloads nothing", async () => {
   x.kill();
 });
 
-test("a new window's placeholders of a closed folder's tabs are hidden, and a new one later too", async () => {
+test("a new window's placeholders of a closed folder's tabs are hidden", async () => {
   const ff = new FakeFirefox();
   const s = twoWindows(ff, folder({ collapsed: true }));
   const x = await alone(ff);
