@@ -1125,3 +1125,25 @@ test("a tab dragged to another window while it is being registered gets its ghos
     x.kill();
   }
 });
+
+test("a ghost selected before the roles are read, with the live tab loaded, ends up unloaded", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow();
+  const live = ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:home", active: true });
+  const ghost = ff.addTab(here.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.run(50);
+  ff.select(ghost.id); // shown at once, and asks if it should open: nothing is known yet
+  await ff.clock.idle(60000);
+  const loaded = [...ff.tabs.values()].filter(t => !t.discarded && t.url === "https://a.example/");
+  assert.equal(loaded.length, 1, "loaded once");
+  assert.equal(loaded[0].active, true, "in the window you are using");
+  assert.equal(loaded[0].windowId, here.id);
+  assert.equal(ff.values.get(loaded[0].id).syncRole, "live");
+  assert.ok(live);
+  x.kill();
+});

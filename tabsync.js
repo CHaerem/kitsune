@@ -352,6 +352,13 @@ async function reconcileAll({ keepMissing = false } = {}) {
       // Keep title and icon current (older entries have no icon).
       if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keep.favIconUrl || all[key].icon });
       for (const t of live) if (t.id !== keep.id) await setRole(t.id, key, "ghost");
+      // Loaded twice: a ghost selected before the roles were read opens its page, also with
+      // the live tab loaded elsewhere. Nothing else would ever unload it.
+      for (const t of reps) {
+        if (t.id === keep.id || !page(t)) continue;
+        await setRole(t.id, key, "ghost");
+        await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(ifGone);
+      }
     }
     for (const w of wins) {
       // More than one representation in a window: remove the extra ghosts.
@@ -399,6 +406,10 @@ async function register(tabId) {
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
     await createRep(w.id, key, entry, parentId);
   }
+  // Dragged to another window meanwhile: that arrival looked like nothing of ours, and the
+  // ghosts just went by the window it was in.
+  const now = await browser.tabs.get(tab.id).catch(() => null);
+  if (now && now.windowId !== tab.windowId) await reconcileAll();
 }
 
 // A saved tab you closed and reopened (⌘⇧T, History → Recently Closed Tabs):
@@ -406,10 +417,6 @@ async function register(tabId) {
 // still there, unloaded. The reopened tab becomes the live tab, and its
 // placeholder in this window is removed, so it is not there twice.
 async function reopenedSaved(tab, all) {
-  // Dragged to another window meanwhile: that arrival looked like nothing of ours, and the
-  // ghosts just went by the window it was in.
-  const now = await browser.tabs.get(tab.id).catch(() => null);
-  if (now && now.windowId !== tab.windowId) await reconcileAll();
   const key = await browser.sessions.getTabValue(tab.id, SYNC_KEY).catch(() => undefined);
   const entry = key && all[key];
   if (!entry || entry.group) return false;
