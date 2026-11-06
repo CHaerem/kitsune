@@ -18,7 +18,7 @@ const thisWindow = browser.windows.getCurrent().then(w => w.id);
 // --- The line asking for the permission ------------------------------------------------
 const askLine = el("div", "notice ask-line");
 askLine.hidden = true;
-const askButton = el("button", "", "Let Tidier stop pages loading in the wrong space");
+const askButton = el("button", "", "Stop pages loading in the wrong space");
 askButton.title = "Firefox will ask to let Tidier see where pages go, on all websites. Nothing leaves your machine.";
 const askNo = el("button", "ask-no", "×");
 askNo.title = "Not now (it can be given on the settings page)";
