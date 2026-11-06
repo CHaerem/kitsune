@@ -181,6 +181,21 @@ test("a link another part of Tidier opened again goes on to a small window, the 
   x.kill();
 });
 
+test("a space chosen on the bar is the one you are in after Tidier starts again", async () => {
+  // Found here: Keep can leave you in another space, and a click on the bar then went unsaved.
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  ff.addTab(w.id, { url: "https://two.example/", title: "Two", cookieStoreId: C2 }, { syncKey: "two", syncRole: "live" });
+  ff.store.syncedTabs.two = { url: "https://two.example/", title: "Two", cookieStoreId: C2, parentKey: null, group: false, added: 1 };
+  let x = await start(ff);
+  await x.js(`serial(() => switchSpace(${w.id}, "${C2}"))`);
+  await wait(100);
+  assert.equal(ff.winValues.get(`${w.id}/space`), C2);
+  x = await start(ff);
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C2);
+  x.kill();
+});
+
 test("a tab opened any other way is what it always was", async () => {
   const ff = new FakeFirefox();
   const { w } = session(ff);
