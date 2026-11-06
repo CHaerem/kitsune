@@ -230,11 +230,15 @@ def essentials(m):
       await wait(2500); main().gBrowser.pinTab(t); await wait(5000);
       const k = ek(main(), t), copy = other().gBrowser.tabs.find(x => x.pinned && ek(other(), x) === k);
       const r = {key: !!k, copy: !!copy, spaces: [sbPanel(main(), t), copy && sbPanel(other(), copy)], want: pf["firefox-container-1"]};
+      // Each space's essentials together (Sidebery would sort them so at the next start).
+      r.order = wins().map(w => w.gBrowser.tabs.filter(x => x.pinned).map(x => x.userContextId));
+      r.grouped = r.order.map(cs => cs.every((c, i) => i === 0 || c === cs[i - 1] || !cs.slice(0, i).includes(c)));
       if (copy) { other().gBrowser.unpinTab(copy); await wait(4000); r.unpinnedOpens = url(copy); }
       r.leftPinned = wins().map(w => w.gBrowser.tabs.filter(x => x.pinned && ek(w, x) === k).length);
       await removeWhere((w, x) => url(x).includes("smoke-pin"));
       return r;""")
     check("a pinned tab becomes an essential in every window, in its space", r["key"] and r["copy"] and r["spaces"] == [r["want"]] * 2, str(r))
+    check("a new essential is put with the other essentials of its space, in every window", r.get("grouped") == [True, True], str(r.get("order")))
     check("unpinning a copy removes the essential everywhere", r["leftPinned"] == [0, 0], str(r))
     check("an unloaded copy you unpin opens its page as an ordinary tab", r.get("unpinnedOpens") == "https://example.org/?smoke-pin", str(r))
     r = m.js(H + """
@@ -837,6 +841,17 @@ def restart(m):
     check("after a restart, a new window gets all essentials and tabs", r["want"] == r["got"], str(r))
 
 
+# The windows whose essentials (pinned tabs) are not together by space, with
+# the containers of their pinned tabs in order.
+PINS_APART = """
+  const apart = cs => !cs.every((c, i) => i === 0 || c === cs[i - 1] || !cs.slice(0, i).includes(c));
+  const ws = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => t.userContextId + ":" + (ek(w, t) || "-").slice(0, 4)));
+  if (!ws.some(cs => apart(cs.map(c => c.split(":")[0])))) return null;
+  const list = (await storage("%s", ["essentials"])).essentials.map(e => e.cookieStoreId.slice(-1) + ":" + e.key.slice(0, 4));
+  return {windows: ws, list};""" % EXT_ID
+apart_after = []
+
+
 def main():
     xpi = None
     if "--xpi" in sys.argv:
@@ -856,6 +871,13 @@ def main():
             except Exception:
                 check(f"{group.__name__} ran", False, traceback.format_exc(limit=2).strip().splitlines()[-1])
                 m.chrome()
+            # Sidebery sorts pinned tabs by space when Firefox starts, so
+            # essentials apart from their space would be reordered then.
+            apart = m.js(H + PINS_APART)
+            if apart:
+                apart_after.append((group.__name__, apart))
+                print(f"INFO  essentials apart from their space after {group.__name__}: {apart}", flush=True)
+    check("every window's essentials stay together by space", not apart_after, str(apart_after[:2]))
     print(f"\n{sum(results)}/{len(results)} passed in {round(time.time() - t0)} s"
           + (f" ({len(known)} known Sidebery bug)" if known else ""))
     sys.exit(0 if all(results) else 1)
