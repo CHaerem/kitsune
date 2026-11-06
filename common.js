@@ -111,17 +111,15 @@ function storedValue(storageKey, empty) {
 // equal to the parent. Sidebery counts a parent only before its children, and
 // cannot clear openerTabId when it makes a tab a root (Firefox keeps the old
 // opener), so a tab once seen with its opener after it is a root, also after
-// the opener has moved up again (folders first), until its opener changes or
-// a sibling follows it (then Sidebery has put it back in that branch).
+// the opener has moved up again (folders first), until its opener changes.
+// (Dragged back into the same folder, it still counts as a root: Sidebery
+// then sets the same opener again, which cannot be seen.)
 const staleOpener = new Map(); // tabId -> the opener it had when it became a root
 function treeParent(tab, byId) {
   const p = byId.get(tab.openerTabId);
   if (!p || p.id === tab.id || p.windowId !== tab.windowId) return undefined;
   if (p.index > tab.index) { staleOpener.set(tab.id, p.id); return undefined; }
-  if (staleOpener.get(tab.id) === p.id) {
-    const next = [...byId.values()].find(x => x.windowId === tab.windowId && x.index === tab.index + 1);
-    if (!next || next.openerTabId !== p.id) return undefined;
-  }
+  if (staleOpener.get(tab.id) === p.id) return undefined;
   staleOpener.delete(tab.id);
   return p;
 }
