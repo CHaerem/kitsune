@@ -1497,6 +1497,8 @@ def alone_shortcuts(m):
     custom_keys = """const {CustomKeys} = ChromeUtils.importESModule("moz-src:///browser/components/customkeys/CustomKeys.sys.mjs");
       for (const id of args[0]) CustomKeys[args[1]](id); return 1;"""
     m.js(custom_keys, firefox_keys, "clearKey")
+    # The pages of the checks before this one would be rows too.
+    m.js(H + """await removeWhere((x, t) => /\\/(settings\\/settings|sidebar\\/sidebar)\\.html/.test(url(t))); return 1;""")
 
     # In the second space, with a tab of that space in a folder: Firefox's own keys would go to
     # the first space's essentials, and to the tabs in the window's order.
