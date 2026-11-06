@@ -44,12 +44,12 @@ function setList(list, options) {
 
 function tagTab(tabId, key) {
   keyByTab.set(tabId, key);
-  return browser.sessions.setTabValue(tabId, TAB_KEY, key);
+  return browser.sessions.setTabValue(tabId, TAB_KEY, key).catch(err => { ifGone(err); keyByTab.delete(tabId); }); // its close was told before this answer
 }
 
 async function keyOf(tab) {
   if (keyByTab.has(tab.id)) return keyByTab.get(tab.id);
-  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY);
+  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(ifGone);
   if (key) keyByTab.set(tab.id, key);
   return key;
 }
@@ -89,7 +89,7 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
     const tab = await browser.tabs.create({
       windowId, url: ghostUrl("essential", entry.key), active: false,
       cookieStoreId: entry.cookieStoreId, index, ...(tidierAlone ? { pinned: true } : {}),
-    }).catch(err => { noteError(err); return null; });
+    }).catch(err => { if (!isGone(err)) noteError(err); return null; });
     if (!tab) continue;
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
@@ -219,7 +219,7 @@ async function onUnpinned(tab) {
   const key = await keyOf(tab);
   if (!key) return;
   keyByTab.delete(tab.id);
-  await browser.sessions.removeTabValue(tab.id, TAB_KEY);
+  await browser.sessions.removeTabValue(tab.id, TAB_KEY).catch(ifGone);
   const list = await getList();
   const entry = list.find(e => e.key === key);
   setList(list.filter(e => e.key !== key));
@@ -239,7 +239,7 @@ async function onUnpinned(tab) {
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
   copies.forEach(id => busy.add(id));
-  await browser.tabs.remove(copies);
+  await removeTabs(copies);
   await forgetClosedPlaceholders("essential", [key]);
 }
 
@@ -451,7 +451,7 @@ async function essentialShown(tab) {
   }
   // Moved into the placeholder's place; onAttached then removes the
   // placeholder, and onDetached gives the old window one.
-  await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index });
+  await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index }).catch(ifGone);
   await browser.tabs.update(loaded.id, { active: true }).catch(() => {});
   return false;
 }

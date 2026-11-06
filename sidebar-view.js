@@ -84,7 +84,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
-      await browser.tabs.create({ windowId, cookieStoreId: msg.space });
+      await browser.tabs.create({ windowId, cookieStoreId: msg.space }).catch(ifGone);
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (tidierAlone) {
@@ -108,7 +108,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
-  else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
+  else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned }).catch(ifGone);
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
   viewSoon(windowId);
 }
@@ -120,7 +120,7 @@ async function moveEssential(windowId, tabId, beforeId) {
   if (!tab) return;
   let index = before ? before.index : tabs.at(-1).index;
   if (before && tab.index < before.index) index--;
-  if (index !== tab.index) await browser.tabs.move(tabId, { index });
+  if (index !== tab.index) await browser.tabs.move(tabId, { index }).catch(ifGone);
 }
 
 // The toolbar button shows or hides the sidebar: without a sidebar, a window has

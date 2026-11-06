@@ -56,7 +56,7 @@ function setRole(tabId, key, role) {
   return Promise.all([
     browser.sessions.setTabValue(tabId, SYNC_KEY, key),
     browser.sessions.setTabValue(tabId, SYNC_ROLE, role),
-  ]);
+  ]).catch(err => { ifGone(err); forget(tabId); }); // its close was told before this answer
 }
 
 function forget(tabId) {
@@ -69,7 +69,7 @@ function clearRole(tabId) {
   return Promise.all([
     browser.sessions.removeTabValue(tabId, SYNC_KEY),
     browser.sessions.removeTabValue(tabId, SYNC_ROLE),
-  ]);
+  ]).catch(ifGone);
 }
 
 // Tabs that represent `key` (live, ghost or copy).
@@ -210,10 +210,8 @@ async function fillWindow(windowId, { fresh = false } = {}) {
       // One refused tab (its container was removed, say) must not leave the
       // window without all the tabs after it. A window closed meanwhile is no problem:
       // it simply wants no more tabs, and you may well have closed it at once.
-      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined).catch(async err => {
-        if (await browser.windows.get(windowId).catch(() => null)) noteError(err);
-        return null;
-      });
+      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined)
+        .catch(err => { if (!isGone(err)) noteError(err); return null; });
       if (!tab) continue;
       reps.set(key, tab.id);
       created++;
@@ -367,9 +365,7 @@ async function reconcileAll() {
 
 // A window closed meanwhile wants no more tabs: what was refused for that reason is no error.
 async function fillIfOpen(windowId, options) {
-  await fillWindow(windowId, options).catch(async err => {
-    if (await browser.windows.get(windowId).catch(() => null)) throw err;
-  });
+  await fillWindow(windowId, options).catch(ifGone);
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -490,7 +486,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   saveSynced(all);
   const reps = repsOf(key, await browser.tabs.query({}));
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-  if (reps.length) await browser.tabs.remove(reps.map(t => t.id));
+  await removeTabs(reps.map(t => t.id));
   await forgetClosedPlaceholders("ghost", [key]);
 }
 
@@ -565,7 +561,7 @@ async function pull(ghostId) {
     const tabsHere = await browser.tabs.query({ windowId: ghost.windowId });
     const parentId = entry?.parentKey ? repMap(tabsHere).get(entry.parentKey) : undefined;
     await Promise.all([
-      browser.tabs.remove(ghostId),
+      browser.tabs.remove(ghostId).catch(ifGone),
       parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
     ]);
     await forgetClosedPlaceholders("ghost", [key]);
@@ -576,11 +572,11 @@ async function pull(ghostId) {
       // The old window gets a ghost where the live tab was, unless you have closed it by now.
       const opener = fromOpener !== undefined && (await browser.tabs.get(fromOpener).catch(() => null));
       if (!leftBehind) {
-        await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex).catch(async err => {
-          if (await browser.windows.get(fromWindow).catch(() => null)) throw err;
-        });
+        await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
       }
     }
+  } catch (err) {
+    ifGone(err); // the tab you selected, or the one to bring in, closed meanwhile: nothing to pull
   } finally {
     setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);
   }
@@ -712,7 +708,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       await clearRole(tabId);
       const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-      if (others.length) await browser.tabs.remove(others.map(t => t.id));
+      await removeTabs(others.map(t => t.id));
       await forgetClosedPlaceholders("ghost", [key]);
     });
     return;

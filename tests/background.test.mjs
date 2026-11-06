@@ -817,3 +817,37 @@ test("a window is not closed because its last tab is used in another", async () 
   assert.deepEqual(ff.unhandled, []);
   x.kill();
 });
+
+test("a ghost closing at the same moment does not leave the tab's other ghosts behind", async () => {
+  // Firefox refuses a whole list of tabs if one has closed, whenever it happens to fall.
+  for (const delay of [0, 1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20]) {
+    const { ff, x, windows: [a, b, c] } = await chaosStart({ windows: 3 });
+    const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+    await ff.clock.run(3000);
+    const key = ff.values.get(t.id).syncKey;
+    const inB = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key);
+    ff.closeTab(t.id);
+    await ff.clock.run(delay);
+    ff.closeTab(inB.id);
+    await ff.clock.idle(60000);
+    assert.deepEqual(ff.list(c.id).filter(y => ff.values.get(y.id)?.syncKey === key), [], `with ${delay} ms between them`);
+    assert.deepEqual([...x.js("problems")], [], `with ${delay} ms between them`);
+    x.kill();
+  }
+});
+
+test("a tab closed while it is being pinned does not stop the rest", async () => {
+  for (const delay of [0, 2, 4, 6, 8, 10, 13, 16, 20, 30]) {
+    const { ff, x, windows: [a, b] } = await chaosStart();
+    const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+    await ff.clock.run(3000);
+    const key = ff.values.get(t.id).syncKey;
+    ff.pinTab(t);
+    await ff.clock.run(delay);
+    ff.closeTab(t.id);
+    await ff.clock.idle(60000);
+    assert.deepEqual(ff.list(b.id).filter(y => ff.values.get(y.id)?.syncKey === key), [], `with ${delay} ms between them`);
+    assert.deepEqual([...x.js("problems")], [], `with ${delay} ms between them`);
+    x.kill();
+  }
+});

@@ -67,6 +67,13 @@ function setNotice(kind, text) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// A tab or window can close at any moment, between one call and the next, and Firefox then
+// refuses the next call about it. That is no error, and must not stop the job halfway: the
+// tab is simply gone. Anything else Firefox refuses still counts.
+const isGone = err => /^Invalid (tab|window) ID/.test(err?.message);
+const ifGone = err => { if (!isGone(err)) throw err; };
+// Closed one by one: Firefox refuses a whole list if one of them has already closed.
+const removeTabs = ids => Promise.all(ids.map(id => browser.tabs.remove(id).catch(ifGone)));
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
 const sameSite = (a, b) => {

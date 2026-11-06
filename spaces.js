@@ -84,7 +84,7 @@ async function switchSpace(windowId, space) {
   if (!await browser.windows.get(windowId).catch(() => null)) return; // closed meanwhile
   activeSpace.set(windowId, space); // before the tab is selected, so onActivated agrees
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
-  else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space });
+  else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space }).catch(ifGone);
   await setSpace(windowId, space);
 }
 
@@ -121,7 +121,7 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
       if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
-      else await browser.tabs.create({ windowId, cookieStoreId: stay });
+      else await browser.tabs.create({ windowId, cookieStoreId: stay }).catch(ifGone);
       return;
     }
     await setSpace(windowId, tab.cookieStoreId);
@@ -229,7 +229,7 @@ async function intoSpace(tabId) {
   if (!win || win.type !== "normal" || !space) return;
   const url = NEW_TAB_PAGES.has(tab.url) ? undefined : tab.url;
   if (url !== undefined && !isWeb(url)) return;
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: tab.index + 1 });
+  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: tab.index + 1 }).catch(ifGone);
   await browser.tabs.remove(tab.id).catch(() => {});
 }
 

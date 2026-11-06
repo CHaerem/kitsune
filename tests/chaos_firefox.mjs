@@ -151,6 +151,8 @@ export class ChaosFirefox extends FakeFirefox {
   // A call from the background page: it runs in Firefox whole, at one moment.
   call(label, args, fn) {
     const gen = this.gen;
+    // Where in Tidier the call was made, for a failure to name (only when asked: it takes time).
+    const site = process.env.CHAOS_SITES ? new Error().stack.split("\n").find(l => /[( ][a-z-]+\.js:\d+/.test(l))?.replace(/^.*[( ]([a-z-]+\.js:\d+).*$/, "$1") : "";
     return new Promise((resolve, reject) => {
       this.send("up", () => {
         if (gen !== this.gen) return;
@@ -158,7 +160,7 @@ export class ChaosFirefox extends FakeFirefox {
         try {
           if (this.refuseRate && REFUSABLE.test(label) && this.rng() < this.refuseRate) { this.refusals++; throw new Error(`${REFUSED} ${label}`); }
           out = fn();
-        } catch (e) { err = e; }
+        } catch (e) { err = e; err.message += ` (${label}${site ? ` at ${site}` : ""})`; } // which call, for whoever reads the failure
         this.trace(label, JSON.stringify(args)?.slice(0, 120), err ? `-> ERROR ${err.message}` : "");
         this.send("down", () => { if (gen === this.gen) { if (err) reject(err); else resolve(out); } });
       });
