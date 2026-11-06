@@ -579,7 +579,7 @@ def live_folders(m):
         const before = group ? run.slice(0, run.indexOf(group)) : [];
         out.push({group: !!group, inFolder: prs.filter(t => group && t.openerTab === group).map(t => t.label.replace(/^.*Pull/, "Pull")).sort(),
                   outside: prs.filter(t => !group || t.openerTab !== group).map(t => t.label),
-                  loaded: prs.filter(t => t.linkedPanel && !t.selected).map(t => t.label),
+                  loaded: prs.filter(t => t.linkedPanel && !t.hasAttribute("pending") && !t.selected).map(t => t.label),  // pending: not loaded yet
                   first: before.every(t => isGroup(t) || (t.openerTab && isGroup(t.openerTab))),
                   space: !!group && sbPanel(w, group) === pf["firefox-container-2"]});
       }
@@ -612,9 +612,6 @@ def live_folders(m):
     extension_message(m, {"type": "refreshLiveFolders"})
     time.sleep(3)
     fifth = m.js(state)
-    if fifth != fourth:  # which tab, and what it shows (to find what loads it)
-        print("INFO  after the failed search:", m.js(H + """return wins().map(w => ({sel: w.gBrowser.selectedTab.label,
-          prs: w.gBrowser.tabs.filter(t => t.label.includes("Pull request ")).map(t => [t.label, !!t.linkedPanel, url(t).replace(/^.*ghost.html/, "ghost"), t.getAttribute("pending")])}));"""), flush=True)
     content = lambda ws: [(w["group"], w["inFolder"], w["outside"]) for w in ws]
     check("a failed search leaves the live folder as it was", content(fifth) == content(fourth), f"{fourth} -> {fifth}")
     json.dump({}, open(m.fake_prs, "w"))
