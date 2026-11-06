@@ -14,7 +14,7 @@ Tidier itself, and Sidebery being replaced by Tidier's own sidebar.
   used (e.g. `sessionstore-backups/recovery.jsonlz4`, `extensions.json`).
   Its data is the user's: it can hold internal company hostnames, which must
   never go into this public repository or a commit message.
-- The user installs releases himself (or Firefox does, from `updates.json`).
+- The user installs releases themselves (or Firefox does, from `updates.json`).
 
 ## The fast loop
 
@@ -67,6 +67,6 @@ tests/smoke.py                                # everything, three Firefoxes at o
 
 ## Talking with the user
 
-- Write to him in plain words, without internal names; translate technical
+- Write to the user in plain words, without internal names; translate technical
   terms only where it helps (keep words like container, sidebar, extension).
 - Show what you will post or send before doing it.
