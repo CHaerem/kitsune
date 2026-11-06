@@ -475,6 +475,7 @@ ACTIONS = r"""
       // Dragged from the tab strip, or Firefox's own "Move Tab" menu.
       const w = anyWindow(), there = otherWindow(w), t = pick(plainTabs(w).filter(x => !isGroup(x)));
       if (!there || !t || w.gBrowser.tabs.length < 2) return null;
+      closing(w, t); // Firefox loses the values of an unloaded tab it moves, so an action could not name it later
       const what = short(t) + " (" + roleOf(w, t) + ")";
       // Next to its own space's tabs: Sidebery gives a tab that another extension moves
       // the space of the tab it lands on (README), and its own drag does not do that.
@@ -493,6 +494,7 @@ ACTIONS = r"""
       if (a.windows >= $MAX_WINDOWS) return null;
       const w = anyWindow(), t = pick(plainTabs(w).filter(x => !isGroup(x)));
       if (!t || plainTabs(w).length < 2) return null;
+      closing(w, t);
       const what = short(t) + " (" + roleOf(w, t) + ")";
       w.gBrowser.replaceTabWithWindow(t);
       return "tear off into a new window: " + what;

@@ -921,3 +921,42 @@ test("a tab reopened pinned whose essential has been removed is an ordinary tab"
   assert.deepEqual(ff.store.essentials ?? [], [], "and the essential stays removed");
   x.kill();
 });
+
+test("a ghost that opened its page while its window's tab was going does not get a second heir", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const closing = ff.addWindow({ focused: true });
+  ff.addTab(closing.id, { url: "about:blank", active: true });
+  const live = ff.addTab(closing.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const first = ff.addWindow();
+  ff.addTab(first.id, { url: "about:blank", active: true });
+  ff.addTab(first.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const shown = ff.addWindow();
+  const ghost = ff.addTab(shown.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // The queue is busy. The selected ghost asks what to do, and then the window closes: by the
+  // time the ghost's turn comes the live tab is gone, ahead of the hand-over.
+  x.js("serial(() => sleep(300))");
+  const asked = x.send({ type: "ghostShown" }, { tab: ff.snap(ff.tabs.get(ghost.id)) });
+  ff.rm(live.id, { closing: true });
+  await wait(1500);
+  assert.equal((await asked).load, true);
+  const lives = [...ff.values.values()].filter(v => v.syncKey === "a" && v.syncRole === "live").length;
+  assert.equal(lives, 1, "one live tab");
+  x.kill();
+});
+
+test("a window reopened with a page that is open elsewhere does not keep it loaded twice", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const one = ff.addWindow({ focused: true });
+  const here = ff.addTab(one.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const two = ff.addWindow();
+  ff.addTab(two.id, { url: "about:blank", active: true });
+  const twin = ff.addTab(two.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  assert.equal(ff.tabs.get(here.id).discarded, false, "the one you are using stays");
+  assert.equal(ff.tabs.get(twin.id).discarded, true, "the other is unloaded");
+  assert.equal(ff.values.get(twin.id).syncRole, "ghost");
+  x.kill();
+});

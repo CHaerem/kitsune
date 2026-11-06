@@ -342,11 +342,14 @@ async function reconcileAll() {
       // Exactly one live tab: prefer a loaded one. A real page is yours, whatever
       // its role says: a ghost selected before the roles were read has opened it.
       const page = t => !t.discarded && !isGhostUrl(t.url);
-      const keep = live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
+      const keep = reps.find(t => page(t) && t.active && t.windowId === focusedWindowId) || live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
       // Keep title and icon current (older entries have no icon).
       if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keep.favIconUrl || all[key].icon });
       for (const t of live) if (t.id !== keep.id) await setRole(t.id, key, "ghost");
+      // A page is loaded once. Another copy that has it open (a window you reopened, say)
+      // is unloaded. A page with unsaved input refuses, without asking, and stays.
+      for (const t of reps) if (t.id !== keep.id && page(t) && !t.active) await browser.tabs.discard(t.id).catch(() => {});
     }
     for (const w of wins) {
       // More than one representation in a window: remove the extra ghosts.
@@ -507,7 +510,9 @@ async function dropIfUnused(key) {
 // The live tab's window is closing: a ghost in another window takes over.
 async function handOver(key, closingWindowId) {
   const reps = repsOf(key, await browser.tabs.query({})).filter(t => t.windowId !== closingWindowId);
-  if (!reps.length) return;
+  // A ghost shown while this waited in the queue has taken over already (ghostShown), and
+  // opened the page: a second heir would open it twice.
+  if (!reps.length || reps.some(t => syncRoleByTab.get(t.id) === "live")) return;
   // The one you are looking at, if it is one of them: it should not stay blank.
   const heir = reps.find(t => t.active && t.windowId === focusedWindowId) || reps[0];
   await setRole(heir.id, key, "live");
