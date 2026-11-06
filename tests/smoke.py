@@ -155,16 +155,24 @@ def press(m, key, *mods):
     m.cmd("WebDriver:ReleaseActions")
 
 
+def to_page(m, part):
+    """Into the page of the tab whose address contains `part`. Firefox is asked which tab
+    that is: Marionette reads a tab's address by loading the tab, so walking through the
+    tabs would load every unloaded tab on the way, and a placeholder loaded so never
+    gets the extension's API, and stays loaded."""
+    handle = m.js(H + """const {NavigableManager} = ChromeUtils.importESModule("chrome://remote/content/shared/NavigableManager.sys.mjs");
+      for (const w of wins()) for (const t of w.gBrowser.tabs) if (url(t).includes(args[0])) return NavigableManager.getIdForBrowser(t.linkedBrowser);
+      return null;""", part)
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": False})
+
+
 def fire_message(m, msg):
     """Send a runtime message that makes the extension start again, and with it close the page sending it."""
     m.js(H + """const w = main(); w.focus();
       const t = w.gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]] + "/ghost.html?kind=test", {inBackground: false});
       w.gBrowser.selectedTab = t; await wait(1500); return 1;""", EXT_ID)
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if "ghost.html?kind=test" in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    to_page(m, "ghost.html?kind=test")
     # The answer comes before the message goes: the page is gone once it has.
     m.cmd("WebDriver:ExecuteAsyncScript", {"script": """const done = arguments[arguments.length - 1], msg = arguments[0], page = window.wrappedJSObject || window;
       setTimeout(() => page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify(msg))), 300); done(1);""", "args": [msg]})
@@ -177,11 +185,7 @@ def extension_message(m, msg):
     m.js(H + """const w = main(); w.focus(); w.__beforeHelper = w.gBrowser.selectedTab;
       const t = w.gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]] + "/ghost.html?kind=test", {});
       w.gBrowser.selectedTab = t; await wait(1500); return 1;""", EXT_ID)
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if "ghost.html?kind=test" in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    to_page(m, "ghost.html?kind=test")
     reply = m.cmd("WebDriver:ExecuteAsyncScript", {"script": """
       const done = arguments[arguments.length - 1];
       (window.wrappedJSObject || window).browser.runtime.sendMessage(arguments[0]).then(r => done(JSON.parse(JSON.stringify(r ?? null))), e => done({error: String(e)}));""",
@@ -1259,11 +1263,7 @@ def ext_page(m, path, script, *args):
         await wait(1500);
       }
       return 1;""", EXT_ID, path)
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if path in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    to_page(m, path)
     reply = m.cmd("WebDriver:ExecuteAsyncScript", {"script": """
       const args = [...arguments], done = args.pop(), wait = ms => new Promise(r => setTimeout(r, ms));
       const page = window.wrappedJSObject || window, doc = page.document;
@@ -1705,13 +1705,16 @@ def alone_many(m):
     # A placeholder without a page still shows its page's title and icon, from the record.
     number = int(space0.rsplit("-", 1)[1])
     m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon", {userContextId: args[1], inBackground: true}); await wait(4000); return 1;""", m.pages, number)
+    # (Its row in view, in the page shown: an image out of view is not asked for.)
+    m.js(H + """const w = main(); w.__before = w.gBrowser.selectedTab; w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(300); return 1;""")
     r = sidebar_page(m, MANY_PAGE + """const row = [...doc.querySelectorAll("#tabs .tab")].find(x => x.querySelector(".title").textContent === "With an icon");
       if (!row) return {missing: rows().slice(-3)};
-      row.scrollIntoView(); await wait(1500);
-      const img = row.querySelector("img");
-      return {unloaded: row.classList.contains("unloaded"), icon: img?.src.slice(0, 22), drawn: img?.naturalWidth};""")
+      row.scrollIntoView();
+      const seen = await new Promise(resolve => { const look = n => { const i = row.querySelector("img"); if ((i && i.naturalWidth) || !n) resolve(i); else setTimeout(() => look(n - 1), 100); }; look(50); });
+      doc.getElementById("tabs").scrollTop = 0;
+      return {unloaded: row.classList.contains("unloaded"), icon: seen?.src.slice(0, 22), drawn: seen?.naturalWidth};""")
     check("a placeholder made without a page shows its page's title and icon", r.get("unloaded") and r.get("icon") == "data:image/png;base64," and r.get("drawn") == 16, str(r))
-    m.js(H + """await removeWhere((w, t) => url(t).endsWith("/icon")); return 1;""")
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__before; await removeWhere((x, t) => url(t).endsWith("/icon")); return 1;""")
 
     # From the event to the sidebar showing it, and a view's build, one at a time.
     r = sidebar_page(m, MANY_PAGE + """
@@ -1826,7 +1829,7 @@ def alone_many(m):
     m.js(H + """await close(wins().find(w => w.__extra)); return 1;""")
 
     # Nothing happening, with this many tabs: nothing done.
-    idle = extension_message(m, {"type": "idle", "ms": 5000})
+    idle = sidebar_page(m, MANY_PAGE + """return await ask({type: "idle", ms: 5000});""")
     numbers["idle"] = idle
     if idle["alarms"]:
         print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)
