@@ -1085,3 +1085,17 @@ test("an essential reopened with ⌘⇧T while loaded in another window ends up 
   assert.equal(loaded.length, 1, `loaded in ${loaded.map(y => y.windowId)}`);
   x.kill();
 });
+
+test("a copy unpinned just after it appeared becomes an ordinary tab", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  while (!ff.list(b.id).some(y => y.pinned)) await ff.clock.step();
+  await ff.clock.run(100);
+  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials, []);
+  assert.ok(!ff.list(b.id).some(y => y.url.includes("ghost.html") && !ff.values.get(y.id)?.syncKey), "no placeholder stands for nothing");
+  x.kill();
+});

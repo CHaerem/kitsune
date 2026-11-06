@@ -261,12 +261,14 @@ async function onClosed(tabId, windowId) {
 // moment and then pinned again (Firefox moves it as a new tab), so an unpin
 // counts only if the tab is still unpinned UNPIN_SETTLE_MS later.
 const UNPIN_SETTLE_MS = 500;
+// (Tidier pins copies itself, so busy matters for a pin; it never unpins one, so an unpin
+// is yours, also just after the copy appeared.)
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (busy.has(tabId) || !("pinned" in change)) return;
-  if (change.pinned) { serial(() => onPinned(tab)); return; }
+  if (!("pinned" in change)) return;
+  if (change.pinned) { if (!busy.has(tabId)) serial(() => onPinned(tab)); return; }
   setTimeout(() => serial(async () => {
     const now = await browser.tabs.get(tabId).catch(() => null);
-    if (now && !now.pinned && !busy.has(tabId)) await onUnpinned(now);
+    if (now && !now.pinned) await onUnpinned(now);
   }), UNPIN_SETTLE_MS);
 }, { properties: ["pinned"] });
 
@@ -383,9 +385,9 @@ async function reopenedEssential(tab) {
   if (!key || busy.has(tab.id) || !(await getList()).some(e => e.key === key)) return;
   keyByTab.set(tab.id, key);
   await dropDoubleCopies(tab.id, tab.windowId);
+  await oneLoaded(key); // its load began before it was known as this essential
 }
 
-  await oneLoaded(key); // its load began before it was known as this essential
 // A container removed: its essentials go with it. Firefox refuses to create tabs
 // in it, and Firefox closes its tabs, which onClosed would try to bring back.
 browser.contextualIdentities.onRemoved.addListener(({ contextualIdentity }) => {
