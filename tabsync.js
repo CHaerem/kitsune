@@ -290,6 +290,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
+    unruled,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
@@ -451,8 +452,9 @@ async function unloadSaved(key, windowId, place) {
   if (here.has(key)) return;
   let parentKey = entry.parentKey;
   while (parentKey && !here.has(parentKey)) parentKey = all[parentKey]?.parentKey;
-  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined);
-  if (!place) return;
+  // Refused when its container has just been removed, which takes the entry away too (safemoves.js).
+  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined).catch(() => null);
+  if (!ghost || !place) return;
   if (!tidierAlone) await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
   await placeNextTo(windowId, ghost.id, place.before, place.after);
 }
@@ -462,8 +464,7 @@ async function unloadSaved(key, windowId, place) {
 // which must not happen at a moment you did not choose: so a loaded tab is unloaded
 // first, which such a page refuses without asking. Its copy for Recently Closed
 // is kept either way.
-async function closesQuietly(key) {
-  const liveId = liveTabId(key);
+async function closesQuietly(key, liveId = liveTabId(key)) { // (a tab not in the record yet is its own live tab)
   const live = liveId === undefined ? null : await browser.tabs.get(liveId).catch(() => null);
   if (!live || live.discarded || isGhostUrl(live.url)) return true;
   await browser.tabs.discard(live.id).catch(() => {});

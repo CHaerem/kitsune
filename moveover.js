@@ -111,7 +111,7 @@ async function settingsAction(msg) {
       };
     }
     case "archiveHours": await browser.storage.local.set({ archiveAfterHours: Number(msg.hours) }); return true;
-    case "rules": rulesList.set(msg.rules.filter(r => r.url && r.space).map(r => ({ url: r.url, space: r.space }))); viewAllSoon(); return true;
+    case "rules": rulesList.set(msg.rules.filter(r => r.url && r.space).map(r => ({ url: r.url, space: r.space }))); setNotice("rule", null); viewAllSoon(); return true;
     case "space": await browser.contextualIdentities.update(msg.id, msg.changes).catch(noteError); return true;
     case "moveOver": await moveOver(); return true;
     case "moveBack": await moveBack(); return true;

@@ -1464,6 +1464,175 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+def alone_safe_moves(m):
+    # Moves that cannot lose anything (safemoves.js), and a sidebar that comes back.
+    # Where the tab with this address is: the container of each tab that has it (only the
+    # real tab does), and of every copy in every window once it is in the record.
+    where_script = H + """const pairs = wins().flatMap(w => w.gBrowser.tabs.filter(t => url(t).includes(args[0])).map(t => [w, t]));
+      const k = pairs[0] && key(pairs[0][0], pairs[0][1]);
+      return {at: pairs.map(([w, t]) => ctxOf(t)), selected: pairs.some(([w, t]) => t.selected && w === main()), loaded: pairs.every(([w, t]) => !!t.linkedPanel),
+              registered: !!k, copies: k ? wins().flatMap(w => w.gBrowser.tabs.filter(t => key(w, t) === k).map(t => ctxOf(t))) : [], windows: wins().length};"""
+    # In the sidebar: a real drag of a tab's row onto a space's dot, and the queue done with it.
+    drop_on_space = """
+      const dropOnSpace = async (tabId, space) => {
+        const from = doc.querySelector(`#tabs .tab[data-tab="${tabId}"]`), to = doc.querySelector(`#spaces .space[data-space="${space}"]`);
+        if (!from || !to) return false;
+        const data = new page.DataTransfer(), box = to.getBoundingClientRect();
+        const at = {bubbles: true, cancelable: true, clientX: box.left + 2, clientY: box.top + 2, dataTransfer: data};
+        from.dispatchEvent(new page.DragEvent("dragstart", at));
+        to.dispatchEvent(new page.DragEvent("dragover", at));
+        to.dispatchEvent(new page.DragEvent("drop", at));
+        from.dispatchEvent(new page.DragEvent("dragend", at));
+        await wait(300);
+        await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "stats"})));
+        return true;
+      };
+      const tabWith = async text => (await page.browser.tabs.query({})).find(t => t.url.includes(text))?.id;
+    """
+
+    def until(what, tries=60):
+        """What `what()` returns, as soon as its "done" says so, tried for up to 15 s."""
+        for _ in range(tries):
+            r = what()
+            if r.get("done"):
+                break
+            time.sleep(0.25)
+        return r
+
+    def registered_where(text):
+        """Where it is, once it is in the record and has a copy in every window."""
+        def seen():
+            r = m.js(where_script, text)
+            return {**r, "done": r["registered"] and len(r["copies"]) == r["windows"]}
+        return until(seen)
+
+    def set_rules(rules):
+        sidebar_page(m, """await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "settings:rules", rules: args[0]}))); return 1;""", rules)
+
+    def open_in(address, space):
+        m.js(H + """main().gBrowser.addTrustedTab(args[0], {userContextId: Number(args[1].split("-").pop()), inBackground: true}); return 1;""", address, space)
+
+    def select_tab(text):
+        m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes(args[0])); await wait(400); return 1;""", text)
+
+    def in_page(text, script):
+        """Run `script` in the web page whose address has this text."""
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if text in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        reply = m.cmd("WebDriver:ExecuteScript", {"script": script, "args": []})
+        m.chrome()
+        return reply
+
+    spaces = sidebar_page(m, """return {here: spaces().find(s => s.active).id, there: spaces().find(s => !s.active && s.id !== "firefox-container-4").id};""")
+    here, there = spaces["here"], spaces["there"]
+
+    # A rule for a site in this space; the tab moved by hand to another stays there.
+    set_rules([{"url": "smoke-safe-rule", "space": here}])
+    open_in("https://example.org/?smoke-safe-rule", here)
+    r = registered_where("smoke-safe-rule")
+    check("a tab that matches a rule for its own space stays there", r["at"] == [here], str(r))
+    moved = sidebar_page(m, drop_on_space + """return await dropOnSpace(await tabWith("smoke-safe-rule"), args[0]);""", there)
+    check("a tab can be dropped on a space", moved is True, str(moved))
+    r = registered_where("smoke-safe-rule")
+    check("a tab moved by hand is not sent back by a rule", r["at"] == [there] and set(r["copies"]) == {there}, str(r))
+    time.sleep(1)
+    r = m.js(where_script, "smoke-safe-rule")
+    check("and it is still there a moment later, once", r["at"] == [there], str(r))
+    set_rules([])
+
+    # The selected tab: it goes, and you stay in the space, on a tab that was there.
+    open_in("https://example.org/?smoke-safe-selected", here)
+    registered_where("smoke-safe-selected")
+    select_tab("smoke-safe-selected")
+    r = sidebar_page(m, drop_on_space + """const id = await tabWith("smoke-safe-selected"), dropped = await dropOnSpace(id, args[0]);
+      const [on] = await page.browser.tabs.query({active: true, windowId: (await page.browser.windows.getCurrent()).id});
+      return {dropped, on: on.cookieStoreId, gone: !doc.querySelector(`#tabs .tab[data-tab="${id}"]`), active: spaces().find(s => s.active).id};""", there)
+    where = registered_where("smoke-safe-selected")
+    check("the selected tab can be moved, and you stay in your space", r["dropped"] and r["on"] == here and r["active"] == here and where["at"] == [there] and not where["selected"], f"{r} {where}")
+
+    # A page with unsaved input stays, unasked: first in the background, then selected.
+    open_in(m.pages + "/unsaved?smoke-safe-input", here)
+    r = registered_where("smoke-safe-input")
+    check("a page with unsaved input is here to begin with", r["at"] == [here] and r["loaded"], str(r))
+    in_page("smoke-safe-input", """document.querySelector("input").value = "typed here"; return 1;""")
+    r = sidebar_page(m, drop_on_space + """const dropped = await dropOnSpace(await tabWith("smoke-safe-input"), args[0]); await wait(200);
+      return {dropped, line: doc.querySelector("#note")?.textContent ?? null};""", there)
+    where = m.js(where_script, "smoke-safe-input")
+    check("a page with unsaved input stays where it is, and stays loaded", r["dropped"] and where["at"] == [here] and where["loaded"], f"{r} {where}")
+    if r["line"] is None:  # quiet.js draws the line; what is said is checked on the fake Firefox
+        print("SKIP  the line about the page that stayed (no line in this build)", flush=True)
+    else:
+        check("the line says the page stayed", "unsaved input" in r["line"], str(r))
+    select_tab("smoke-safe-input")
+    r = sidebar_page(m, drop_on_space + """const id = await tabWith("smoke-safe-input"); const dropped = await dropOnSpace(id, args[0]);
+      const on = await page.browser.tabs.get(id); return {dropped, selected: on.active, loaded: !on.discarded};""", there)
+    where = m.js(where_script, "smoke-safe-input")
+    check("selected, it stays too, and you stay on it", r == {"dropped": True, "selected": True, "loaded": True} and where["at"] == [here], f"{r} {where}")
+    typed = in_page("smoke-safe-input", """return document.querySelector("input").value;""")
+    check("and what was typed is still there", typed == "typed here", str(typed))
+    # Closing it for real would ask: this check must leave no question open for what follows.
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("smoke-safe-input"));
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(x => !x.pinned && x !== t && x.userContextId === t.userContextId && !x.hidden);
+      w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(800); return 1;""")
+
+    # A rule pointing at a space that does not exist: the link stays, and you see which rule.
+    set_rules([{"url": "smoke-safe-dead", "space": "firefox-container-99"}])
+    open_in("https://example.org/?smoke-safe-dead", here)
+    r = registered_where("smoke-safe-dead")
+    shown = sidebar_page(m, """const p = doc.getElementById("problem"); for (let i = 0; i < 30 && p.hidden; i++) await wait(100); return p.hidden ? null : p.textContent;""")
+    check("a rule whose space is gone leaves the tab where it is", r["at"] == [here], str(r))
+    check("and the sidebar says which rule", "smoke-safe-dead" in (shown or ""), str(shown))
+    set_rules([])
+    gone = sidebar_page(m, """const p = doc.getElementById("problem"); for (let i = 0; i < 30 && !p.hidden; i++) await wait(100); return p.hidden;""")
+    check("and it says so no longer once the rule is changed", gone is True, str(gone))
+
+    # A removed container takes its rules, folders and saved tabs along.
+    made = sidebar_page(m, """const c = await page.browser.contextualIdentities.create(page.JSON.parse(JSON.stringify({name: "smoke-gone", color: "blue", icon: "circle"})));
+      await wait(300); return c.cookieStoreId;""")
+    keep = {"url": "smoke-kept-rule", "space": here}
+    set_rules([{"url": "smoke-gone-rule", "space": made}, keep])
+    open_in("https://example.org/?smoke-gone-saved", made)
+    open_in("https://example.org/?smoke-gone-plain", made)
+    registered_where("smoke-gone-saved")
+    registered_where("smoke-gone-plain")
+    folder = sidebar_page(m, """send({type: "newFolder", space: args[0], name: "smoke-gone-folder"}); await wait(600);
+      const all = (await page.browser.storage.local.get("syncedTabs")).syncedTabs; return Object.entries(all).find(([, e]) => e.name === "smoke-gone-folder")?.[0];""", made)
+    sidebar_page(m, """const id = (await page.browser.tabs.query({})).find(t => t.url.includes("smoke-gone-saved")).id;
+      send({type: "moveTab", tabId: id, before: null, folder: args[0]}); await wait(600); return 1;""", folder)
+    sidebar_page(m, """await page.browser.contextualIdentities.remove(args[0]); await wait(200); return 1;""", made)
+
+    def after_removal():
+        state = m.js(H + """const all = await storage("%s", ["syncedTabs", "rules"]);
+          return {tabs: wins().flatMap(w => w.gBrowser.tabs).filter(t => ctxOf(t) === args[0]).map(t => url(t)), rules: all.rules, record: Object.values(all.syncedTabs).filter(e => e.cookieStoreId === args[0]).map(e => e.name || e.url)};""" % EXT_ID, made)
+        return {**state, "done": not state["tabs"] and not state["record"] and len(state["rules"]) == 1}
+    r = until(after_removal)
+    check("a removed container's rules, folders and tabs go with it, and other rules stay", r["done"] and r["rules"] == [keep], str(r))
+    no_problems(m, "after moves and a removed container")
+    set_rules([])
+
+    # The background part starts again: the sidebar's connection is dead, and it comes back.
+    views = """page.browser.extension.getViews({type: "sidebar"})"""
+    before = sidebar_page(m, """for (const v of %s) v.document.documentElement.dataset.old = "1";
+      doc.documentElement.dataset.old = "1";
+      const bg = page.browser.extension.getBackgroundPage(); setTimeout(() => bg.location.reload(), 100);
+      return {rows: rows().length, reals: %s.map(v => v.document.querySelectorAll("#tabs .tab").length)};""" % (views, views))
+    check("before: the sidebar has its list, in its tab and in the window", before["rows"] > 0 and any(before["reals"]), str(before))
+    time.sleep(0.5)
+
+    def back():
+        state = sidebar_page(m, """return {old: doc.documentElement.dataset.old ?? null, rows: rows().length,
+          reals: %s.map(v => ({old: v.document.documentElement.dataset.old ?? null, rows: v.document.querySelectorAll("#tabs .tab").length}))};""" % views)
+        # (A window's own sidebar can rightly be empty: its space may have no tabs.)
+        return {**state, "done": state["old"] is None and state["rows"] > 0 and all(v["old"] is None for v in state["reals"]) and any(v["rows"] for v in state["reals"])}
+    r = until(back)
+    check("after the background part starts again, the sidebar has connected anew and shows its list", r["done"], str(r))
+    # In one piece again before the next group: the tabs known again, and the queue done with that.
+    until(lambda: {"done": sidebar_page(m, """return (await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "stats"})))).sizes.syncKeyByTab > 0;""") is True})
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1496,6 +1665,12 @@ def alone_restart(m):
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+    # Its rows, not only the tabs: in a sidebar page opened now, and in the window's own sidebar.
+    r = ext_page(m, "/sidebar/sidebar.html?after-restart", """for (let i = 0; i < 40 && !rows().length; i++) await wait(250);
+      const reals = page.browser.extension.getViews({type: "sidebar"}).map(v => v.document.querySelectorAll("#tabs .tab").length);
+      return {rows: rows().length, spaces: spaces().length, reals};""")
+    check("after a restart the sidebar shows its list", r["rows"] > 0 and r["spaces"] > 0, str(r))
+    check("after a restart the window's own sidebar has connected and shows its list", any(r["reals"]), str(r))
 
 
 def more_tabs_here(m, name):
@@ -1632,7 +1807,9 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy,
+                alone_safe_moves,
+                alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

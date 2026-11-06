@@ -199,9 +199,10 @@ function ruleMatches(rule, url) {
 async function byRule(tabId, url) {
   const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
-  if (!tab || tab.cookieStoreId === rule.space) return intoSpace(tabId);
+  if (!tab || tab.cookieStoreId === rule.space || await exemptFromRules(tabId)) return intoSpace(tabId);
   newTabs.delete(tabId);
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
+  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(() => null);
+  if (!opened) { ruleFailed(rule); return intoSpace(tabId); } // safemoves.js: closing it now would lose the link
   await browser.tabs.remove(tabId).catch(() => {});
 }
 
