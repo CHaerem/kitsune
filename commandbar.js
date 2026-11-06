@@ -299,7 +299,7 @@ function barClosedItems(ctx) {
 async function barArchivedItems() {
   const archived = (await globalThis.archivedTabs?.()) ?? [];
   return archived.map((a, i) => ({
-    kind: "archived", id: `archived:${i}:${a.url}`, title: a.title || a.url, url: a.url, icon: a.icon || null, space: a.space ?? a.cookieStoreId ?? null, lastUsed: a.when, archived: a,
+    kind: "archived", id: `archived:${i}:${a.url}`, title: a.title || a.url, url: a.url, icon: a.icon || null, space: a.space ?? null, lastUsed: a.when, why: a.why, archived: { space: a.space, url: a.url },
   }));
 }
 
@@ -376,8 +376,9 @@ async function barReopenClosed(ctx, row) {
   await browser.sessions.restore(row.sessionId).catch(err => (row.url ? barOpenTab(ctx, row.url) : Promise.reject(err)));
 }
 
+// Through its own list when it is there: that takes it off the list too.
 async function barReopenArchived(ctx, row) {
-  if (globalThis.reopenArchived) return globalThis.reopenArchived(row.archived);
+  if (globalThis.reopenArchived) return globalThis.reopenArchived(row.archived, ctx.windowId);
   return barOpenTab(row.space ? { ...ctx, space: row.space } : ctx, row.url);
 }
 
@@ -420,7 +421,10 @@ browser.runtime.onConnect.addListener(port => {
     else if (msg.type === "choose" && !bar.chosen) { // Enter pressed twice is one choice
       bar.chosen = true;
       await barClose(bar, true); // first: only the window you are in may pull a tab in, and Firefox opens what follows in the top window
-      if (bar.ctx) await barCarryOut(bar.ctx, msg).catch(noteError);
+      if (!bar.ctx) return;
+      // The window it was opened from can have closed meanwhile: then any other will do.
+      const windowId = (await browser.windows.get(bar.ctx.windowId).catch(() => null))?.id ?? (await normalWindows())[0]?.id;
+      if (windowId !== undefined) await barCarryOut({ ...bar.ctx, windowId }, msg).catch(noteError);
     }
   });
   port.onDisconnect.addListener(() => { // also when the page crashed: no window stays behind

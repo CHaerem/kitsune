@@ -69,7 +69,7 @@ function second(row) {
   if (row.kind === "command") return prettyKey(row.shortcut, data?.mac);
   if (row.kind === "folder") return "Folder";
   if (row.kind === "closed") return `${siteOf(row.url)} · closed`;
-  if (row.kind === "archived") return `${siteOf(row.url)} · archived`;
+  if (row.kind === "archived") return `${siteOf(row.url)} · ${row.why === "closed" ? "closed" : "archived"}`;
   if (row.kind === "address" || row.kind === "search" || row.kind === "ask" || !row.url) return "";
   return siteOf(row.url);
 }

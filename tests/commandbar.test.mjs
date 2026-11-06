@@ -431,6 +431,20 @@ test("a tab that has gone since the bar opened opens its address instead", async
   x.kill();
 });
 
+test("if the window it was opened from has closed, another one is used", async () => {
+  const ff = new FakeFirefox();
+  const { w, v } = world(ff);
+  const x = await started(ff);
+  const page = await openBar(ff, x, v.id);
+  await x.b.windows.remove(v.id);
+  await wait(500);
+  await page.tell({ type: "choose", row: { kind: "address", url: "https://still.example/" } });
+  await wait(300);
+  assert.equal(ff.list(w.id).filter(t => t.url === "https://still.example/").length, 1);
+  assert.deepEqual(Array.from(x.errors), [], "and nothing goes wrong");
+  x.kill();
+});
+
 test("an address and ⌘↵ open a new tab in the active space, in the place new tabs go", async () => {
   const ff = new FakeFirefox();
   const { w } = world(ff);
@@ -661,6 +675,12 @@ test("what archiving closed and what was closed can be found, and come back", as
   await page.tell({ type: "choose", row: { kind: "archived", url: archived.url, space: archived.space, archived: archived.archived } });
   await wait(200);
   assert.equal(ff.list(w.id).find(t => t.url === archived.url)?.cookieStoreId, C2, "in its own space");
+  // With Tidier's own list there, through that, which also takes it off the list.
+  x.js(`globalThis.reopened = []; globalThis.reopenArchived = async (item, windowId) => { reopened.push([item.space, item.url, windowId]); };`);
+  page = await openBar(ff, x, w.id);
+  await page.tell({ type: "choose", row: { kind: "archived", url: archived.url, space: archived.space, archived: archived.archived } });
+  await wait(200);
+  assert.equal(JSON.stringify(x.js("reopened")), JSON.stringify([[C2, archived.url, w.id]]));
   x.kill();
 });
 
