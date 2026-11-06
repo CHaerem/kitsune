@@ -238,7 +238,7 @@ def more_windows(m):
       }
       return out;""")
     check("essentials and tabs land in their own space in three more new windows", all(not x for x in wrong), str(wrong),
-          sidebery_bug="pin race")
+          sidebery_bug="pin race" if all(y.startswith("essential ") for x in wrong for y in x) else None)
     print(f"INFO  waiting for Sidebery's sidebar in those windows: {extension_message(m, {'type': 'sidebarWaits'})[-3:]}", flush=True)
 
 
@@ -941,8 +941,10 @@ def many_tabs(m):
       }""")
     check(f"with {r['essentials'][0]} essentials and {r['tabs'][0]} tabs, a new window gets them all ({r['ms']} ms)",
           r["ms"] is not None and r["essentials"][0] == r["essentials"][1] and r["tabs"][0] == r["tabs"][1], str(r))
-    check("with that many, every tab is in its container's space in every window, and the placeholders unload",
-          not any(r["misplaced"].values()) and not r["stillLoaded"], str(r), sidebery_bug="pin race")
+    wrong = [x for found in r["misplaced"].values() for x in found]
+    check("with that many, every tab is in its container's space in every window", not wrong, str(r),
+          sidebery_bug="pin race" if all(x.startswith("essential ") for x in wrong) else None)
+    check("with that many, the placeholders unload", not r["stillLoaded"], str(r))
     left = m.js(H + """await wait(2000); return wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("smoke-many") || (t.pinned && !ek(w, t))).map(t => t.label));""")
     check("and they are all gone again once closed", all(not x for x in left), str(left))
     # Memory and work. Tidier's lists of tabs and windows are back to their

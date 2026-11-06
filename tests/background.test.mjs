@@ -206,3 +206,53 @@ test("an extra placeholder of an essential goes at start, a loaded copy stays", 
   assert.ok(ff.tabs.has(real.id));
   x.kill();
 });
+
+// --- Placeholders -----------------------------------------------------------
+async function placeholderReady(ff, x, t, icon) {
+  x.send({ type: "ghostReady", icon }, { tab: ff.snap(t), url: t.url });
+  await wait(100);
+}
+function finishLoad(ff, x, t) {
+  t.status = "complete";
+  x.b.tabs.onUpdated.fire(t.id, { status: "complete" }, ff.snap(t));
+}
+
+test("a placeholder that takes long to finish loading still unloads", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  const t = ff.addTab(other.id, { url: GHOST("ghost", "a"), status: "loading", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  await placeholderReady(ff, x, t, false);
+  await wait(6000); // longer than the three seconds it used to wait before giving up
+  assert.equal(t.discarded, false);
+  finishLoad(ff, x, t);
+  await wait(100);
+  assert.equal(t.discarded, true);
+  assert.equal(x.js("awaitingIcon.size"), 0);
+  x.kill();
+});
+
+test("a placeholder waits for its icon, but not for ever", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  const shows = ff.addTab(other.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const never = ff.addTab(other.id, { url: GHOST("ghost", "b"), cookieStoreId: C1 });
+  const x = await run(ff);
+  await placeholderReady(ff, x, shows, true);
+  await placeholderReady(ff, x, never, true);
+  await wait(1000);
+  assert.equal(shows.discarded, false, "not before its icon shows");
+  shows.favIconUrl = "https://a.example/favicon.ico";
+  x.b.tabs.onUpdated.fire(shows.id, { favIconUrl: shows.favIconUrl }, ff.snap(shows));
+  await wait(100);
+  assert.equal(shows.discarded, true);
+  await wait(10000);
+  assert.equal(never.discarded, true);
+  x.kill();
+});

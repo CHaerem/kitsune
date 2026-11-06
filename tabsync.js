@@ -731,24 +731,35 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 // asked is unloaded: a placeholder loaded again meanwhile (a new address, or
 // the same one still loading) would be unloaded before it has its title, and
 // show its address instead. That load asks again when it is ready.
-const awaitingIcon = new Map(); // tabId -> address of the placeholder that is ready
+const ICON_WAIT_MS = 10000;
+const awaitingIcon = new Map(); // tabId -> { url, hasIcon }: the placeholder load that is ready
 function unloadWhenIconShown(tabId, url, hasIcon) {
-  awaitingIcon.set(tabId, url);
-  browser.tabs.get(tabId).then(t => { if (!hasIcon || t.favIconUrl) unloadGhost(tabId); }, () => awaitingIcon.delete(tabId));
+  const waiting = { url, hasIcon };
+  awaitingIcon.set(tabId, waiting);
+  unloadGhost(tabId);
+  // Firefox never reported this icon: better without it than loaded for good.
+  if (hasIcon) setTimeout(() => {
+    if (awaitingIcon.get(tabId) !== waiting) return;
+    waiting.hasIcon = false;
+    unloadGhost(tabId);
+  }, ICON_WAIT_MS);
 }
-function unloadGhost(tabId, tries = 0) {
-  const url = awaitingIcon.get(tabId);
-  if (!awaitingIcon.delete(tabId)) return;
+function unloadGhost(tabId) {
+  const waiting = awaitingIcon.get(tabId);
+  if (!waiting) return;
   browser.tabs.get(tabId).then(t => {
-    if (t.active || !isGhostUrl(t.url) || t.url !== url) return;
-    if (t.status === "complete") return browser.tabs.discard(tabId);
-    // Still finishing its own load: look again shortly.
-    if (tries < 10) setTimeout(() => { if (!awaitingIcon.has(tabId)) { awaitingIcon.set(tabId, url); unloadGhost(tabId, tries + 1); } }, 300);
-  }).catch(() => {});
+    // Not yet: the events below bring it back. Waiting a fixed time is not enough:
+    // with a new window's tabs all loading, a placeholder can take many seconds to
+    // report its load finished, and those given up on stayed loaded for good.
+    if (t.status !== "complete" || (waiting.hasIcon && !t.favIconUrl)) return;
+    if (awaitingIcon.get(tabId) !== waiting) return; // a newer load has asked meanwhile
+    awaitingIcon.delete(tabId);
+    if (!t.active && isGhostUrl(t.url) && t.url === waiting.url) return browser.tabs.discard(tabId);
+  }).catch(() => awaitingIcon.delete(tabId));
 }
 browser.tabs.onUpdated.addListener(tabId => {
   if (awaitingIcon.has(tabId)) unloadGhost(tabId);
-}, { properties: ["favIconUrl"] });
+}, { properties: ["favIconUrl", "status"] });
 
 // A placeholder whose tab or essential no longer exists (left from before a
 // restart, or by an older version) has nothing to show or open: it is closed.

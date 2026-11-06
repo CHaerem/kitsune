@@ -42,10 +42,17 @@ async function findIcon(info) {
 browser.runtime.sendMessage({ type: "ghostInfo", kind, key }).then(async info => {
   if (!info) { browser.runtime.sendMessage({ type: "ghostOrphan", kind, key }); return; }
   document.title = info.title || info.url;
-  if (document.visibilityState === "visible") { shown(info); return; }
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") shown(info); });
+  // Selected and left again without opening its page, it unloads too (a placeholder
+  // selected in a window you are not using, say); it would otherwise stay loaded.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") shown(info); else settle(info);
+  });
+  if (document.visibilityState === "visible") shown(info); else settle(info);
+});
+
+async function settle(info) {
   const icon = await findIcon(info);
-  if (icon) {
+  if (icon && !document.querySelector("link[rel=icon]")) {
     const link = document.createElement("link");
     link.rel = "icon";
     link.href = icon;
@@ -53,4 +60,4 @@ browser.runtime.sendMessage({ type: "ghostInfo", kind, key }).then(async info =>
   }
   // Unloaded by the background script once Firefox shows the icon.
   browser.runtime.sendMessage({ type: "ghostReady", icon: !!icon });
-});
+}
