@@ -19,11 +19,16 @@
 // A link Firefox is started with is not told apart: Tidier is not running yet.
 //
 // A window that extensions open has no address bar and no toolbar at all, whatever the
-// look says, so nothing can be drawn in it without a script in the page. So its address
-// and space are in its title, "Keep" is on the right click in the page, and the sidebar
-// of the window behind it has a row for it for as long as it is open. Closing is ⌘W.
+// look says (Firefox marks it web-extension-popup-window and hides them), so nothing can be
+// drawn in it without a script in the page. Firefox puts the page's address in its title
+// instead, and Tidier adds the space. "Keep" is on the right click in the page, and the
+// sidebar of the window behind it has a row for it for as long as it is open. Closing is ⌘W.
 //
 // It is left out of tab sync until you keep it (`register` skips all but normal windows).
+//
+// The same window is Tidier's link preview (Zen's Glance, Arc's Peek): "Open link in" on
+// a link's menu needs nothing, and ⌥-click needs a script in every page, so that only
+// with the access to all websites, which is optional and asked for on the settings page.
 
 const LITTLE_WIDTH = 900, LITTLE_HEIGHT = 700;
 const LITTLE_KEY = "little"; // sessions window value: this window is one of these, also after a restart
@@ -74,7 +79,7 @@ async function littleForLink(tabId, url) {
   const space = await littleSpace(url, tab.windowId, tab.cookieStoreId);
   if (!space) return false;
   const moves = tab.cookieStoreId === space;
-  await openLittle(tab.windowId, moves ? { tabId } : { url, cookieStoreId: space }, url, space, tab.width);
+  await openLittle(tab.windowId, moves ? { tabId } : { url, cookieStoreId: space }, space, tab.width);
   if (!moves) await browser.tabs.remove(tabId).catch(() => {});
   return true;
 }
@@ -91,19 +96,13 @@ function littleBounds(win, pageWidth) {
   };
 }
 
-// What the title bar starts with: there is no address bar to show where this page is from.
-async function littleTitle(url, space) {
-  let host = "";
-  try { host = new URL(url).hostname; } catch (err) { /* about: and the like have none */ }
-  const name = (await containerSpaces()).find(s => s.id === space)?.name;
-  return [host, name].filter(Boolean).join(" · ") + " · ";
-}
+const spaceName = async space => (await containerSpaces()).find(s => s.id === space)?.name ?? null;
 
-async function openLittle(fromWindowId, where, url, space, pageWidth) {
+async function openLittle(fromWindowId, where, space, pageWidth) {
   const from = await browser.windows.get(fromWindowId).catch(() => null);
   const made = await browser.windows.create({
     type: "popup", ...(from ? littleBounds(from, pageWidth) : { width: LITTLE_WIDTH, height: LITTLE_HEIGHT }),
-    titlePreface: await littleTitle(url, space), ...where,
+    titlePreface: `${await spaceName(space) ?? "Tidier"} · `, ...where,
   });
   littles.set(made.id, fromWindowId);
   await browser.sessions.setWindowValue(made.id, LITTLE_KEY, true).catch(() => {});
@@ -112,11 +111,7 @@ async function openLittle(fromWindowId, where, url, space, pageWidth) {
 }
 
 browser.windows.onRemoved.addListener(windowId => { if (littles.delete(windowId)) viewAllSoon(); });
-browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!littles.has(tab.windowId)) return;
-  if (change.url) littleTitle(change.url, tab.cookieStoreId).then(titlePreface => browser.windows.update(tab.windowId, { titlePreface })).catch(() => {});
-  viewAllSoon();
-}, { properties: ["url", "title", "favIconUrl"] });
+browser.tabs.onUpdated.addListener((tabId, change, tab) => { if (littles.has(tab.windowId)) viewAllSoon(); }, { properties: ["title", "favIconUrl"] });
 
 // --- Keeping it ----------------------------------------------------------------------
 // The normal window a page goes to: the one asked for, else the one you are using.
@@ -201,7 +196,7 @@ browser.menus.onShown.addListener(async (info, tab) => {
   }
   const little = littles.has(tab.windowId);
   if (info.contexts.some(c => c !== "link" && c !== "tab")) {
-    const name = little ? (await containerSpaces()).find(s => s.id === tab.cookieStoreId)?.name : null;
+    const name = little ? await spaceName(tab.cookieStoreId) : null;
     await browser.menus.update(MENU_KEEP, { visible: little, title: name ? `Keep in ${name}` : "Keep" }).catch(() => {});
     changed = true;
   }
@@ -222,7 +217,7 @@ async function linkInLittle(tab, url) {
   const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
   const space = rule?.space ?? (tab.cookieStoreId !== NO_CONTAINER ? tab.cookieStoreId : activeSpace.get(tab.windowId));
   const from = littles.get(tab.windowId) ?? tab.windowId;
-  await openLittle(from, space ? { url, cookieStoreId: space } : { url }, url, space, tab.width);
+  await openLittle(from, space ? { url, cookieStoreId: space } : { url }, space, tab.width);
 }
 
 // Where you chose, past any rule, and you stay where you are. A tab added to a small
@@ -234,13 +229,35 @@ async function linkInSpace(tab, url, space) {
   const index = await globalThis.topOfToday?.(win.id, space); // newtabs.js
   const props = { windowId: win.id, url, cookieStoreId: space, active: false, ...(index === undefined ? {} : { index }) };
   await (globalThis.openUnruled?.(props) ?? browser.tabs.create(props)); // safemoves.js
-  const name = (await containerSpaces()).find(s => s.id === space)?.name;
-  globalThis.say?.(win.id, `Opened in ${name}`); // quiet.js
+  globalThis.say?.(win.id, `Opened in ${await spaceName(space)}`); // quiet.js
 }
 
-// --- The setting ---------------------------------------------------------------------
+// --- ⌥-click, with the access to all websites -----------------------------------------
+// peek.js, in every page while the access is given, and in none otherwise. Firefox forgets
+// a registered script at each start. One change at a time: a permission given also makes
+// Tidier start its spaces again (spaces.js), and the two calls would each register one,
+// of which only the last could be taken back.
+const ALL_SITES = { origins: ["<all_urls>"] };
+let peekScript = null, peekChange = Promise.resolve();
+function startPeek() {
+  peekChange = peekChange.then(async () => {
+    const given = tidierAlone && await browser.permissions.contains(ALL_SITES).catch(() => false);
+    if (given && !peekScript) peekScript = await browser.contentScripts.register({ matches: ["http://*/*", "https://*/*"], js: [{ file: "peek.js" }], runAt: "document_start" });
+    else if (!given && peekScript) { await peekScript.unregister().catch(() => {}); peekScript = null; }
+  }).catch(noteError);
+  return peekChange;
+}
+browser.permissions.onAdded.addListener(() => { if (started) startPeek(); });
+browser.permissions.onRemoved.addListener(() => { if (started) startPeek(); });
+
+// --- Messages: the settings page's, and ⌥-click's -------------------------------------
 browser.runtime.onMessage.addListener((msg, sender) => {
-  if (!msg?.type?.startsWith("little:") || sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(""))) return;
+  if (!msg?.type?.startsWith("little:") || sender.id !== browser.runtime.id) return;
+  if (msg.type === "little:peek") {
+    if (tidierAlone && sender.tab) serial(() => linkInLittle(sender.tab, msg.url));
+    return;
+  }
+  if (!sender.url?.startsWith(browser.runtime.getURL(""))) return;
   return serial(async () => {
     if (msg.type === "little:set") littleSetting.set(!!msg.on);
     return { alone: tidierAlone, on: await littleSetting.get() };
@@ -248,13 +265,17 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 });
 
 // --- When Tidier starts --------------------------------------------------------------
-// Firefox brings a small window back after a restart, and Tidier starts again with an
-// update while one is open: without this, either would be a window nothing can keep.
+// Firefox brings a small window back after a restart, without its title's space, and
+// Tidier starts again with an update while one is open: without this, either would be a
+// window nothing can keep.
 async function startLittleWindow() {
   if (!tidierAlone) return;
   startLittleMenus();
-  for (const w of await browser.windows.getAll({ windowTypes: ["popup"] })) {
-    if (await browser.sessions.getWindowValue(w.id, LITTLE_KEY).catch(() => undefined)) littles.set(w.id, null);
+  await startPeek();
+  for (const w of await browser.windows.getAll({ populate: true, windowTypes: ["popup"] })) {
+    if (littles.has(w.id) || !await browser.sessions.getWindowValue(w.id, LITTLE_KEY).catch(() => undefined)) continue;
+    littles.set(w.id, null);
+    await browser.windows.update(w.id, { titlePreface: `${await spaceName(w.tabs?.[0]?.cookieStoreId) ?? "Tidier"} · ` }).catch(() => {});
   }
   if (littles.size) viewAllSoon();
 }

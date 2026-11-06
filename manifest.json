@@ -28,7 +28,8 @@
     "menus.overrideContext"
   ],
   "optional_permissions": [
-    "tabHide"
+    "tabHide",
+    "<all_urls>"
   ],
   "options_ui": {
     "page": "settings/settings.html",

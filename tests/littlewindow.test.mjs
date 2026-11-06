@@ -20,7 +20,7 @@ function withWindows(ff, x) {
     b.windows.onRemoved.fire(id);
   };
   const info = w => ({ id: w.id, type: w.type, incognito: w.incognito, focused: ff.focused === w.id, ...geometry(w) });
-  b.windows.getAll = async ({ windowTypes } = {}) => [...ff.wins.values()].filter(w => !windowTypes || windowTypes.includes(w.type)).map(info);
+  b.windows.getAll = async ({ windowTypes, populate } = {}) => [...ff.wins.values()].filter(w => !windowTypes || windowTypes.includes(w.type)).map(w => ({ ...info(w), ...(populate ? { tabs: ff.list(w.id) } : {}) }));
   b.windows.get = async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); return info(w); };
   b.windows.create = async p => {
     if (ff.refuseWindows) throw new Error("refused");
@@ -112,7 +112,7 @@ test("a link from another app moves into a small window: same tab, not loaded ag
   assert.equal(tabOf(small), t.id);
   assert.equal(ff.tabs.get(t.id).cookieStoreId, C1);
   assert.deepEqual([small.width, small.height], [900, 700]);
-  assert.match(small.titlePreface, /^link\.example · firefox-container-1 · /);
+  assert.equal(small.titlePreface, `${C1} · `);
   assert.ok(!ff.wins.get(w.id).order.includes(t.id));
   assert.ok(!ff.log.some(([what, id]) => what === "create" && id !== t.id && ff.tabs.get(id)?.url === LINK), "not opened twice");
   x.kill();
@@ -306,8 +306,10 @@ test("a small window is still one after Tidier starts again", async () => {
   let x = await start(ff);
   const t = linkFromOutside(ff, x, w.id);
   await wait(300);
+  popups(ff)[0].titlePreface = null; // as after a restart
   x = await start(ff);
   assert.equal(x.js(`littles.size`), 1);
+  assert.equal(popups(ff)[0].titlePreface, `${C1} · `);
   x.js(`serial(() => keepLittle(${t.id}))`);
   await wait(800);
   assert.equal(ff.tabs.get(t.id).windowId, w.id);
@@ -315,15 +317,41 @@ test("a small window is still one after Tidier starts again", async () => {
   x.kill();
 });
 
-test("the title follows the page, for want of an address bar", async () => {
+test("⌥-click: a script in every page only while the access is given", async () => {
   const ff = new FakeFirefox();
-  const { w } = session(ff);
-  const x = await start(ff);
-  const t = linkFromOutside(ff, x, w.id);
+  const { on } = session(ff);
+  const x = withWindows(ff, ff.boot());
+  const scripts = [];
+  x.b.contentScripts = { register: async o => { const s = { ...o, unregister: async () => { scripts.splice(scripts.indexOf(s), 1); } }; scripts.push(s); return s; } };
+  let given = false;
+  x.b.permissions.contains = async () => given;
+  ff.store.tidierAlone = true;
+  x.b.runtime.onStartup.fire();
+  await wait(1200);
+  for (let i = 0; i < 300 && !x.started(); i++) await wait(1000);
+  await wait(1000);
+  assert.equal(scripts.length, 0);
+  given = true;
+  x.b.permissions.onAdded.fire({ origins: ["<all_urls>"] }); // spaces.js starts again on the same event
   await wait(300);
-  ff.navigate(t.id, "https://next.example/");
+  assert.equal(scripts.length, 1, "once");
+  x.send({ type: "little:peek", url: LINK }, { url: "https://here.example/", tab: ff.snap(on) });
+  await wait(300);
+  assert.equal(ff.tabs.get(tabOf(popups(ff)[0])).cookieStoreId, C1);
+  given = false;
+  x.b.permissions.onRemoved.fire({ origins: ["<all_urls>"] });
   await wait(100);
-  assert.match(popups(ff)[0].titlePreface, /^next\.example · /);
+  assert.equal(scripts.length, 0);
+  x.kill();
+});
+
+test("only Tidier's own pages can change the setting", async () => {
+  const ff = new FakeFirefox();
+  session(ff);
+  const x = await start(ff);
+  assert.equal(x.send({ type: "little:set", on: false }, { url: "https://any.example/" }), undefined);
+  await wait(500);
+  assert.equal(ff.store.littleWindow, undefined);
   x.kill();
 });
 

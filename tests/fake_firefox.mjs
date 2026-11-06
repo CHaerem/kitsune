@@ -152,7 +152,7 @@ export class FakeFirefox {
     b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
     b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
-    b.permissions = { onAdded: ev(), onRemoved: ev() };
+    b.permissions = { onAdded: ev(), onRemoved: ev(), contains: async () => false };
     b.sidebarAction = { toggle: async () => {} };
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };

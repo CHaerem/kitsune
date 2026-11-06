@@ -1503,6 +1503,24 @@ def little_menu(m, handle_part, selector, item):
       return {seen, inside, chosen: !!chosen};""", handle_part, item)
 
 
+def little_alt_click(m, handle_part, selector):
+    """⌥-click `selector` for real, in the page of a tab with this address."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
+        if handle_part in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": selector})
+    alt = "\ue00a"
+    m.cmd("WebDriver:PerformActions", {"actions": [
+        {"type": "key", "id": "little-keys", "actions": [{"type": "keyDown", "value": alt}, {"type": "pause"}, {"type": "pause"}, {"type": "pause"}, {"type": "keyUp", "value": alt}]},
+        {"type": "pointer", "id": "little-mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pause"}, {"type": "pointerMove", "x": 0, "y": 0, "origin": {"element-6066-11e4-a52e-4f735466cecf": list(found.values())[0]}},
+            {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}, {"type": "pause"}]}]})
+    m.cmd("WebDriver:ReleaseActions")
+    m.chrome()
+
+
 def alone_little_window(m):
     base = m.pages + "/ticking?little-"
     # Two windows, as tabs show in both. (alone_second_window may have opened one.)
@@ -1639,11 +1657,16 @@ def alone_little_window(m):
       if (!p) return {none: true};
       await until(() => url(p.gBrowser.selectedTab).includes("little-ruled"));
       await wait(800);
-      const got = {...shownIn(p), on, left: w.gBrowser.tabs.filter(t => url(t).includes("little-ruled")).length, popups: popups().length};
-      p.close(); await until(() => !popups().length);
-      return got;""", base + "ruled")
+      return {...shownIn(p), on, left: w.gBrowser.tabs.filter(t => url(t).includes("little-ruled")).length, popups: popups().length};""", base + "ruled")
     check("a rule decides its space, and nothing sends it back", r.get("space") == 2 and r.get("left") == 0 and r.get("popups") == 1, str(r))
+    # Kept from there: it is selected, so you go along to its space, as with any tab you select.
+    r = sidebar_page(m, """const keep = doc.querySelector("#little .keep"); const label = keep?.textContent; keep?.click();
+      for (let i = 0; i < 100 && doc.querySelector("#little .little"); i++) await wait(100);
+      await wait(800);
+      return {label, active: spaces().find(s => s.active).id, first: doc.querySelector("#tabs > .tab")?.classList.contains("active")};""")
+    check("kept, you go along to its space", r["label"] == "Keep in Space 2" and r["active"] == "firefox-container-2" and r["first"], str(r))
     extension_message(m, {"type": "settings:rules", "rules": []})
+    sidebar_page(m, """doc.querySelector('#spaces .space[data-space="firefox-container-1"]').click(); await wait(800);""")
 
     # Firefox's own menus, opened for real on a real page.
     m.js(H + """const w = main(); w.focus(); const t = w.gBrowser.addTrustedTab(args[0], {userContextId: 1}); w.gBrowser.selectedTab = t; await wait(1500); return 1;""", m.pages + "/links?little-page")
@@ -1669,6 +1692,35 @@ def alone_little_window(m):
     check("in that space, out of sight, and you stay where you are", r["there"] and r["hidden"] and r["stayed"] and r["popups"] == 0, str(r))
     r = little_menu(m, "little-page", "body", "Keep")
     check("outside a small window, the page's menu has no Keep", not r["chosen"], str(r))
+    m.js(LITTLE + """await removeWhere((x, y) => url(y).includes("little-")); return 1;""")
+
+    # ⌥-click: a real one, with the access given, and then taken back.
+    access = """const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
+      const id = args[0], ext = WebExtensionPolicy.getByID(id).extension;
+      await ExtensionPermissions.%s(id, {permissions: [], origins: ["<all_urls>"]}, ext); await wait(800); return 1;"""
+    page = """const w = main(); w.focus(); await removeWhere((x, y) => url(y).includes("little-from-a-link") || url(y).includes("little-page")); const t = w.gBrowser.addTrustedTab(args[0], {userContextId: 1}); w.gBrowser.selectedTab = t; await wait(1500); return 1;"""
+    state = LITTLE + """await wait(1500); return {popups: popups().length, spaces: popups().map(p => p.gBrowser.selectedTab.userContextId), stayed: url(main().gBrowser.selectedTab).includes("little-page")};"""
+    m.js(H + access % "add", EXT_ID)
+    m.js(H + page, m.pages + "/links?little-page")
+    little_alt_click(m, "little-page", "#a")
+    r = m.js(state)
+    check("with the access given, ⌥-click opens a link in a small window, in the page's space", r["popups"] == 1 and r["spaces"] == [1] and r["stayed"], str(r))
+    m.js(LITTLE + """for (const p of popups()) p.close(); await until(() => !popups().length); return 1;""")
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "little-page" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    m.cmd("WebDriver:ExecuteScript", {"script": """document.querySelector("#a").addEventListener("click", e => e.preventDefault());
+      document.querySelector("#a").dispatchEvent(new MouseEvent("click", {altKey: true, bubbles: true, cancelable: true}));"""})
+    m.chrome()
+    r = m.js(state)
+    check("a page cannot open one by sending itself the click", r["popups"] == 0, str(r))
+    m.js(H + access % "remove", EXT_ID)
+    m.js(H + page, m.pages + "/links?little-page")
+    little_alt_click(m, "little-page", "#a")
+    r = m.js(state)
+    check("without the access, there is no script and ⌥-click is Firefox's", r["popups"] == 0, str(r))
     m.js(LITTLE + """await removeWhere((x, y) => url(y).includes("little-")); return 1;""")
 
     # Off in the settings, with a real click there.
@@ -1722,6 +1774,25 @@ def alone_restart(m):
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+
+
+def alone_little_restart(m):
+    if not m.can_restart:
+        print("SKIP  alone_little_restart (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
+        return
+    m.js(LITTLE + """await onSpaceTab(); external(args[0]); const p = await until(() => popups()[0]); await until(() => url(p.gBrowser.selectedTab).includes("little-restart")); await wait(2500); return 1;""", m.pages + "/ticking?little-restart")
+    m.restart()
+    r = m.js(LITTLE + """const p = await until(() => popups()[0], 30000); await wait(12000);
+      await removeWhere((x, y) => url(y).includes("sidebar/sidebar.html") || url(y).includes("settings/settings.html")); // restored, and not loaded
+      return {back: !!p, url: p ? url(p.gBrowser.selectedTab) : null, title: p?.document.title};""")
+    check("a small window comes back after a restart", r["back"] and "little-restart" in r["url"], str(r))
+    check("with its space in its title", " · " in (r["title"] or ""), str(r))
+    if r["back"]:
+        r = sidebar_page(m, """for (let i = 0; i < 100 && !doc.querySelector("#little .little"); i++) await wait(100);
+          const keep = doc.querySelector("#little .keep"); const label = keep?.textContent; keep?.click(); await wait(1500); return {label};""")
+        check("and it can still be kept", (r.get("label") or "").startswith("Keep in "), str(r))
+        r = m.js(LITTLE + """await until(() => !popups().length); const w = main(); return {popups: popups().length, here: w.gBrowser.tabs.some(t => url(t).includes("little-restart"))};""")
+        check("from there, into your list", r["popups"] == 0 and r["here"], str(r))
 
 
 def more_tabs_here(m, name):
@@ -1858,7 +1929,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_little_window, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_little_window, alone_idle, alone_update, alone_end, alone_restart, alone_little_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
