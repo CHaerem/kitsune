@@ -442,6 +442,13 @@ async function essentialShown(tab) {
       .find(t => t.id !== loaded.id && !isGhostUrl(t.url));
     if (calm) await browser.tabs.update(calm.id, { active: true }).catch(() => {});
   }
+  // Firefox closes a window when the last tab it can show leaves it. Using an essential in
+  // another window must not close this one, so here it gets its placeholder first.
+  const others = await browser.tabs.query({ windowId: loaded.windowId, hidden: false });
+  if (!others.some(t => t.id !== loaded.id)) {
+    const entry = (await getList()).find(e => e.key === key);
+    await createEssentials(loaded.windowId, [{ entry, index: loaded.index + 1 }], () => Promise.resolve());
+  }
   // Moved into the placeholder's place; onAttached then removes the
   // placeholder, and onDetached gives the old window one.
   await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index });

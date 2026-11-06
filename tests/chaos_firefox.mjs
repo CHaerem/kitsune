@@ -240,7 +240,7 @@ export class ChaosFirefox extends FakeFirefox {
         }
         return this.snap(t);
       },
-      move: (ids, p) => this.moveTabs([ids].flat(), p),
+      move: (ids, p) => { this.moveByCall = true; try { return this.moveTabs([ids].flat(), p); } finally { this.moveByCall = false; } },
       // ext-tabs.js remove(): one tab with removeTab, several with removeTabs per window.
       remove: ids => {
         const list = [ids].flat();
@@ -453,7 +453,10 @@ export class ChaosFirefox extends FakeFirefox {
     this.b.tabs.onDetached.fire(t.id, { oldWindowId: from.id, oldPosition: fromIndex });
     this.b.tabs.onAttached.fire(t.id, { newWindowId: to.id, newPosition: at });
     if (blurTo) this.select(blurTo.id);
-    if (last) this.closeWindow(from.id);
+    if (last) {
+      if (this.moveByCall) this.noteUnhandled(new Error(`Tidier moved the last tab out of window ${from.id}, which closed it`), "a window closed by itself");
+      this.closeWindow(from.id);
+    }
   }
 
   // tabbrowser's _findTabToBlurTo: the successor, else the next tab it can show, passing

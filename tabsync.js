@@ -539,6 +539,12 @@ async function pull(ghostId) {
   syncBusy.add(live.id); syncBusy.add(ghostId);
   try {
     const fromWindow = live.windowId, fromIndex = live.index, fromOpener = live.openerTabId;
+    // Firefox closes a window when the last tab it can show leaves it, whatever is hidden
+    // in it. Using a tab in another window must not close this one: it gets its ghost first.
+    const others = await browser.tabs.query({ windowId: fromWindow, hidden: false });
+    const entryNow = (await getSynced())[key];
+    const leftBehind = entryNow && !others.some(t => t.id !== live.id)
+      ? await createRep(fromWindow, key, entryNow, undefined, fromIndex + 1) : null;
     if (live.active) {
       // Leave the old window on a tab that is already loaded, preferably in the
       // same space, so the old window does not load anything in the background.
@@ -567,9 +573,13 @@ async function pull(ghostId) {
       // A never-loaded live tab is still a placeholder page; keep the real URL then.
       if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: live.favIconUrl || entry.icon });
       saveSynced(all);
-      // The old window gets a ghost where the live tab was.
+      // The old window gets a ghost where the live tab was, unless you have closed it by now.
       const opener = fromOpener !== undefined && (await browser.tabs.get(fromOpener).catch(() => null));
-      await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
+      if (!leftBehind) {
+        await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex).catch(async err => {
+          if (await browser.windows.get(fromWindow).catch(() => null)) throw err;
+        });
+      }
     }
   } finally {
     setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);

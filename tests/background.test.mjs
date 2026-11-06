@@ -799,3 +799,21 @@ test("a tab dragged to another window just after it was created is handled", asy
   for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1, `one in window ${w.id}`);
   x.kill();
 });
+
+test("a window is not closed because its last tab is used in another", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart({ closeWindowWithLastTab: true });
+  const t = ff.openTab(a.id, { url: "https://a.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.closeTab(ff.list(a.id).find(y => y.url === "about:home").id); // only the live tab is left in the first window
+  await ff.clock.run(1000);
+  ff.focusWindow(b.id);
+  const ghost = ff.list(b.id).find(y => y.url.includes("ghost.html"));
+  ff.select(ghost.id);
+  await ff.clock.idle(60000);
+  assert.ok(ff.wins.has(a.id), "the first window is still there");
+  assert.equal(ff.tabs.get(t.id).windowId, b.id, "the tab came");
+  assert.ok(ff.list(a.id).some(y => y.url.includes("ghost.html")), "and left a ghost");
+  assert.deepEqual([...x.js("problems")], []);
+  assert.deepEqual(ff.unhandled, []);
+  x.kill();
+});
