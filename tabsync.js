@@ -321,7 +321,7 @@ async function reconcileAll({ firefoxStart = false } = {}) {
   for (const t of tabs) {
     const key = syncKeyByTab.get(t.id);
     if (!key || all[key]) continue;
-    if (isGhostUrl(t.url)) { gone.push(key); syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
+    if (isGhostUrl(t.url)) { gone.push(key); forget(t.id); await removeTabs([t.id], syncBusy); }
     else await clearRole(t.id);
   }
   if (gone.length) await forgetClosedPlaceholders("ghost", gone);
@@ -369,7 +369,7 @@ async function reconcileAll({ firefoxStart = false } = {}) {
       const here = reps.filter(t => t.windowId === w.id);
       const ghosts = here.filter(t => syncRoleByTab.get(t.id) === "ghost");
       const extra = here.length > ghosts.length ? ghosts : ghosts.slice(1);
-      for (const t of extra) { syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
+      for (const t of extra) { forget(t.id); await removeTabs([t.id], syncBusy); }
       if (extra.length) await forgetClosedPlaceholders("ghost", [key]);
     }
   }
@@ -428,8 +428,8 @@ async function reopenedSaved(tab, all) {
   await setRole(tab.id, key, "live");
   for (const t of reps) {
     if (t.windowId !== tab.windowId) { if (syncRoleByTab.get(t.id) === "live") await setRole(t.id, key, "ghost"); continue; }
-    syncBusy.add(t.id); forget(t.id);
-    await browser.tabs.remove(t.id).catch(() => {});
+    forget(t.id);
+    await removeTabs([t.id], syncBusy);
   }
   await forgetClosedPlaceholders("ghost", [key]);
   if (isWeb(tab.url)) Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
@@ -505,8 +505,8 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   lastRefresh.delete(key);
   saveSynced(all);
   const reps = repsOf(key, await browser.tabs.query({}));
-  reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-  await removeTabs(reps.map(t => t.id));
+  reps.forEach(t => forget(t.id));
+  await removeTabs(reps.map(t => t.id), syncBusy);
   await forgetClosedPlaceholders("ghost", [key]);
 }
 
@@ -722,8 +722,8 @@ async function leaveSync(tabId, key) {
   const all = await getSynced(); delete all[key]; saveSynced(all);
   await clearRole(tabId);
   const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
-  others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-  await removeTabs(others.map(t => t.id));
+  others.forEach(t => forget(t.id));
+  await removeTabs(others.map(t => t.id), syncBusy);
   await forgetClosedPlaceholders("ghost", [key]);
 }
 
@@ -841,8 +841,9 @@ async function closeOrphan(tabId, kind, key) {
   if (!["ghost", "essential", "lazy"].includes(kind) || (await ghostInfo(kind, key))) return;
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || !isGhostUrl(tab.url)) return;
-  syncBusy.add(tabId); busy.add(tabId); forget(tabId);
-  await browser.tabs.remove(tabId).catch(() => {});
+  busy.add(tabId); forget(tabId);
+  await removeTabs([tabId], syncBusy);
+  busy.delete(tabId);
   await forgetClosedPlaceholders(kind, [key]);
 }
 
@@ -974,7 +975,7 @@ async function adoptRestored(windowId) {
     if (!key || !role) continue;
     found = true;
     if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
-    if (isGhostUrl(t.url)) { syncBusy.add(t.id); removed.push(key); await browser.tabs.remove(t.id).catch(() => {}); }
+    if (isGhostUrl(t.url)) { removed.push(key); await removeTabs([t.id], syncBusy); }
     else await clearRole(t.id);
   }
   if (removed.length) await forgetClosedPlaceholders("ghost", removed);

@@ -1208,3 +1208,18 @@ test("what could not be written is tried again", async () => {
   assert.ok(ff.store.syncedTabs[key]);
   x.kill();
 });
+
+test("a copy you unpinned in the moment of an update is unpinned when Tidier is back", async () => {
+  const { ff, x: first, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
+  first.kill();
+  const x = ff.update();
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials, []);
+  assert.ok(![...ff.tabs.values()].some(y => y.url.includes("kind=essential")));
+  x.kill();
+});

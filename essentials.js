@@ -168,8 +168,7 @@ async function ensureWindow(windowId, settle) {
     return ts.filter(t => t !== keep && isGhostUrl(t.url)).map(t => t.id);
   });
   if (extra.length) {
-    extra.forEach(id => busy.add(id));
-    await browser.tabs.remove(extra).catch(() => {});
+    await removeTabs(extra, busy);
     await forgetClosedPlaceholders("essential", [...copies.keys()].filter(k => copies.get(k).length > 1));
   }
   let index = 0;
@@ -236,15 +235,13 @@ async function onUnpinned(tab) {
     else {
       // Unpinned while the essential was being removed from another window
       // (its copies are removed then): it goes the same way.
-      busy.add(tab.id);
-      await browser.tabs.remove(tab.id).catch(() => {});
+      await removeTabs([tab.id], busy);
     }
   }
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
-  copies.forEach(id => busy.add(id));
-  await removeTabs(copies);
+  await removeTabs(copies, busy);
   await forgetClosedPlaceholders("essential", [key]);
 }
 
@@ -415,8 +412,7 @@ async function dropDoubleCopies(tabId, windowId) {
   const keys = await Promise.all(pinned.map(keyOf));
   const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
   if (!doubles.length) return;
-  doubles.forEach(id => busy.add(id));
-  await browser.tabs.remove(doubles).catch(() => {});
+  await removeTabs(doubles, busy);
   await forgetClosedPlaceholders("essential", [key]);
   await sortEssentials(windowId, await getList());
 }
@@ -537,9 +533,12 @@ async function essentialsAgree() {
   if (added.length) setList(list);
   for (const [i, t] of pinned.entries()) {
     if (placeholderOf(t.url).kind !== "essential" || list.some(e => e.key === keys[i])) continue;
-    busy.add(t.id);
     keyByTab.delete(t.id);
-    await browser.tabs.remove(t.id).catch(ifGone);
+    await removeTabs([t.id], busy);
     await forgetClosedPlaceholders("essential", [keys[i]]);
+  }
+  // A copy you unpinned in the moment of an update: the rest of that unpinning.
+  for (const t of await browser.tabs.query({ pinned: false })) {
+    if (placeholderOf(t.url).kind === "essential") await onUnpinned(t);
   }
 }
