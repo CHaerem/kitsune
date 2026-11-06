@@ -680,13 +680,16 @@ browser.tabs.onCreated.addListener(tab => {
 });
 
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!started || syncBusy.has(tabId)) return;
+  if (!started) return;
   const key = syncKeyByTab.get(tabId);
   if (!key) {
     // A new tab that has navigated to a page, e.g. "New Tab" -> a URL.
-    if (change.url || change.status === "complete") registerSoon(tabId);
+    if (!syncBusy.has(tabId) && (change.url || change.status === "complete")) registerSoon(tabId);
     return;
   }
+  // A tab Tidier has just made or moved (syncBusy) is still yours: what you do with it
+  // and what its page does count. Pinned then, it would stay in the record as well as
+  // become an essential, and a page finishing then would leave the record behind it.
   if (change.pinned === true) {
     // Pinned tabs are essentials; they leave tab sync.
     serial(async () => {

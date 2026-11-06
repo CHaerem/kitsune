@@ -714,3 +714,33 @@ test("a tab dragged to another window during a pull, or just after it was made, 
     x.kill();
   }
 });
+
+test("a ghost pinned just after it was made leaves tab sync, and is an essential", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.js(`syncBusy.add(${ghost.id})`); // as createRep does for a second and a half
+  await x.b.tabs.update(ghost.id, { pinned: true });
+  await wait(3000);
+  assert.deepEqual(Object.keys(ff.synced), [], "it has left the record");
+  assert.equal(ff.store.essentials.length, 1);
+  x.kill();
+});
+
+test("a page that finishes loading just after a pull still updates the record", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  x.js(`syncBusy.add(${live.id})`);
+  ff.navigate(live.id, "https://a.example/next", "Next");
+  await wait(1000);
+  assert.equal(ff.synced.a.url, "https://a.example/next");
+  x.kill();
+});
