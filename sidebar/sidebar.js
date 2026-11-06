@@ -83,7 +83,7 @@ function tile(item) {
     return t;
   }, item, t => {
     t.className = "tile" + (item.active ? " active" : "") + (item.loaded ? "" : " unloaded");
-    t.title = item.title;
+    t.title = item.tip || item.title;
     t.replaceChildren(icon(item));
   });
 }
@@ -101,7 +101,7 @@ function row(item, folderKey) {
     return e;
   }, item, e => {
     e.className = "row tab" + (item.active ? " active" : "") + (item.loaded ? "" : " unloaded");
-    e.title = item.title;
+    e.title = item.tip || item.title;
     const parts = [icon(item), el("span", "title", item.title)];
     if (item.audible || item.muted) {
       const sound = el("button", "sound", item.muted ? "🔇" : "🔊");

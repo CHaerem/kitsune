@@ -1261,7 +1261,7 @@ def ext_page(m, path, script, *args):
       const page = window.wrappedJSObject || window, doc = page.document;
       const rows = () => [...doc.querySelectorAll("#tabs .tab")].map(r => r.querySelector(".title").textContent);
       const folders = () => [...doc.querySelectorAll("#tabs .folder")].map(f => ({name: f.querySelector(".head .title")?.textContent, tabs: [...f.querySelectorAll(".tab .title")].map(t => t.textContent), collapsed: f.classList.contains("collapsed")}));
-      const tiles = () => [...doc.querySelectorAll("#essentials .tile")].map(t => t.title);
+      const tiles = () => [...doc.querySelectorAll("#essentials .tile")].map(t => t.title.split("\\n")[0]);
       const spaces = () => [...doc.querySelectorAll("#spaces .space")].map(b => ({id: b.dataset.space, active: b.classList.contains("active")}));
       const plainTabs = () => [...doc.querySelectorAll("#tabs > .tab")].filter(r => r.querySelector(".title").textContent !== "Tidier");
       (async () => {
@@ -1464,6 +1464,153 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+def pointer_over(m, *points):
+    """Move a real pointer over the sidebar page, which must be the selected tab: to each point in turn, with no way in between."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    for x, y in points:
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+                                                        "actions": [{"type": "pointerMove", "x": round(x), "y": round(y), "duration": 0, "origin": "viewport"}]}]})
+        time.sleep(0.2)
+    m.cmd("WebDriver:ReleaseActions")
+    m.chrome()
+
+
+def alone_touches(m):
+    # What nobody has to know about: tooltips, kept icons, warming a tab up, the sign of a slow load.
+    space = int(sidebar_page(m, """return spaces().find(s => s.active).id;""").split("-")[-1])
+    opened = m.js(H + """const a = main();
+      let w = other(), opened = !w;
+      if (opened) { w = a.OpenBrowserWindow(); w.__smoke = true; for (let i = 0; i < 100 && !w.gBrowser?.tabs.some(t => t.pinned); i++) await wait(100); await wait(1000); }
+      // In the other window, so that this window has only its placeholder.
+      w.gBrowser.addTrustedTab(args[0] + "/icon?elsewhere=secret", {userContextId: args[1], inBackground: true});
+      await wait(300);
+      a.gBrowser.addTrustedTab(args[0] + "/icon?warm", {userContextId: args[1], inBackground: true});
+      a.gBrowser.addTrustedTab(args[0] + "/icon?record", {userContextId: args[1], inBackground: true});
+      a.gBrowser.addTrustedTab(args[0] + "/slow", {userContextId: args[1], inBackground: true});
+      await wait(1000);
+      // Sees what the extension's call reaches, also what it should not.
+      a.__warmed = [];
+      const warmup = a.gBrowser.warmupTab;
+      a.gBrowser.warmupTab = function (t) { a.__warmed.push(url(t)); return warmup.call(this, t); };
+      // The sidebar page in front: timers in a page behind other tabs run late, and a pointer does not reach it.
+      a.__selected = a.gBrowser.selectedTab;
+      a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html"));
+      await wait(500);
+      return opened;""", m.pages, space)
+    until = """const until = async (test, ms = 15000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(20)) { const v = await test(); if (v) return v; } return null; };
+      const here = await page.browser.windows.getCurrent();
+      // The row of the tab in this window whose address holds `part`.
+      const rowOf = async part => { const t = (await page.browser.tabs.query({windowId: here.id})).find(x => x.url.includes(part));
+        return t && doc.querySelector(`#tabs .tab[data-tab="${t.id}"]`); };
+      const status = async id => (await page.browser.tabs.get(id)).status;"""
+    r = sidebar_page(m, until + """
+      const pages = arguments[0], ctx = arguments[1], icon = "img[src^='data:image/svg']", out = {};
+
+      // Tooltips: a placeholder knows its real address only from the record.
+      const ghost = await until(() => doc.querySelector("#tabs .tab.unloaded[title*='/icon']"));
+      out.ghostTip = ghost?.title;
+      out.tileTip = doc.querySelector("#essentials .tile")?.title;
+
+      // Where to take the pointer, below.
+      const warm = await until(() => rowOf("/icon?warm"));
+      const at = e => { const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; };
+      const closeBox = warm.getBoundingClientRect();
+      out.points = {title: at(warm.querySelector(".title")), close: [closeBox.right - 18, closeBox.top + closeBox.height / 2], ghost: at(ghost),
+                    showing: at(doc.querySelector("#tabs .tab.active, #essentials .tile.active")), nothing: at(doc.getElementById("space-name"))};
+
+      // The record's icon: a page without one keeps what the tab had, rather than a letter.
+      const record = await until(async () => { const r = await rowOf("/icon?record"); return r?.querySelector(icon) && r; });
+      if (record) {
+        const id = Number(record.dataset.tab);
+        await page.browser.tabs.update(id, {url: pages + "/no-icon"});
+        await until(async () => record.querySelector(".title")?.textContent === "No icon" && await status(id) === "complete");
+        await wait(500);
+        out.record = {own: (await page.browser.tabs.get(id)).favIconUrl ?? null, image: !!record.querySelector(icon), letter: !!record.querySelector(".letter")};
+      }
+
+      // A slow load: nothing at first, then a sign on the icon, then nothing, all on the same element.
+      const slow = await until(async () => { const r = await rowOf("/slow"); return r?.querySelector(icon) && r; });
+      if (!slow) return out;
+      const slowId = out.slowId = Number(slow.dataset.tab);
+      const finished = async () => { await until(async () => await status(slowId) === "complete"); await wait(300); };
+      await finished();
+      const img = slow.querySelector("img"), signed = () => slow.querySelector("img, .letter").classList.contains("slow-load");
+      out.quietBefore = !signed();
+      await page.browser.tabs.reload(slowId);
+      const t0 = Date.now();
+      await wait(250);
+      out.quietAtFirst = !signed();
+      await until(signed, 6000); // the load ends no sooner than this waits: it starts late too on a busy machine
+      out.shownAfter = Date.now() - t0;
+      out.shown = signed();
+      const moving = slow.querySelector(".slow-load")?.getAnimations()[0];
+      out.animation = moving && {state: moving.playState, name: moving.animationName, iterations: moving.effect.getComputedTiming().iterations};
+      await until(() => !signed(), 6000);
+      out.gone = !signed();
+      out.brightening = [];
+      for (let i = 0; i < 25; i++) { out.brightening.push(Number(page.getComputedStyle(img).opacity)); await wait(20); }
+      await finished();
+      out.sameIcon = slow.querySelector("img") === img && img.isConnected;
+
+      // A title arriving during a load draws the row again: the sign goes on from where it was.
+      const drip = (await page.browser.tabs.create({windowId: here.id, url: pages + "/drip", cookieStoreId: "firefox-container-" + ctx, active: false})).id;
+      const dripping = () => doc.querySelector(`#tabs .tab[data-tab="${drip}"]`);
+      const first = await until(() => dripping()?.querySelector(".slow-load"), 6000);
+      const started = first?.getAnimations()[0]?.startTime;
+      await until(() => dripping()?.querySelector(".title").textContent === "Dripped", 6000);
+      const second = dripping()?.querySelector(".slow-load");
+      out.redrawn = {icon: !!first && !!second && second !== first, sameStart: second?.getAnimations()[0]?.startTime === started};
+      await until(() => !dripping()?.querySelector(".slow-load"), 5000);
+      out.dripEnded = !dripping()?.querySelector(".slow-load");
+      return out;""", m.pages, space)
+    check("a placeholder's tooltip shows its title and real address, without the query part", r.get("ghostTip") == f"Touched\n{m.pages}/icon", str(r))
+    check("an essential's tooltip shows its address, without the query part", "\nhttps://example.org/" in (r.get("tileTip") or "") and "?" not in r["tileTip"], str(r))
+    check("a page with no icon keeps the one in the record, not a letter", r.get("record") == {"own": None, "image": True, "letter": False}, str(r))
+    check("a slow load shows nothing at first", r.get("quietBefore") is True and r.get("quietAtFirst") is True, str(r))
+    check("a slow load shows on the icon after half a second", r.get("shown") is True and r.get("shownAfter", 0) >= 500, str(r))
+    a = r.get("animation") or {}
+    check("the sign breathes, and comes to rest by itself", a.get("name") == "slow-load" and a.get("state") == "running" and 0 < a.get("iterations", 0) < 100, str(r))
+    fade = r.get("brightening") or [0]
+    check("the sign goes softly when the page is there", r.get("gone") is True and fade == sorted(fade) and fade[-1] == 1, str(r))
+    check("a load does not replace the icon", r.get("sameIcon") is True, str(r))
+    check("a row drawn again during a load keeps its sign where it was", r.get("redrawn") == {"icon": True, "sameStart": True} and r.get("dripEnded") is True, str(r))
+
+    # A real pointer. On the same row twice, then away and back each time: to a placeholder,
+    # to the tab that is showing, and to nothing.
+    p = r.get("points")
+    pointer_over(m, p["title"], p["close"], p["ghost"], p["title"], p["showing"], p["close"], p["nothing"], p["title"])
+    warmed = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 4; i++) await wait(50); await wait(200); return main().__warmed;")
+    check("a tab is warmed once for each time the pointer comes to it, and only a loaded one", len(warmed) == 4 and all("/icon?warm" in u for u in warmed), str(warmed))
+
+    # Asked for less motion: the sign is a still dim, and what moved in the sidebar stands still.
+    m.js('Services.prefs.setIntPref("ui.prefersReducedMotion", 1); return 1;')
+    r = sidebar_page(m, until + """
+      const slowId = arguments[0], row = doc.querySelector(`#tabs .tab[data-tab="${slowId}"]`);
+      await until(() => page.getComputedStyle(doc.documentElement).transitionDuration === "0s", 2000);
+      await page.browser.tabs.reload(slowId);
+      const icon = await until(() => row.querySelector(".slow-load"), 6000);
+      const style = icon && page.getComputedStyle(icon);
+      const out = {name: style?.animationName, opacity: style?.opacity, moving: icon?.getAnimations().length, window: page.getComputedStyle(doc.documentElement).transitionDuration};
+      await until(async () => await status(slowId) === "complete");
+      await wait(300);
+      out.after = row.querySelector("img").getAnimations().length;
+      return out;""", r.get("slowId"))
+    m.js(H + """Services.prefs.clearUserPref("ui.prefersReducedMotion");
+      const a = main();
+      a.gBrowser.selectedTab = a.__selected;
+      await removeWhere((w, t) => url(t).startsWith(args[0]));
+      delete a.gBrowser.warmupTab;
+      if (args[1]) { other()?.close(); await wait(2500); }
+      return 1;""", m.pages, opened)
+    check("with less motion asked for, a slow load is a still dim", r.get("name") == "none" and r.get("moving") == 0 and r.get("opacity") == "0.55" and r.get("after") == 0, str(r))
+    check("with less motion asked for, nothing in the sidebar moves", r.get("window") == "0s", str(r))
+    no_problems(m, "after the small touches")
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1632,7 +1779,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_touches, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

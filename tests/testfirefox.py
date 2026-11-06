@@ -70,20 +70,32 @@ TEST_PREFS = {
 
 # Test pages served from here: what no public test page does, and no dependence on
 # a site for the checks that use them.
+ICON_PAGE = """<title>Touched</title><link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='teal'/></svg>">a page with an icon"""
 PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+    "/icon": ICON_PAGE,
+    "/no-icon": "<title>No icon</title>a page without an icon",
+    "/slow": ICON_PAGE,  # answers after SLOW_PAGE_S, the same page every time, so a load changes nothing else in the tab
+    # There at once and still loading for SLOW_PAGE_S, and its title changes meanwhile.
+    "/drip": "<title>Dripping</title><script>setTimeout(() => { document.title = 'Dripped'; }, 1200);</script>a page that takes its time",
 }
+SLOW_PAGE_S = 3
 
 
 def serve_pages():
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             body = PAGES.get(self.path.split("?")[0])
+            if self.path.startswith("/slow"):
+                time.sleep(SLOW_PAGE_S)
             self.send_response(200 if body else 404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write((body or "").encode())
+            if self.path.startswith("/drip"):
+                self.wfile.flush()
+                time.sleep(SLOW_PAGE_S)
 
         def log_message(self, *args):
             pass

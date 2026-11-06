@@ -14,10 +14,32 @@ const sidebarPorts = new Map(); // windowId -> Set of ports (a window has one si
 const viewTimers = new Map(); // windowId -> timer for the next view
 const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 
+// What a tab's tooltip says: its title, then its address without the query part, which
+// is seldom readable and may hold a token. A placeholder's own address is ghost.html and
+// its own title may be too, so they come from the record (`entry`: the synced tab's, or the
+// essential's); a loaded page's own address is newer than the record's.
+const TIP_ADDRESS_MAX = 300; // a data: address can be megabytes, and every view would carry it
+function tabTip(t, entry) {
+  const placeholder = isGhostUrl(t.url);
+  const url = (placeholder ? entry?.url : t.url) || "";
+  const title = entry?.name || entry?.title || (placeholder ? "" : t.title) || "";
+  const bare = url.split("?")[0];
+  const address = bare.length > TIP_ADDRESS_MAX ? bare.slice(0, TIP_ADDRESS_MAX) + "…" : bare;
+  return (title === url || title === address ? [address] : [title, address]).filter(Boolean).join("\n");
+}
+
+// Firefox's own spinner goes by the same thing (status is the tab's busy attribute). A
+// placeholder "loads" only the tiny local page that gives it a title and an icon.
+const tabIsLoading = t => t.status === "loading" && !t.discarded && !isGhostUrl(t.url);
+
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
-// page's (see ghost.js); an essential shows its short name if it has one.
-const tabItem = (t, title) => ({
-  id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
+// page's (see ghost.js); an essential shows its short name if it has one. Firefox drops a
+// tab's icon when a new page comes in, and a placeholder may not have one yet, so the
+// record's comes next, before a letter.
+const tabItem = (t, title, entry) => ({
+  id: t.id, title: title || t.title || t.url,
+  icon: t.favIconUrl || (tidierAlone && entry?.icon) || null,
+  tip: tidierAlone ? tabTip(t, entry) : undefined,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
 });
 
@@ -36,7 +58,7 @@ async function viewFor(windowId) {
   const keys = await Promise.all(pinned.map(keyOf));
   const essentials = pinned.map((t, i) => ({ t, entry: list.find(e => e.key === keys[i]) }))
     .sort((a, b) => (rank.get(a.entry?.key) ?? Infinity) - (rank.get(b.entry?.key) ?? Infinity))
-    .map(({ t, entry }) => tabItem(t, entry?.name || entry?.title));
+    .map(({ t, entry }) => tabItem(t, entry?.name || entry?.title, entry));
 
   // A tab without a container (a new tab) belongs to the space you are in.
   const all = await getSynced();
@@ -49,9 +71,12 @@ async function viewFor(windowId) {
   for (const t of here) {
     if (isSideberyGroup(t.url)) continue;
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
-    (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
+    (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title, all[syncKeyByTab.get(t.id)]));
   }
-  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
+  // Tabs still loading go apart from their rows: a row is drawn again when anything in it
+  // changes, and a load starting and ending must not replace its icon (sidebar/touches.js).
+  const loading = tidierAlone ? tabs.filter(tabIsLoading).map(t => t.id) : [];
+  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose, loading };
 }
 
 function viewSoon(windowId) {
@@ -87,6 +112,9 @@ browser.runtime.onConnect.addListener(port => {
       await browser.tabs.create({ windowId, cookieStoreId: msg.space });
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
+    } else if (msg.type === "warmup") {
+      // Not a sidebarAction: this changes nothing you can see, so it neither waits in the queue nor asks for a new view.
+      if (tidierAlone) await browser.tabs.warmup(msg.tabId).catch(() => {});
     } else if (tidierAlone) {
       await serial(() => sidebarAction(windowId, msg)).catch(() => {}); // logged by serial()
     }

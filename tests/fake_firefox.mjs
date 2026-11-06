@@ -125,6 +125,7 @@ export class FakeFirefox {
       show: async ids => { ff.log.push(["show", ids]); for (const id of [ids].flat()) need(id).hidden = false; },
       hide: async ids => { ff.log.push(["hide", ids]); for (const id of [ids].flat()) { const t = need(id); if (!t.pinned && !t.active) t.hidden = true; } },
       discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id)) t.discarded = true; },
+      warmup: async id => { need(id); ff.log.push(["warmup", id]); },
     };
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),
