@@ -308,10 +308,12 @@ def essentials(m):
       if (t.linkedPanel) { w.gBrowser.discardBrowser(t); await wait(500); }
       const k = ek(w, t);
       other().gBrowser.adoptTab(t, {tabIndex: 0}); await wait(5000);
-      const list = (await storage("%s", ["essentials"])).essentials.map(e => e.key);
-      return {inList: list.includes(k), copies: wins().map(x => x.gBrowser.tabs.filter(y => y.pinned && ek(x, y) === k).length)};""" % EXT_ID)
-    check("an unloaded essential dragged to the other window stays an essential, there once and back in the window it left",
-          r == {"inList": True, "copies": [1, 1]}, str(r))
+      const list = (await storage("%s", ["essentials"])).essentials, entry = list.find(e => e.key === k);
+      const there = other().gBrowser.tabs.find(y => y.pinned && ek(other(), y) === k);
+      return {inList: !!entry, copies: wins().map(x => x.gBrowser.tabs.filter(y => y.pinned && ek(x, y) === k).length),
+              named: !!there && there.label === (entry?.name || entry?.title)};""" % EXT_ID)
+    check("an unloaded essential dragged to the other window stays an essential, there once with its name, and back in the window it left",
+          r == {"inList": True, "copies": [1, 1], "named": True}, str(r))
     r = m.js(H + """
       const byKey = Object.fromEntries((await storage("%s", ["essentials"])).essentials.map(e => [e.key, e.name || e.title]));
       const w = other(), copies = w.gBrowser.tabs.filter(t => t.pinned && !t.linkedPanel && ek(w, t));

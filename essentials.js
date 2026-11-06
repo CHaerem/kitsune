@@ -338,6 +338,9 @@ async function dropDoubleCopies(tabId, windowId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!key || !tab?.pinned) return;
   await tagTab(tabId, key); // a tab dragged from the tab bar may arrive without its sessions values
+  // An unloaded copy arrives without its title (Firefox shows its address):
+  // its placeholder is loaded once more to set it, and unloads itself again.
+  if (tab.discarded && isGhostUrl(tab.url)) await browser.tabs.update(tabId, { url: ghostUrl("essential", key) }).catch(() => {});
   const pinned = await browser.tabs.query({ windowId, pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
