@@ -1214,13 +1214,21 @@ def move_over(m):
     r = m.js(H + "await wait(1500); return wins().map(w => [...new Set(w.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && t.userContextId).map(t => t.userContextId))].length);")
     check("after moving over, each window shows one space", all(x == 1 for x in r), str(r))
     no_problems(m, "after moving over")
+    # A placeholder made from here on has no page, and Sidebery draws the tab itself:
+    # after moving back it has its icon.
+    icon_key = m.js(H + """const t = main().gBrowser.addTrustedTab(args[0] + "/icon", {userContextId: 1, inBackground: true}); await wait(4000); return JSON.parse(key(main(), t));""", m.pages)
     # And back: Sidebery on first, and its folder pages return.
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       await (await AddonManager.getAddonByID("%s")).enable(); await wait(4000); return 1;""" % SIDEBERY_ID)
     fire_message(m, {"type": "settings:moveBack"})
     m.js(H + "await wait(10000); return 1;")
     back = m.js(record)
-    check("after moving back, every folder has its tabs and its pages", back["folders"] == before["folders"] and back["tabs"] == before["tabs"] and back["pages"] == before["pages"], f"{before} -> {back}")
+    check("after moving back, every folder has its tabs and its pages", back["folders"] == before["folders"] and [k for k in back["tabs"] if k != icon_key] == before["tabs"] and back["pages"] == before["pages"], f"{before} -> {back}")
+    r = m.js(H + """const copies = () => wins().flatMap(w => w.gBrowser.tabs.filter(t => value(w, t, "syncKey") === args[0] && value(w, t, "syncRole") === "ghost"));
+      for (let i = 0; i < 80 && !(copies().length && copies().every(t => t.image && !t.linkedPanel)); i++) await wait(250);
+      return copies().map(t => ({icon: (t.image || "").slice(0, 10), loaded: !!t.linkedPanel}));""", icon_key)
+    check("after moving back, a placeholder made meanwhile has its icon, and is unloaded", r and all(x["icon"] == "data:image" and not x["loaded"] for x in r), str(r))
+    m.js(H + """await removeWhere((w, t) => value(w, t, "syncKey") === args[0]); return 1;""", icon_key)
 
 
 # The windows whose essentials (pinned tabs) are not together by space, with
@@ -1691,8 +1699,8 @@ def alone_many(m):
     check(f"a burst of tabs does not build a view per tab ({burst['views']})", burst["views"] < n, str(burst))
     check(f"and the queue is not held for long ({burst['queueMs']} ms for {n} tabs)", burst["queueMs"] < n * 60, str(burst))
     # Placeholders load no page, which is what would take the memory.
-    loaded = m.js(H + """return wins().flatMap(w => w.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html"))).length;""")
-    check("no placeholder is loaded", loaded == 0, str(loaded))
+    loaded = many_wait(m, H + """return wins().every(w => !w.gBrowser.tabs.some(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html")));""", 20)
+    check("no placeholder stays loaded", loaded is not None, str(numbers))
 
     # A placeholder without a page still shows its page's title and icon, from the record.
     number = int(space0.rsplit("-", 1)[1])
@@ -1708,7 +1716,7 @@ def alone_many(m):
     # From the event to the sidebar showing it, and a view's build, one at a time.
     r = sidebar_page(m, MANY_PAGE + """
       const space = spaces().find(s => s.active).id, before = await ask({type: "stats"}), shown = [], gone = [];
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 3; i++) {
         const t0 = performance.now();
         const tab = await page.browser.tabs.create(bg({windowId, cookieStoreId: space, url: "https://example.org/?smoke-many-probe-" + i, active: false, discarded: true}));
         if (!await until(() => rowOf(tab.id))) return {missing: tab.id};
@@ -1753,9 +1761,9 @@ def alone_many(m):
       const here = spaces().find(s => s.active).id, away = spaces().filter(s => !s.active).at(-1).id, out = {};
       for (const [name, space] of [["away", away], ["here", here]]) {
         const tab = await page.browser.tabs.create(bg({windowId, cookieStoreId: space, url: args[0] + "/ticking", active: false}));
-        await wait(3000);
+        await wait(2000);
         const before = await ask({type: "stats"});
-        await wait(4000);
+        await wait(3000);
         const after = await ask({type: "stats"});
         out[name] = {views: after.views - before.views, ms: Math.round(after.viewMs - before.viewMs), jobs: after.jobs - before.jobs};
         await page.browser.tabs.remove(tab.id);

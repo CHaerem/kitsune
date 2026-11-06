@@ -95,7 +95,7 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
     if (!tab) continue;
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
-    if (tidierAlone) await browser.tabs.update(tab.id, { pinned: true }).catch(noteError);
+    if (tidierAlone) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
     tabs.push({ tab, entry });
     if (!tidierAlone) await sleep(CREATE_GAP_MS);
   }

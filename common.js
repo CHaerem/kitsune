@@ -114,15 +114,18 @@ async function forgetClosedNow() {
   forgetBusy = true;
   const t0 = performance.now();
   const ours = url => toForget.has(url) || toForget.has(url?.split("&placed=")[0]);
-  const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
-  for (const t of closed.map(item => item.tab).filter(Boolean)) {
-    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+  try {
+    const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
+    for (const t of closed.map(item => item.tab).filter(Boolean)) {
+      if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+    }
+  } finally {
+    // The rest counts as busy, so that what changes during it waits for the look after it.
+    setTimeout(() => {
+      forgetBusy = false;
+      if (forgetAgain) { forgetAgain = false; forgetClosedNow(); }
+    }, FORGET_REST * (performance.now() - t0));
   }
-  // The rest counts as busy, so that what changes during it waits for the look after it.
-  setTimeout(() => {
-    forgetBusy = false;
-    if (forgetAgain) { forgetAgain = false; forgetClosedNow(); }
-  }, FORGET_REST * (performance.now() - t0));
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
 

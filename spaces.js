@@ -23,13 +23,7 @@ async function containerSpaces() {
   const ids = await browser.contextualIdentities.query({}).catch(() => []);
   return ids.map(c => ({ id: c.cookieStoreId, name: c.name, color: c.colorCode, icon: c.icon, iconUrl: c.iconUrl }));
 }
-// Managed storage is a file Firefox reads again at every question; like tidierAlone it
-// is read once while Tidier runs, and a change to it counts from the next start.
-let declaredRead = null;
-function declaredSpaces() {
-  declaredRead ??= browser.storage.managed.get("spaces").then(stored => stored.spaces, () => undefined);
-  return declaredRead;
-}
+const declaredSpaces = () => browser.storage.managed.get("spaces").then(stored => stored.spaces, () => undefined);
 async function spaceList(used) {
   const all = await containerSpaces();
   if (!tidierAlone) return all.filter(s => used.has(s.id));

@@ -12,11 +12,12 @@
 
 const sidebarPorts = new Map(); // windowId -> Set of ports (a window has one sidebar; a reload may briefly add a second)
 const viewTimers = new Map(); // windowId -> { timer, first }: the next view, and when it was first asked for
-const viewsBuilding = new Map(); // windowId -> whether something changed while its view is being built
+const viewsBuilding = new Map(); // windowId -> { since, changed }: the view being built, and whether something changed meanwhile
 const viewRest = new Map(); // windowId -> not before when its next view is built
 const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view...
 const VIEW_LONGEST_WAIT_MS = 250; // ... and a long burst still shows, every so often
 const VIEW_REST = 3; // times what the last view took, so that views never take most of the time, however many tabs
+const VIEW_STUCK_MS = 15000; // a view Firefox never answers for must not leave a sidebar frozen
 
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
 // page's (see ghost.js); an essential shows its short name if it has one.
@@ -77,26 +78,27 @@ async function viewFor(windowId) {
 // otherwise overtake it, and the sidebar would end up showing the older one.
 function viewSoon(windowId) {
   if (!sidebarPorts.get(windowId)?.size) return;
-  if (viewsBuilding.has(windowId)) { viewsBuilding.set(windowId, true); return; }
-  const now = performance.now(), waiting = viewTimers.get(windowId), first = waiting?.first ?? now;
+  const now = performance.now(), building = viewsBuilding.get(windowId);
+  if (building && now - building.since < VIEW_STUCK_MS) { building.changed = true; return; }
+  const waiting = viewTimers.get(windowId), first = waiting?.first ?? now;
   clearTimeout(waiting?.timer);
-  const at = Math.max(Math.min(now + VIEW_DEBOUNCE_MS, first + VIEW_LONGEST_WAIT_MS), viewRest.get(windowId) ?? 0);
-  viewTimers.set(windowId, { first, timer: setTimeout(() => buildView(windowId), at - now) });
+  viewTimers.set(windowId, { first, timer: setTimeout(() => buildView(windowId), viewWait(now, first, viewRest.get(windowId) ?? 0)) });
 }
+const viewWait = (now, first, restUntil) => Math.max(Math.min(VIEW_DEBOUNCE_MS, first + VIEW_LONGEST_WAIT_MS - now), restUntil - now, 0);
 async function buildView(windowId) {
   viewTimers.delete(windowId);
-  viewsBuilding.set(windowId, false);
+  const t0 = performance.now(), building = { since: t0, changed: false };
+  viewsBuilding.set(windowId, building);
   work.views++;
-  const t0 = performance.now();
   const view = await viewFor(windowId).catch(err => (console.error("Tidier: sidebar", err), null));
   const ms = performance.now() - t0;
   work.viewMs += ms;
   work.longestViewMs = Math.max(work.longestViewMs, ms);
-  const changed = viewsBuilding.get(windowId);
+  if (viewsBuilding.get(windowId) !== building) return; // given up on: a newer one is on its way
   viewsBuilding.delete(windowId);
   if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
   if (sidebarPorts.has(windowId)) viewRest.set(windowId, performance.now() + VIEW_REST * ms);
-  if (changed) viewSoon(windowId);
+  if (building.changed) viewSoon(windowId);
 }
 const viewAllSoon = () => { for (const windowId of sidebarPorts.keys()) viewSoon(windowId); };
 // Only the sidebars that show tabs of this space: a page in another space can change
