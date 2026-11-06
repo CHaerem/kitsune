@@ -711,3 +711,37 @@ test("a window closed while it is being filled is not an error", async () => {
   assert.deepEqual([...x.js("problems")], []);
   x.kill();
 });
+
+test("a tab opened while Tidier is starting is seen when it has started", async () => {
+  const ff = new ChaosFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:home", active: true });
+  ff.boot().b.runtime.onInstalled.fire({ reason: "install" });
+  await ff.clock.run(300);
+  const t = ff.openTab(w.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.idle(60000);
+  const key = ff.values.get(t.id)?.syncKey;
+  assert.ok(ff.synced[key], "it is in the record");
+  assert.ok(ff.list(other.id).some(y => ff.values.get(y.id)?.syncKey === key), "and in the other window");
+  ff.ext.kill();
+});
+
+test("a link that started Firefox goes to the active space (Tidier alone)", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: "firefox-container-2", title: "E", icon: "x" }];
+  ff.store.syncedTabs = { a: entry("https://a.example/", { cookieStoreId: "firefox-container-2" }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://e.example/", pinned: true, active: true, cookieStoreId: "firefox-container-2" }, { essentialKey: "e" });
+  ff.addTab(w.id, { url: "https://a.example/", discarded: true, cookieStoreId: "firefox-container-2" }, { syncKey: "a", syncRole: "live" });
+  ff.boot().b.runtime.onStartup.fire();
+  await ff.clock.run(300);
+  ff.openTab(w.id, { url: "https://link.example/", active: true });
+  await ff.clock.idle(60000);
+  const opened = ff.list(w.id).filter(t => t.url === "https://link.example/");
+  assert.deepEqual(opened.map(t => t.cookieStoreId), ["firefox-container-2"]);
+  assert.ok(ff.values.get(opened[0].id)?.syncKey, "and it is synced");
+  ff.ext.kill();
+});

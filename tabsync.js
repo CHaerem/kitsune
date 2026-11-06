@@ -989,6 +989,17 @@ async function start(delayMs) {
   started = true;
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
+  await step(seeUnseenTabs);
+}
+
+// A tab opened while Tidier was starting went unseen (a link that started Firefox, say,
+// or one opened in the moment after an update), and no event will tell about it again:
+// it would stay in one window, unknown, until it goes to another address.
+async function seeUnseenTabs() {
+  for (const t of await browser.tabs.query({})) {
+    if (syncKeyByTab.has(t.id)) continue;
+    if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
+  }
 }
 let startRequested = false;
 function requestStart(delayMs) {

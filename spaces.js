@@ -182,6 +182,17 @@ browser.tabs.onUpdated.addListener((tabId, change) => {
 }, { properties: ["url"] });
 browser.tabs.onRemoved.addListener(tabId => { newTabs.delete(tabId); firstPage.delete(tabId); });
 
+// A tab opened while Tidier was starting, seen only now (seeUnseenTabs, tabsync.js). A
+// link that started Firefox has no container, and would stay in none. Returns whether it
+// is being opened again, which then gets seen as a new tab.
+function seenLateInSpace(tab) {
+  if (!tidierAlone || tab.pinned || tab.incognito) return false;
+  if (!isWeb(tab.url)) { firstPage.add(tab.id); return false; }
+  if (tab.cookieStoreId !== NO_CONTAINER) return false;
+  serial(() => byRule(tab.id, tab.url));
+  return true;
+}
+
 // --- Rules: an address always opens in a given space (Arc's Air Traffic Control) ---
 // A rule is text to find in the address, or /a regular expression/. It is looked at
 // for a tab's first page only: a sign-in passing through the address on its way
