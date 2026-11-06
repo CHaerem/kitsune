@@ -72,12 +72,14 @@ const PIN_SETTLE_MS = 800;
 const SIDEBAR_WAIT_MS = 4000;
 const RULE_SETTLE_MS = 600;
 const PROBE_MS = 500;
-// A tab moved in one window is moved in the others MOVE_SETTLE_MS later, once
-// Sidebery has set its new parent (see applyMoves); a ghost created under a
-// new parent gets NEW_TAB_SETTLE_MS for Sidebery to place it before it is put
-// in its place.
+// A tab moved into or out of a folder is moved the same way in the other
+// windows MOVE_SETTLE_MS later, once Sidebery has set its new parent (see
+// applyMoves); the new ghost there gets NEW_TAB_SETTLE_MS for Sidebery to
+// place it before it is put in its place. Moves of a tab in its first
+// NEW_TAB_QUIET_MS are Sidebery placing it.
 const MOVE_SETTLE_MS = 800;
 const NEW_TAB_SETTLE_MS = 500;
+const NEW_TAB_QUIET_MS = 5000;
 // Folders are moved first in their space FOLDERS_SETTLE_MS after a change
 // (see folders.js), before the move is copied to the other windows.
 const FOLDERS_SETTLE_MS = 400;

@@ -390,8 +390,8 @@ def folder_pull(m):
 
 def tab_moves(m):
     # A tab moved into a folder in one window, then out of it again: the other
-    # window's ghost follows, in Sidebery's own tree and in the tab order, and
-    # the stored parent follows too (new windows). The move into the folder is
+    # window's ghost follows, in Sidebery's own tree and next to the same tab,
+    # and the stored parent follows too (new windows). The move into the folder is
     # made the way Sidebery adopts a tab: placed before the folder's first tab.
     r = m.js(H + """
       const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
@@ -399,14 +399,16 @@ def tab_moves(m):
       const sbParent = (w, t) => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, "extension:%s:data") || "{}").parentId; } catch (e) { return undefined; } };
       const folderOf = w => w.gBrowser.tabs.find(t => url(t).includes("group.html#Fixture%%20folder%%202"));
       const a = main(), b = other();
+      a.focus(); await wait(500);
       const t = a.gBrowser.addTrustedTab("https://example.org/?smoke-move", {userContextId: 2, inBackground: true});
-      await wait(4500);
+      await wait(6000);  // moves of a tab in its first seconds are Sidebery placing it
       const k = key(a, t);
       // Where the tab is in a window: its Sidebery parent (the folder, or none)
       // and the synced tab right after it.
       const place = w => { const ts = [...w.gBrowser.tabs], x = ts.find(y => key(w, y) === k);
         if (!x) return null; const next = ts.slice(ts.indexOf(x) + 1).find(y => key(w, y));
-        const p = sbParent(w, x); return {inFolder: p === id(folderOf(w)), root: p === -1, next: next ? key(w, next) : null}; };
+        const p = sbParent(w, x); return {inFolder: p === id(folderOf(w)), root: p === -1, next: next ? key(w, next) : null,
+          opener: x.openerTab ? ts.indexOf(x.openerTab) : null, at: ts.indexOf(x), folderAt: ts.indexOf(folderOf(w))}; };
       const stored = async () => (await storage("%s", ["syncedTabs"])).syncedTabs?.[JSON.parse(k)]?.parentKey ?? null;
       const folderKey = JSON.parse(key(a, folderOf(a)));
       const first = a.gBrowser.tabs[a.gBrowser.tabs.indexOf(folderOf(a)) + 1];
