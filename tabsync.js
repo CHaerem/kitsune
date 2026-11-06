@@ -407,12 +407,10 @@ async function pull(ghostId) {
 }
 
 // A tab you moved into or out of a folder in one window is moved into or out
-// of it in the other windows. Sidebery keeps openerTabId equal to the parent,
-// except that it cannot set it back to "none" (Firefox keeps the old one), so
-// an opener after the tab is no parent: Sidebery itself counts a parent only
-// before its children. It takes a parent from another extension only when a
-// tab is created, so the ghost there is replaced by a new one under its new
-// parent, and then put next to the same synced tab of its space. A live tab
+// of it in the other windows (the parent is read with treeParent, common.js).
+// Sidebery takes a parent from another extension only when a tab is created,
+// so the ghost there is replaced by a new one under its new parent, and then
+// put next to the same synced tab of its space. A live tab
 // or folder copy there keeps its place. (Only the parent is copied, not the
 // order: Sidebery gives a tab another extension moves the space of the tab
 // it lands on, so moving tabs around in other windows could change spaces.)
@@ -426,8 +424,8 @@ async function applyMoves(windowId, ids) {
   let changed = false;
   for (const t of here.filter(t => ids.has(t.id) && synced(t))) {
     const key = synced(t), entry = all[key];
-    const opener = t.openerTabId !== t.id ? hereById.get(t.openerTabId) : undefined;
-    const parentKey = (opener && opener.index < t.index && synced(opener)) || null;
+    const opener = treeParent(t, hereById);
+    const parentKey = (opener && synced(opener)) || null;
     if ((entry.parentKey || null) === parentKey && !replaced.has(parentKey)) continue;
     entry.parentKey = parentKey; changed = true;
     // The synced tabs of its space before and after it, nearest first.

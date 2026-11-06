@@ -8,8 +8,7 @@
 // that, see sortLikeReference). When a run does not start with its folder
 // branches, they are moved to its start in one tabs.move call, in their own
 // order, so each branch stays together and the run stays contiguous. The tree
-// is read from openerTabId, which Sidebery keeps equal to the parent (an
-// opener after the tab is none: Sidebery counts a parent only before its children).
+// is read with treeParent (common.js).
 //
 // It runs after Kitsune has started and whenever a tab is created, moved,
 // attached or becomes a folder page. Our own moves are not answered.
@@ -23,7 +22,7 @@ async function foldersFirst(windowId) {
   const byId = new Map(tabs.map(t => [t.id, t]));
   const rootOf = tab => {
     let root = tab;
-    for (let p = byId.get(root.openerTabId), seen = new Set([tab.id]); p && !seen.has(p.id) && p.index < root.index && p.cookieStoreId === tab.cookieStoreId; p = byId.get(p.openerTabId)) {
+    for (let p = treeParent(root, byId), seen = new Set([tab.id]); p && !seen.has(p.id) && p.cookieStoreId === tab.cookieStoreId; p = treeParent(p, byId)) {
       seen.add(p.id);
       root = p;
     }
