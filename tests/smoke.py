@@ -388,6 +388,41 @@ def folder_pull(m):
           r and r["before"] == [True, True] and r["leftInFolder"] and r["roles"] == ["live", "ghost"], str(r))
 
 
+def tab_moves(m):
+    # A tab moved into a folder in one window, then out of it again: the other
+    # window's ghost follows, in Sidebery's own tree and in the tab order, and
+    # the stored parent follows too (new windows). The move into the folder is
+    # made the way Sidebery adopts a tab: placed before the folder's first tab.
+    r = m.js(H + """
+      const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const id = t => ExtensionParent.apiManager.global.tabTracker.getId(t);
+      const sbParent = (w, t) => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, "extension:%s:data") || "{}").parentId; } catch (e) { return undefined; } };
+      const folderOf = w => w.gBrowser.tabs.find(t => url(t).includes("group.html#Fixture%%20folder%%202"));
+      const a = main(), b = other();
+      const t = a.gBrowser.addTrustedTab("https://example.org/?smoke-move", {userContextId: 2, inBackground: true});
+      await wait(4500);
+      const k = key(a, t);
+      // Where the tab is in a window: its Sidebery parent (the folder, or none)
+      // and the synced tab right after it.
+      const place = w => { const ts = [...w.gBrowser.tabs], x = ts.find(y => key(w, y) === k);
+        if (!x) return null; const next = ts.slice(ts.indexOf(x) + 1).find(y => key(w, y));
+        const p = sbParent(w, x); return {inFolder: p === id(folderOf(w)), root: p === -1, next: next ? key(w, next) : null}; };
+      const stored = async () => (await storage("%s", ["syncedTabs"])).syncedTabs?.[JSON.parse(k)]?.parentKey ?? null;
+      const folderKey = JSON.parse(key(a, folderOf(a)));
+      const first = a.gBrowser.tabs[a.gBrowser.tabs.indexOf(folderOf(a)) + 1];
+      a.gBrowser.moveTabBefore(t, first); await wait(5000);
+      const into = {a: place(a), b: place(b), stored: (await stored()) === folderKey};
+      a.gBrowser.moveTabBefore(t, folderOf(a)); await wait(6000);
+      const out = {a: place(a), b: place(b), stored: await stored()};
+      await removeWhere((w, x) => key(w, x) === k);
+      return {into, out};""" % (SIDEBERY_ID, EXT_ID))
+    into, out = (r or {}).get("into"), (r or {}).get("out")
+    check("a tab moved into a folder is in that folder in the other window too, in the same place",
+          into and into["a"] and into["a"]["inFolder"] and into["b"] and into["b"]["inFolder"] and into["b"]["next"] == into["a"]["next"] and into["stored"], str(into))
+    check("a tab moved out of a folder leaves it in the other window too, in the same place",
+          out and out["a"] and out["a"]["root"] and out["b"] and out["b"]["root"] and out["b"]["next"] == out["a"]["next"] and out["stored"] is None, str(out))
+
+
 def ghost_title(m):
     # A live tab whose title changes: its ghost in the other window shows the
     # new title a few seconds later.
@@ -806,7 +841,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
             try:
                 group(m)
             except Exception:
