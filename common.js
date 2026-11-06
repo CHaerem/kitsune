@@ -74,6 +74,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Firefox refuses a whole list if one tab in it is gone by now, and closes none of them:
 // the others would stay open, already forgotten by Tidier. So one at a time.
 const removeTabs = ids => Promise.all(ids.map(id => browser.tabs.remove(id).catch(() => {})));
+// A new tab, or nothing if its window has closed meanwhile: a window you close at any
+// moment is no error, and must not stop the work for the other windows. Any other
+// refusal is passed on.
+const createTab = props => browser.tabs.create(props).catch(async err => {
+  if (props.windowId !== undefined && !(await browser.windows.get(props.windowId).catch(() => null))) return null;
+  throw err;
+});
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
 const sameSite = (a, b) => {

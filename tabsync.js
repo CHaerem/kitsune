@@ -70,7 +70,7 @@ function clearRole(tabId) {
   return Promise.all([
     browser.sessions.removeTabValue(tabId, SYNC_KEY),
     browser.sessions.removeTabValue(tabId, SYNC_ROLE),
-  ]);
+  ]).catch(() => {}); // refused for a tab closed since: it has nothing left to clear
 }
 
 // Tabs that represent `key` (live, ghost or copy).
@@ -111,7 +111,8 @@ async function createRep(windowId, key, entry, parentId, index) {
   const props = { windowId, active: false, cookieStoreId: entry.cookieStoreId };
   if (parentId !== undefined && !tidierAlone) props.openerTabId = parentId;
   if (index !== undefined) props.index = index;
-  const tab = await browser.tabs.create({ ...props, url: entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key) });
+  const tab = await createTab({ ...props, url: entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key) });
+  if (!tab) return null;
   syncBusy.add(tab.id);
   await setRole(tab.id, key, entry.group ? "copy" : "ghost");
   setTimeout(() => syncBusy.delete(tab.id), SETTLE_MS);
@@ -186,7 +187,8 @@ async function sortWindow(windowId) {
 // whatever its container. A throwaway pinned tab takes that place while the
 // essentials are created, and is removed afterwards.
 async function withPinnedPlaceholder(windowId, fn) {
-  const tab = await browser.tabs.create({ windowId, url: "about:blank", active: false, pinned: true });
+  const tab = await createTab({ windowId, url: "about:blank", active: false, pinned: true });
+  if (!tab) return;
   syncBusy.add(tab.id);
   try { await fn(); } finally { await browser.tabs.remove(tab.id).catch(() => {}); }
 }
@@ -454,7 +456,7 @@ async function unloadSaved(key, windowId, place) {
   let parentKey = entry.parentKey;
   while (parentKey && !here.has(parentKey)) parentKey = all[parentKey]?.parentKey;
   const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined);
-  if (!place) return;
+  if (!place || !ghost) return;
   if (!tidierAlone) await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
   await placeNextTo(windowId, ghost.id, place.before, place.after);
 }
@@ -628,6 +630,7 @@ async function applyMoves(windowId, ids) {
       syncBusy.add(rep.id); forget(rep.id);
       await browser.tabs.remove(rep.id);
       const ghost = await createRep(w.id, key, entry, parentRep, rep.index);
+      if (!ghost) continue;
       replaced.add(key); gone.push(key);
       await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
       await placeNextTo(w.id, ghost.id, before, after);

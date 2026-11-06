@@ -84,7 +84,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
-      await browser.tabs.create({ windowId, cookieStoreId: msg.space });
+      await createTab({ windowId, cookieStoreId: msg.space });
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (tidierAlone) {

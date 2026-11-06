@@ -86,7 +86,7 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
     // Refused if its container was removed while Tidier was not running. One bad
     // entry must not keep a window from getting the others, or stop Tidier starting.
     // (Without Sidebery a copy can be pinned from the start.)
-    const tab = await browser.tabs.create({
+    const tab = await createTab({
       windowId, url: ghostUrl("essential", entry.key), active: false,
       cookieStoreId: entry.cookieStoreId, index, ...(tidierAlone ? { pinned: true } : {}),
     }).catch(err => { noteError(err); return null; });
@@ -199,7 +199,8 @@ async function onPinned(tab) {
   if (!isWeb(url)) return;
   const list = await getList();
   const key = crypto.randomUUID();
-  await tagTab(tab.id, key);
+  // Refused if you have closed it again since: then there is nothing to keep.
+  if (await tagTab(tab.id, key).then(() => false, () => true)) { keyByTab.delete(tab.id); return; }
   setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
   // The pinned placeholder becomes this essential's copy, still unloaded.
   if (isGhostUrl(tab.url)) {

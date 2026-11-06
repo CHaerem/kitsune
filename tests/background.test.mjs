@@ -827,3 +827,39 @@ test("a selected ghost that becomes the live tab opens its page", async () => {
   assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
   x.kill();
 });
+
+test("a window closing while a new tab is copied to the windows is no error, and the others still get it", async () => {
+  const ff = new FakeFirefox();
+  const home = ff.addWindow({ focused: true });
+  const closing = ff.addWindow();
+  const other = ff.addWindow();
+  for (const w of [home, closing, other]) ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const create = x.b.tabs.create;
+  x.b.tabs.create = async p => { if (p.windowId === closing.id && ff.wins.has(closing.id)) { for (const id of [...ff.wins.get(closing.id).order]) ff.rm(id, { closing: true }); ff.wins.delete(closing.id); } return create(p); };
+  const t = ff.addTab(home.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, "https://a.example/");
+  await wait(3000);
+  const key = ff.values.get(t.id)?.syncKey;
+  assert.ok(key, "the tab is synced");
+  assert.ok(ff.list(other.id).some(y => y.url === GHOST("ghost", key)), "and the window after the closed one has it");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a tab pinned and closed at once leaves no error and no essential", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const x = await run(ff);
+  const set = x.b.sessions.setTabValue;
+  x.b.sessions.setTabValue = async (id, k, v) => { if (k === "essentialKey") ff.rm(id); return set(id, k, v); };
+  await x.b.tabs.update(t.id, { pinned: true });
+  await wait(2000);
+  assert.deepEqual(ff.store.essentials ?? [], []);
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
