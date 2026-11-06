@@ -173,7 +173,9 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   extensions fold them).
 - Sidebery requires each panel's tabs to be one contiguous run in panel order;
   after filling a window the extension copies the tab order from the window
-  with the most synced tabs. That sort waits ~1.5 s for Sidebery to finish
+  with the most synced tabs, with each space's tabs together (that window can
+  have them mixed: Sidebery shows a tab added at the end of a window in its
+  space without moving it there). That sort waits ~1.5 s for Sidebery to finish
   placing the new tabs; sorting sooner puts tabs in the wrong panel.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
