@@ -898,7 +898,10 @@ browser.windows.onFocusChanged.addListener(windowId => {
 
 // You dragged a tab to another window: fix up both windows.
 browser.tabs.onAttached.addListener(tabId => {
-  if (!started || pulling || syncBusy.has(tabId) || !syncKeyByTab.has(tabId)) return;
+  // A tab being pulled is not yours to fix up; any other is, also one just created or one
+  // you drag while another is being pulled (it would be left without its values, twice in
+  // the window it went to, and missing from the one it left).
+  if (!started || (pulling && syncBusy.has(tabId)) || !syncKeyByTab.has(tabId)) return;
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   serial(async () => {
     // Firefox loses the sessions values of an unloaded tab moved to another window;

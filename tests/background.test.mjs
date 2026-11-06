@@ -787,3 +787,15 @@ test("an unloaded essential you closed is not left in Recently Closed", async ()
   assert.equal(ff.list(other.id).filter(y => y.pinned).length, 1, "and the copy is back");
   x.kill();
 });
+
+test("a tab dragged to another window just after it was created is handled", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(1700); // registered, and its ghost in the other window is just there
+  const key = ff.values.get(t.id).syncKey;
+  const ghost = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key);
+  ff.moveTabs([ghost.id], { windowId: a.id, index: -1 });
+  await ff.clock.idle(60000);
+  for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1, `one in window ${w.id}`);
+  x.kill();
+});
