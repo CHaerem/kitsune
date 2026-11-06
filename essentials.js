@@ -550,9 +550,13 @@ async function essentialsAgree() {
     await removeTabs([t.id], busy);
     await forgetClosedPlaceholders("essential", [keys[i]]);
   }
-  // A copy you unpinned in the moment of an update: the rest of that unpinning.
+  // A copy not pinned. Tidier alone creates them pinned, so you unpinned it, in the moment of
+  // an update, and this is the rest of that. With Sidebery it is created unpinned and pinned
+  // a moment later (see PIN_SETTLE_MS), which the update cut off.
   for (const t of await browser.tabs.query({ pinned: false })) {
-    if (placeholderOf(t.url).kind === "essential") await onUnpinned(t);
+    if (placeholderOf(t.url).kind !== "essential") continue;
+    if (tidierAlone) await onUnpinned(t);
+    else await browser.tabs.update(t.id, { pinned: true }).catch(ifGone);
   }
   // And a move in the moment a copy appeared is not looked at (see onMoved): the list decides.
   for (const w of await normalWindows()) await sortEssentials(w.id, await getList());

@@ -1209,19 +1209,42 @@ test("what could not be written is tried again", async () => {
   x.kill();
 });
 
-test("a copy you unpinned in the moment of an update is unpinned when Tidier is back", async () => {
-  const { ff, x: first, windows: [a, b] } = await chaosStart();
-  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
-  await ff.clock.run(3000);
-  ff.pinTab(t);
-  await ff.clock.idle(60000);
-  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
-  first.kill();
-  const x = ff.update();
-  await ff.clock.idle(60000);
-  assert.deepEqual(ff.store.essentials, []);
-  assert.ok(![...ff.tabs.values()].some(y => y.url.includes("kind=essential")));
-  x.kill();
+test("a copy not pinned at an update: you unpinned it with Tidier alone, with Sidebery it was on its way", async () => {
+  const start = async alone => {
+    const ff = new ChaosFirefox();
+    if (alone) ff.managed = { tidierAlone: true };
+    const a = ff.addWindow({ focused: true }), b = ff.addWindow();
+    ff.addTab(a.id, { url: "about:home", active: true });
+    ff.addTab(b.id, { url: "about:home", active: true });
+    ff.boot().b.runtime.onInstalled.fire({ reason: "install" });
+    await ff.clock.run(3000);
+    const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+    await ff.clock.run(3000);
+    ff.pinTab(t);
+    return { ff, b };
+  };
+  {
+    const { ff, b } = await start(true);
+    await ff.clock.idle(60000);
+    ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
+    const x = ff.update();
+    await ff.clock.idle(60000);
+    assert.deepEqual(ff.store.essentials, []);
+    assert.ok(![...ff.tabs.values()].some(y => y.url.includes("kind=essential")));
+    x.kill();
+  }
+  {
+    const { ff, b } = await start(false);
+    while (!ff.list(b.id).some(y => y.url.includes("kind=essential"))) await ff.clock.step(); // created, not pinned yet
+    await ff.clock.run(400);
+    assert.ok(ff.list(b.id).some(y => y.url.includes("kind=essential") && !y.pinned));
+    await ff.clock.settled(ff.ext.js("flushWrites()"));
+    const x = ff.update();
+    await ff.clock.idle(60000);
+    assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://e.example/"], "the essential stays");
+    assert.equal(ff.list([...ff.wins.keys()][1]).filter(y => y.pinned).length, 1, "and the copy is pinned");
+    x.kill();
+  }
 });
 
 test("a window opened while Tidier is starting gets its tabs when it has started", async () => {
