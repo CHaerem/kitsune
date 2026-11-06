@@ -24,6 +24,7 @@ async function start(ff) {
     x.b.tabs.onUpdated.fire(id, { title }, ff.snap(t));
   };
   x.view = id => x.js(`viewFor(${id})`);
+  x.focus = async id => { ff.focused = id; x.b.windows.onFocusChanged.fire(id); await wait(100); };
   x.marked = () => [...x.js("[...newsMarks.keys()]")].sort();
   return x;
 }
@@ -54,6 +55,14 @@ test("what counts as news in a title", () => {
   assert.equal(isNews("Inbox (3) - me - Mail", "Inbox (4) - me - Mail"), true);
   assert.equal(isNews("[9] Queue", "[10] Queue"), true);
   assert.equal(isNews("(99+) Inbox", "(99+) Inbox"), false);
+  // Above a thousand a page writes the count with a separator.
+  assert.equal(isNews("Inbox (1,234) - me - Mail", "Inbox (1,235) - me - Mail"), true);
+  assert.equal(isNews("Inbox (1,235) - me - Mail", "Inbox (1,234) - me - Mail"), false);
+  assert.equal(isNews("Inbox (999) - me - Mail", "Inbox (1,000) - me - Mail"), true);
+  assert.equal(isNews("(1\u00a0234) Innboks", "(1\u00a0235) Innboks"), true);
+  // The count decides, also when fewer words are left around it.
+  assert.equal(isNews("(3) Inbox - a long subject", "(4) Inbox"), true);
+  assert.equal(isNews("Chat", "(1)"), true);
   // A clock beside a count: only the count decides.
   assert.equal(isNews("(3) Inbox 12:01", "(3) Inbox 12:02"), false);
   assert.equal(isNews("(3) Inbox 12:01", "(4) Inbox 12:02"), true);
@@ -151,6 +160,9 @@ test("a restless page has no quiet, and a tick does not end the quiet", async ()
   assert.deepEqual(x.marked(), [], "a timer ticking");
   x.title(chat.id, "Time is up");
   assert.deepEqual(x.marked(), ["chat"], "the timer ending, right after a tick");
+  x.js("newsMarks.clear()"); // as if seen, without leaving the tab, which starts the quiet too
+  x.title(chat.id, "And something else");
+  assert.deepEqual(x.marked(), [], "within five seconds of the last real change");
   x.kill();
 });
 
@@ -169,12 +181,17 @@ test("no mark on a placeholder, an unloaded tab, a page playing sound or a tab T
   const song = ff.addTab(w.id, { url: "https://song.example/", audible: true, cookieStoreId: C1, title: "First song" }, { syncKey: "song", syncRole: "live" });
   const stranger = ff.addTab(w.id, { url: "about:addons", title: "Add-ons" });
   const x = await start(ff);
+  // What is remembered is for loaded pages only.
+  assert.deepEqual([...x.js("[...newsSeen.keys()]")].filter(id => id === ghost.id || id === away.id), []);
   x.quiet();
-  x.title(ghost.id, "A title shown again");
-  x.title(away.id, "A title while unloaded");
-  x.title(song.id, "Next song");
-  x.title(stranger.id, "Other add-ons");
-  x.title(stranger.id, "Yet other add-ons");
+  // Twice each, then with the quiet again: the first says only what the title was.
+  for (const [tab, name] of [[ghost, "A title shown again"], [away, "A title while unloaded"], [song, "Next song"], [stranger, "Other add-ons"]]) {
+    x.title(tab.id, name);
+    x.title(tab.id, name + ", changed");
+    x.quiet();
+    x.title(tab.id, name + ", changed again");
+    x.quiet();
+  }
   assert.deepEqual(x.marked(), []);
   x.kill();
 });
@@ -206,8 +223,10 @@ test("the same tab in another window has the mark, on a closed folder and beside
   assert.equal(there.folders[0].news, true);
   assert.equal(there.folders[0].tabs.find(t => t.id === ghost.id).news, true);
   assert.deepEqual(there.spaces.filter(s => s.news), []);
+  await x.focus(b.id);
   ff.select(ghost.id);
   assert.deepEqual(x.marked(), []);
+  await wait(500); // the page is pulled in, and this window goes to its space
   assert.equal((await x.view(b.id)).folders[0].news, false);
   assert.deepEqual((await x.view(a.id)).spaces.filter(s => s.news), []);
   x.kill();
@@ -228,6 +247,7 @@ test("an essential is marked by its key, in every window, and selecting a copy c
   assert.deepEqual(x.marked(), ["mail"]);
   assert.equal((await x.view(a.id)).essentials[0].news, true);
   assert.equal((await x.view(b.id)).essentials[0].news, true);
+  await x.focus(b.id);
   ff.select(copy.id);
   assert.deepEqual(x.marked(), []);
   x.kill();
@@ -261,15 +281,149 @@ test("a pinned tab loses the mark of the record it leaves, so no space keeps a d
   x.kill();
 });
 
+test("a chat page's ding comes with the message, so it does not stop the mark; a song that has been playing does", async () => {
+  const ff = new FakeFirefox();
+  const { chat } = oneWindow(ff);
+  const x = await start(ff);
+  x.quiet();
+  const t = ff.tabs.get(chat.id);
+  t.audible = true;
+  x.b.tabs.onUpdated.fire(chat.id, { audible: true }, ff.snap(t));
+  x.title(chat.id, "(1) Chat");
+  assert.deepEqual(x.marked(), ["chat"], "the sound began just before the new title");
+  ff.select(chat.id);
+  ff.select(ff.list(chat.windowId)[0].id);
+  x.quiet(); // the same sound, five seconds on: this is music, whose title is the next song
+  x.title(chat.id, "(2) Chat");
+  assert.deepEqual(x.marked(), []);
+  x.kill();
+});
+
+test("a tab being pinned or unpinned has no mark until it has its new key, so no dot is left that nothing can clear", async () => {
+  const ff = new FakeFirefox();
+  const { w, chat } = oneWindow(ff);
+  const x = await start(ff);
+  const t = ff.tabs.get(chat.id);
+  x.quiet();
+  t.pinned = true;
+  x.b.tabs.onUpdated.fire(chat.id, { pinned: true }, ff.snap(t));
+  x.title(chat.id, "Anna wrote while pinning"); // its old record is still being forgotten, in the queue
+  assert.deepEqual(x.marked(), []);
+  await wait(200);
+  assert.ok(!x.js(`syncKeyByTab.has(${chat.id})`) && x.js(`keyByTab.has(${chat.id})`), "it is an essential now");
+  x.quiet();
+  t.pinned = false;
+  x.b.tabs.onUpdated.fire(chat.id, { pinned: false }, ff.snap(t));
+  x.title(chat.id, "Anna wrote while unpinning"); // its essential is gone a moment later
+  assert.deepEqual(x.marked(), []);
+  await wait(1200);
+  assert.ok(!(await x.view(w.id)).spaces.some(s => s.news));
+  x.kill();
+});
+
+// Two windows, you are using the first; the second has a selected tab and a loaded one
+// beside it, in another space than the one you are in.
+function secondWindow(ff) {
+  ff.store.syncedTabs = {
+    home: entry("https://home.example/"),
+    chat: entry("https://chat.example/", { title: "Chat", cookieStoreId: C2 }),
+    mail: entry("https://mail.example/", { title: "Mail", cookieStoreId: C2 }),
+  };
+  const a = ff.addWindow({ focused: true });
+  ff.addTab(a.id, { url: "https://home.example/", active: true, cookieStoreId: C1 }, { syncKey: "home", syncRole: "live" });
+  const ghostOfChat = ff.addTab(a.id, { url: GHOST("ghost", "chat"), cookieStoreId: C2, title: "Chat" }, { syncKey: "chat", syncRole: "ghost" });
+  ff.addTab(a.id, { url: GHOST("ghost", "mail"), cookieStoreId: C2, title: "Mail" }, { syncKey: "mail", syncRole: "ghost" });
+  const b = ff.addWindow();
+  ff.addTab(b.id, { url: GHOST("ghost", "home"), cookieStoreId: C1 }, { syncKey: "home", syncRole: "ghost" });
+  const chat = ff.addTab(b.id, { url: "https://chat.example/", active: true, cookieStoreId: C2, title: "Chat" }, { syncKey: "chat", syncRole: "live" });
+  const mail = ff.addTab(b.id, { url: "https://mail.example/", cookieStoreId: C2, title: "Mail" }, { syncKey: "mail", syncRole: "live" });
+  return { a, b, chat, mail, ghostOfChat };
+}
+
+test("a tab selected in a window you are not using is not seen: it gets a mark, and going to that window clears it", async () => {
+  const ff = new FakeFirefox();
+  const { a, b, chat } = secondWindow(ff);
+  const x = await start(ff);
+  x.quiet();
+  x.title(chat.id, "(1) Chat");
+  assert.deepEqual(x.marked(), ["chat"]);
+  assert.deepEqual((await x.view(a.id)).spaces.filter(s => s.news).map(s => s.id), [C2], "seen from the window you are using");
+  await x.focus(b.id);
+  assert.deepEqual(x.marked(), [], "there it is, in front of you");
+  x.quiet();
+  x.title(chat.id, "(2) Chat");
+  assert.deepEqual(x.marked(), [], "and while you use that window it is what you are looking at");
+  x.kill();
+});
+
+test("what Firefox or Tidier selects in a window you are not using is not seen either: the mark stays", async () => {
+  const ff = new FakeFirefox();
+  const { b, mail } = secondWindow(ff);
+  const x = await start(ff);
+  x.quiet();
+  x.title(mail.id, "(1) Mail");
+  assert.deepEqual(x.marked(), ["mail"]);
+  // The tab selected there was pulled to the window you are using, or closed from it.
+  ff.select(mail.id);
+  assert.deepEqual(x.marked(), ["mail"]);
+  await x.focus(b.id);
+  assert.deepEqual(x.marked(), [], "gone when you go there");
+  x.kill();
+});
+
+test("a mark from when the window was not in use goes when the placeholder is selected in the window you are using", async () => {
+  const ff = new FakeFirefox();
+  const { chat, ghostOfChat } = secondWindow(ff);
+  const x = await start(ff);
+  x.quiet();
+  x.title(chat.id, "(1) Chat");
+  assert.deepEqual(x.marked(), ["chat"]);
+  ff.select(ghostOfChat.id);
+  assert.deepEqual(x.marked(), []);
+  x.kill();
+});
+
+test("leaving a window starts the quiet again for its selected tab: pages set their title when they lose focus", async () => {
+  const ff = new FakeFirefox();
+  const { a, b, chat } = secondWindow(ff);
+  const x = await start(ff);
+  await x.focus(b.id);
+  x.quiet();
+  await x.focus(a.id);
+  x.title(chat.id, "Chat, as you left it");
+  assert.deepEqual(x.marked(), []);
+  x.quiet();
+  x.title(chat.id, "Chat, something happened");
+  assert.deepEqual(x.marked(), ["chat"]);
+  x.kill();
+});
+
+test("with Firefox itself in the background, what is selected stays seen: nothing is marked for coming back to", async () => {
+  const ff = new FakeFirefox();
+  const { home } = oneWindow(ff);
+  const x = await start(ff);
+  await x.focus(-1);
+  x.quiet();
+  x.title(home.id, "Home, with new words");
+  assert.deepEqual(x.marked(), []);
+  x.kill();
+});
+
 test("with the setting off nothing is marked or remembered", async () => {
   const ff = new FakeFirefox();
   ff.managed = {};
-  const { chat } = oneWindow(ff);
+  const { w, chat } = oneWindow(ff);
   const x = await start(ff);
   x.quiet();
   x.title(chat.id, "Anna wrote");
   assert.deepEqual(x.marked(), []);
   assert.equal(x.js("newsSeen.size"), 0);
+  // Going to another window asks Firefox nothing more than it did before news.js.
+  let asked = 0;
+  ff.hooks.query = q => { if (q.active && q.windowId === undefined) asked++; };
+  x.b.windows.onFocusChanged.fire(w.id);
+  await wait(100);
+  assert.equal(asked, 0);
   x.kill();
 });
 

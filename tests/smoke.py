@@ -1495,7 +1495,19 @@ def alone_news(m):
       const when = async test => { for (const end = Date.now() + 8000; Date.now() < end && !test();) await wait(100); };
       const until = async test => { await when(() => test(has())); return has(); };
       const bar = id => doc.querySelector(`.space[data-space="${id}"]`);
-      const inSpace = id => when(() => spaces().find(s => s.active).id === id);"""
+      const inSpace = id => when(() => spaces().find(s => s.active).id === id);
+      // What is really drawn of a dot, which a class alone does not tell: an empty box, a wrong
+      // selector or a missing colour would all leave the class in place and nothing to see.
+      const colour = css => { const probe = doc.createElement("i"); probe.style.color = css; doc.body.append(probe); const c = page.getComputedStyle(probe).color; probe.remove(); return c; };
+      const dot = (e, which) => { const d = page.getComputedStyle(e, which); return {content: d.content, width: parseFloat(d.width), height: parseFloat(d.height), position: d.position, animation: d.animationName, color: d.backgroundColor}; };
+      const accent = () => colour(page.getComputedStyle(doc.documentElement).getPropertyValue("--accent"));
+      // What another window's sidebar is told: this page can ask as that window's sidebar does.
+      const viewOf = windowId => new Promise(done => {
+        const p = page.browser.runtime.connect({name: "sidebar"});
+        p.onMessage.addListener(view => { const got = JSON.parse(page.JSON.stringify(view)); p.disconnect(); done(got); });
+        p.postMessage(page.JSON.parse(JSON.stringify({type: "hello", windowId})));
+      });
+      const inView = (view, which) => [...view.tabs, ...view.folders.flatMap(f => f.tabs)].find(t => t.title.includes(args[0] + which));"""
     r = sidebar_page(m, marked + """
       send({type: "newFolder", space: args[1], name: args[0] + "kept"});
       let head = null;
@@ -1529,21 +1541,24 @@ def alone_news(m):
     set_title(m, page("row"), f"{name}row Anna wrote")
     r = sidebar_page(m, marked + """
       const got = await until(h => h.rows.length);
-      const row = named("row"), dot = page.getComputedStyle(row, "::before");
-      const probe = doc.createElement("i"); probe.style.color = page.getComputedStyle(doc.documentElement).getPropertyValue("--accent"); doc.body.append(probe);
-      const accent = page.getComputedStyle(probe).color; probe.remove();
+      const row = named("row");
       const t = row.querySelector(".title").getBoundingClientRect(), i = row.querySelector("img, .letter").getBoundingClientRect();
-      return {got, dot: {color: dot.backgroundColor, position: dot.position, animation: dot.animationName, width: dot.width}, accent, title: [t.left, t.top, t.width], icon: [i.left, i.top], row: row.getBoundingClientRect().height};""", name)
+      return {got, dot: dot(row, "::before"), accent: accent(), title: [t.left, t.top, t.width], icon: [i.left, i.top], row: row.getBoundingClientRect().height};""", name)
     check("a background page's new title gives its row a dot", r["got"]["rows"] == ["row Anna wrote"], str(r))
-    check("the dot is still, and in the space's colour", r["dot"]["color"] == r["accent"] and r["dot"]["animation"] == "none" and r["dot"]["position"] == "absolute", str(r))
+    shows = lambda d, color: d["content"] != "none" and d["width"] >= 5 and d["height"] >= 5 and d["position"] == "absolute" and d["animation"] == "none" and d["color"] == color
+    check("the dot is drawn, still, and in the space's colour", shows(r["dot"], r["accent"]), str(r))
     check("the dot moves nothing in the row", all(before[k] == r[k] for k in ("title", "icon", "row")), f"{before} -> {r}")
     set_title(m, page("folder"), f"{name}folder (1) unread")
     set_title(m, page("tile"), f"{name}tile (1) unread")
     set_title(m, page("there"), f"{name}there (1) unread")
-    r = sidebar_page(m, marked + "return await until(h => h.heads.length && h.tiles.length && h.spaces.length);", name)
-    check("a closed folder shows that a tab in it has news", r["heads"] == [name + "kept"], str(r))
-    check("an essential's tile shows it", len(r["tiles"]) == 1 and r["tiles"][0].startswith("tile"), str(r))
-    check("another space's dot shows it", r["spaces"] == [there], str(r))
+    r = sidebar_page(m, marked + """
+      const got = await until(h => h.heads.length && h.tiles.length && h.spaces.length);
+      const seen = selector => doc.querySelector(selector);
+      return {...got, accent: accent(), other: colour(bar(args[1]).style.getPropertyValue("--color")),
+        head: dot(seen(".folder.collapsed.news > .head"), "::before"), tile: dot(seen(".tile.news"), "::before"), space: dot(seen(".space.news"), "::after")};""", name, there)
+    check("a closed folder shows that a tab in it has news", r["heads"] == [name + "kept"] and shows(r["head"], r["accent"]), str(r))
+    check("an essential's tile shows it", len(r["tiles"]) == 1 and r["tiles"][0].startswith("tile") and shows(r["tile"], r["accent"]), str(r))
+    check("another space's dot shows it, in that space's colour", r["spaces"] == [there] and shows(r["space"], r["other"]), str(r))
 
     # Selecting clears each, by real clicks in the sidebar.
     r = sidebar_page(m, marked + """
@@ -1573,6 +1588,84 @@ def alone_news(m):
     check("selecting the tab clears its folder's dot", r["folder"] == {**empty, "spaces": [there]}, str(r))
     check("in the space itself its list shows the news, and the bar does not", r["inThere"]["rows"] == ["there (1) unread"] and not r["inThere"]["spaces"], str(r))
     check("selecting the tab clears the space's dot, and nothing is left", r["there"] == empty and r["back"] == empty, str(r))
+
+    # The same tab in another window, where it is a placeholder.
+    far = page("far")
+    r = m.js(H + """const [address, here] = args, a = main(); a.focus();
+      const t = a.gBrowser.addTrustedTab(address, {userContextId: here, inBackground: true});
+      for (let i = 0; i < 100 && role(a, t) !== "live"; i++) await wait(100);
+      const k = key(a, t), w = a.OpenBrowserWindow(); w.__extra = true; w.__news = true;
+      const copy = () => w.gBrowser?.tabs.find(x => key(w, x) === k);
+      for (let i = 0; i < 100 && !copy(); i++) await wait(100);
+      a.focus(); await wait(500);
+      return {copy: role(w, copy()), id: w.docShell.outerWindowID};""", far, number(here))
+    check("another window has a placeholder of the page", r["copy"] == "ghost", str(r))
+    second = r["id"]
+    in_use = H + """const w = wins().find(x => x.__news); w.focus(); await wait(500); return 1;"""
+    # Firefox's own audible state, set from chrome code as a page playing sound sets it.
+    sound = H + """const [address, on] = args, w = main(), t = w.gBrowser.tabs.find(x => url(x) === address);
+      t.toggleAttribute("soundplaying", on); w.gBrowser._tabAttrModified(t, ["soundplaying"]); return 1;"""
+    time.sleep(6)  # past the quiet, for both pages
+    m.js(sound, page("row"), True)
+    set_title(m, page("row"), f"{name}row (1) ding")
+    set_title(m, far, f"{name}far (1) unread")
+    r = sidebar_page(m, marked + """
+      const got = await until(h => h.rows.length === 2);
+      return {got, elsewhere: inView(await viewOf(args[1]), "far")};""", name, second)
+    check("a sound that has only just begun does not stop the dot", "row (1) ding" in r["got"]["rows"], str(r))
+    check("in the other window the placeholder has the dot too", r["elsewhere"]["news"] and not r["elsewhere"]["loaded"], str(r))
+    # Selecting the placeholder there is seeing it: the page comes to that window, and nothing is left.
+    r = m.js(H + """const [address] = args, a = main(), w = wins().find(x => x.__news), page = () => a.gBrowser.tabs.find(x => url(x) === address);
+      const k = key(a, page());
+      w.focus(); await wait(500);
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(x => key(w, x) === k);
+      const here = () => a.gBrowser.tabs.filter(x => key(a, x) === k).map(x => role(a, x));
+      for (let i = 0; i < 100 && !(url(w.gBrowser.selectedTab) === address && here().length); i++) await wait(100);
+      return {pulled: url(w.gBrowser.selectedTab) === address, here: here()};""", far)
+    check("selecting the placeholder brings the page to that window", r["pulled"] and r["here"] == ["ghost"], str(r))
+    r = sidebar_page(m, marked + """
+      const first = await until(h => h.rows.length === 1);
+      named("row").click();
+      const all = await until(h => !h.rows.length);
+      const elsewhere = inView(await viewOf(args[1]), "far");
+      named("folder").click();  // leave the page that plays, so that it is a page in the background
+      await when(() => named("folder").classList.contains("active"));
+      return {first, all, elsewhere};""", name, second)
+    check("selecting the placeholder clears the dot in both windows", r["first"]["rows"] == ["row (1) ding"] and not r["elsewhere"]["news"], str(r))
+    check("selecting the row clears the other dot", not r["all"]["rows"], str(r))
+    # In the window you are using, the selected tab is what you are looking at. A song that goes on is no news.
+    m.js(in_use)
+    time.sleep(6)
+    set_title(m, far, f"{name}far as you read it")
+    set_title(m, page("row"), f"{name}row (2) the next song")
+    r = sidebar_page(m, marked + """
+      await when(() => named("far").title.includes("as you read it") && named("row").title.includes("next song"));
+      return {titles: [named("far").title, named("row").title], has: has()};""", name)
+    check("no dot on what you are looking at in the other window", "far" not in str(r["has"]["rows"]) and "as you read it" in r["titles"][0], str(r))
+    check("no dot on a page that has been playing for a while", "row" not in str(r["has"]["rows"]) and "next song" in r["titles"][1], str(r))
+    m.js(sound, page("row"), False)
+    # Selected there, but with you here: it is not seen, and going there is.
+    time.sleep(6)
+    set_title(m, far, f"{name}far (2) unread")
+    r = sidebar_page(m, marked + """
+      const got = await until(h => h.rows.length);
+      return {got, elsewhere: inView(await viewOf(args[1]), "far")};""", name, second)
+    check("a tab selected in a window you are not using gets a dot", r["got"]["rows"] == ["far (2) unread"] and r["elsewhere"]["news"] and r["elsewhere"]["active"], str(r))
+    m.js(in_use)
+    stats = extension_message(m, {"type": "stats"})
+    check("going to that window clears it", stats["sizes"]["newsMarks"] == 0, str(stats["sizes"]))
+    # Closing that window with a dot on its page: the page is gone, and with it the dot.
+    time.sleep(6)
+    set_title(m, far, f"{name}far (3) unread")
+    r = sidebar_page(m, marked + "return await until(h => h.rows.length);", name)
+    check("and a new message gives it a dot again", r["rows"] == ["far (3) unread"], str(r))
+    m.js(H + """await close(wins().find(x => x.__news)); return 1;""")
+    r = sidebar_page(m, marked + """
+      const got = await until(h => !h.rows.length), far = named("far");
+      if (far) send({type: "close", tabId: Number(far.dataset.tab)});
+      await when(() => !named("far"));
+      return {got, far: !!far, unloaded: far?.classList.contains("unloaded")};""", name)
+    check("closing the window with the page clears the dot, and the placeholder stays", not r["got"]["rows"] and r["far"] and r["unloaded"], str(r))
 
     # What was opened goes again; nothing stays behind in memory.
     sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", folder_key)
