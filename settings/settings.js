@@ -71,7 +71,7 @@ const sideberyResult = r => {
   const parts = [r.rules && counted(r.rules, "rule"), r.order && `the order of ${counted(r.order, "space")}`, r.folds && counted(r.folds, "closed folder")].filter(Boolean);
   return [
     parts.length ? `Imported ${andList(parts)}.` : "Nothing new to import.",
-    r.newSpaces.length && `New: ${r.newSpaces.join(", ")}.`,
+    r.newSpaces.length && `${r.newSpaces.length === 1 ? "A new space" : "New spaces"}: ${r.newSpaces.join(", ")}.`,
     r.panelsLeftOut && `Left out the rules of ${counted(r.panelsLeftOut, "panel")} with no container.`,
     r.folds === null && "There is no snapshot in this export, so folders start open. To keep which are closed: Create snapshot in Sidebery's settings, and export again.",
   ].filter(Boolean).join(" ");
@@ -107,18 +107,20 @@ $("copy-file").onchange = e => orSay($("merge-result"), async () => {
   incoming = await readFile(e.target);
   const summary = await ask("copySummary", { copy: incoming });
   if (!summary) { $("merge-result").textContent = "This is not a Tidier copy."; return; }
-  $("merge-spaces").replaceChildren(...Object.entries(summary).map(mergeLine));
+  const lines = Object.entries(summary);
+  if (!lines.some(([, n]) => n.essentials || n.folders || n.savedTabs || n.rules || n.isNew)) { $("merge-result").textContent = "Nothing new: all of it is here already."; return; }
+  $("merge-spaces").replaceChildren(...lines.map(mergeLine));
   $("merge").hidden = false;
 });
 $("merge-go").onclick = () => orSay($("merge-result"), async () => {
   const spaces = [...$("merge-spaces").querySelectorAll("input:checked")].map(i => i.value);
+  $("merge").hidden = true; // at once: a second click would find all of it here, and say only that
   const r = await ask("merge", { copy: incoming, spaces });
   const took = andList([
     r.essentials && counted(r.essentials, "essential"), r.folders && counted(r.folders, "folder"),
     r.tabs && counted(r.tabs, "saved tab"), r.rules && counted(r.rules, "rule"), r.spaces && counted(r.spaces, "new space"),
   ].filter(Boolean));
-  $("merge-result").textContent = took ? `Took in ${took}. Nothing here was removed.` : "Nothing new: all of it is here already.";
-  $("merge").hidden = true;
+  $("merge-result").textContent = took ? `Took in ${took}. Nothing here was removed.` : "Nothing taken in.";
   refresh();
 });
 

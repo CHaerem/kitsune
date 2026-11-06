@@ -1637,8 +1637,9 @@ def alone_copy(m):
 
 
 def choose_file(m, input_id, contents):
-    """Give a file input on the settings page a file, the way the file picker does: it fires `change`."""
+    """Give a file input on the settings page a file, the way the file picker does: it fires `change`. Returns once the page has answered."""
     ext_page(m, "/settings/settings.html", "return 1;")
+    result = {"copy-file": "merge-result", "sidebery-file": "sidebery-result"}[input_id]
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "chosen.json")
         with open(path, "w") as out:
@@ -1648,10 +1649,15 @@ def choose_file(m, input_id, contents):
             m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
             if "/settings/settings.html" in m.cmd("WebDriver:GetCurrentURL"):
                 break
+        m.cmd("WebDriver:ExecuteScript", {"script": f'document.getElementById("{result}").textContent = ""; document.getElementById("merge").hidden = true;'})
         found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": "#" + input_id})
         m.cmd("WebDriver:ElementSendKeys", {"id": next(iter(found.values())), "text": path})
+        # The file must still be there while the page reads it.
+        for _ in range(300):
+            if m.cmd("WebDriver:ExecuteScript", {"script": f'return !!document.getElementById("{result}").textContent || !document.getElementById("merge").hidden;'}):
+                break
+            time.sleep(0.1)
         m.chrome()
-        time.sleep(1.5)  # the page reads the file while it is still there
 
 
 def alone_copy_and_import(m):
@@ -1693,9 +1699,10 @@ def alone_copy_and_import(m):
           lines["shown"] and lines["lines"] == ["●Space 2: 1 essential, 1 rule", "●Space 1: 1 folder, 1 saved tab", "●Brought along: 1 essential, a new space"], str(lines))
     check("nothing is written before you say so", m.js(named) == before, str(m.js(named)))
     done = ext_page(m, "/settings/settings.html", """doc.getElementById("merge-go").click();
+      const goneAtOnce = doc.getElementById("merge").hidden; // a second click would find it all here, and say only that
       for (let i = 0; i < 60 && !doc.getElementById("merge-result").textContent; i++) await wait(200);
-      return {result: doc.getElementById("merge-result").textContent, shown: !doc.getElementById("merge").hidden, ruleLines: doc.querySelectorAll("#rules .line").length, back: !doc.getElementById("move-back").hidden};""")
-    check("taking it in says what came", done["result"] == "Took in 2 essentials, 1 folder, 1 saved tab, 1 rule and 1 new space. Nothing here was removed." and not done["shown"], str(done))
+      return {result: doc.getElementById("merge-result").textContent, goneAtOnce, shown: !doc.getElementById("merge").hidden, ruleLines: doc.querySelectorAll("#rules .line").length, back: !doc.getElementById("move-back").hidden};""")
+    check("taking it in says what came", done["result"] == "Took in 2 essentials, 1 folder, 1 saved tab, 1 rule and 1 new space. Nothing here was removed." and done["goneAtOnce"] and not done["shown"], str(done))
     check("and the page's rules follow, and no way back to a Sidebery this browser never had appears", done["ruleLines"] >= 1 and not done["back"], str(done))
     time.sleep(2)
     after = m.js(named)
@@ -1703,6 +1710,16 @@ def alone_copy_and_import(m):
     check("a space not here is made, with its colour and icon, and its essential is in it", after["made"] == [["purple", "gift"]] and all(x == ["Brought along"] for x in after["fresh"]), str(after))
     check("a folder and its saved tab land under the right space's name", after["folderIn"] == "Space 1" and after["saved"] and after["saved"]["cookieStoreId"] == after["folder"]["cookieStoreId"] and after["folder"]["own"], str(after))
     check("rules come, in the right space, and the order of spaces where there was none", ["copy-rule.example.org", "Space 2"] in after["rules"] and after["order"][:3] == ["Brought along", "Space 1", "Space 2"], str(after))
+    # The same copy again has nothing for you to choose.
+    choose_file(m, "copy-file", copy)
+    r = ext_page(m, "/settings/settings.html", """return {line: doc.getElementById("merge-result").textContent, offered: !doc.getElementById("merge").hidden};""")
+    check("the same copy again says nothing is new, and offers nothing", r == {"line": "Nothing new: all of it is here already.", "offered": False}, str(r))
+    # A damaged copy shows what can be used, and what it calls a colour stays out of the page's style.
+    choose_file(m, "copy-file", {"tidier": "1.6", "spaces": [None, {"id": "firefox-container-50", "name": "Odd", "colorCode": "red;background:url(https://example.org/x.png)"}],
+                                 "data": {"essentials": [None, 3, {"key": "smoke-odd", "url": "https://example.org/?odd", "cookieStoreId": "firefox-container-50"}, {"key": "smoke-no-address", "cookieStoreId": "firefox-container-50"}]}})
+    r = ext_page(m, "/settings/settings.html", """const dot = doc.querySelector("#merge-spaces .line span");
+      return {lines: [...doc.querySelectorAll("#merge-spaces .line")].map(l => l.textContent.trim()), background: dot?.style.backgroundImage, line: doc.getElementById("merge-result").textContent};""")
+    check("a damaged copy shows what can be used, and no address gets into the page's style", r == {"lines": ["●Odd: 1 essential, a new space"], "background": "", "line": ""}, str(r))
     # A wrong file says so, in one line, and offers nothing to take in.
     choose_file(m, "copy-file", {"hello": 1})
     r = ext_page(m, "/settings/settings.html", """return {line: doc.getElementById("merge-result").textContent, offered: !doc.getElementById("merge").hidden};""")

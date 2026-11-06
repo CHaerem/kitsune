@@ -86,8 +86,9 @@ async function moveBack() {
 // them, so its export is the only place they can be read from. It may come from another
 // machine, so its containers are matched by name here too, as with a copy (copies.js).
 const isSideberyExport = x => !!x && typeof x === "object" && !x.tidier && !!(x.ver || x.sidebar?.panels || x.containers);
-const SIDEBERY_EXCLUDE_RULE = 2; // reopenRules' type: "reopen in no container", the opposite of a rule here
+const SIDEBERY_INCLUDE_RULE = 1; // reopenRules' type. Sidebery takes any other as "keep out of this container", the opposite of a rule here
 const panelContainer = p => p?.newTabCtx && p.newTabCtx !== "none" && p.newTabCtx !== NO_CONTAINER ? p.newTabCtx : null;
+const activeRule = r => r?.active && typeof r.url === "string" ? r.url.trim() : ""; // as Sidebery reads it
 
 // A snapshot keeps only what changed: a tab that did not is -1, to be looked up at the
 // same place (window, panel, tab) in the snapshots before it. null if it cannot be.
@@ -104,9 +105,10 @@ function snapshotTabs(snapshots, n) {
 }
 
 // An address without what differs per install or per load: Sidebery's own extension
-// address, and the channel suffix it adds to a page it has open (groupBaseUrl). The
-// same name in two spaces gives one address, so the space is part of the key.
-const foldKey = (space, url) => `${space}|${(url || "").split("/sidebery/")[1]?.replace(/~!.*!~$/, "")}`;
+// address, the channel suffix it adds to a page it has open (groupBaseUrl), and the
+// ":id:" of older versions, which its snapshot drops from an open page but not from an
+// unloaded one. The same name in two spaces gives one address, so the space is part of the key.
+const foldKey = (space, url) => `${space}|${(url || "").split("/sidebery/")[1]?.replace(/~!.*!~$/, "").replace(/(?::id:|%3Aid%3A).*$/, "")}`;
 
 // Which folders the newest readable snapshot has closed, as foldKeys; null if the export
 // has no snapshot. Each window has its own page of a folder and may show it otherwise.
@@ -135,28 +137,31 @@ async function importSidebery(backup) {
   const containers = Object.values(backup.containers || {});
   const panels = backup.sidebar?.panels || {};
   const local = await containerSpaces();
-  const named = containers.filter(c => c?.name).map(c => ({ id: c.id, name: c.name, color: c.color, icon: c.icon }));
+  const named = containers.filter(c => isText(c?.id) && isText(c.name)).map(c => ({ id: c.id, name: c.name, color: c.color, icon: c.icon }));
   const map = mapSpaces({ spaces: named }, local);
-  // (With no names, as with a copy that has none, an id counts as it is if it exists here.)
-  const here = id => id === NO_CONTAINER ? id : map ? map[id] : local.some(s => s.id === id) ? id : undefined;
+  const here = id => localSpace(map, local, id);
 
+  // Rules only by name, as with a copy: an export with its containers left out says
+  // nothing about whose logins an id is, and a wrong rule sends tabs to the wrong ones.
   const found = [];
-  for (const c of containers) {
+  if (map) for (const c of containers) {
     if (!c?.reopenRulesActive) continue;
-    for (const r of listIn(c.reopenRules)) if (r.active && r.url && r.type !== SIDEBERY_EXCLUDE_RULE) found.push({ url: r.url, space: c.id });
+    for (const r of listIn(c.reopenRules)) if (activeRule(r) && r.type === SIDEBERY_INCLUDE_RULE) found.push({ url: activeRule(r), space: c.id });
   }
   // A panel's rules move a tab to it. Here the panel is its container's space, so a rule
   // with an address opens it there; one with only a container needs nothing, since the
-  // container already decides the space. A panel with no container is no space here.
+  // container already decides the space. A rule for tabs in another container stays out:
+  // here it would change their logins, which it never did in Sidebery. A panel with no
+  // container is no space here.
   let panelsLeftOut = 0;
   for (const p of Object.values(panels)) {
-    const urls = listIn(p?.moveRules).filter(r => r.active && r.url).map(r => r.url);
+    const urls = listIn(p?.moveRules).filter(r => !r?.containerId || r.containerId === p.newTabCtx).map(activeRule).filter(Boolean);
     if (!urls.length) continue;
     const space = panelContainer(p);
-    if (space && here(space) !== undefined) found.push(...urls.map(url => ({ url, space })));
+    if (map && space && here(space) !== undefined) found.push(...urls.map(url => ({ url, space })));
     else panelsLeftOut++;
   }
-  const order = listIn(backup.sidebar?.nav).map(id => panelContainer(panels[id])).filter(id => id && here(id) !== undefined);
+  const order = [...new Set(listIn(backup.sidebar?.nav).map(id => panelContainer(panels[id])))].filter(id => id && here(id) !== undefined);
   const needed = new Set([...found.map(r => r.space), ...order]);
   const newSpaces = map ? await makeMissingSpaces(named, map, id => needed.has(id)) : [];
 
@@ -179,6 +184,7 @@ async function importSidebery(backup) {
     else await browser.storage.local.set({ importedFolds: closed });
     folds = matched.length;
   }
+  viewAllSoon(); // the bar's order, if nothing else
   return { rules: added.length, order: localOrder.length, panelsLeftOut, newSpaces, folds };
 }
 

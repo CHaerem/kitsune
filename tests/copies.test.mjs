@@ -398,3 +398,204 @@ test("a rule with a slash but no regular expression is text, as in Sidebery", as
   assert.equal(matches("/^https:\\/\\/b\\./", "https://a.example.org/"), false);
   x.kill();
 });
+
+// --- What a file can hold ------------------------------------------------------------
+// A copy or an export is a file: it may be damaged, hand-edited or not what it says.
+// Whatever it holds, it may not reach beyond its own lines, or leave something behind
+// that Firefox then refuses again and again.
+test("an id in a file cannot reach Object.prototype, or be stored as something else", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  for (const id of ["__proto__", "constructor", "toString"]) {
+    const copy = swappedCopy();
+    copy.data.essentials = [{ key: `e-${id}`, url: "https://evil.example.org/", cookieStoreId: id, title: "x" }];
+    copy.data.syncedTabs = { [`s-${id}`]: { url: "https://evil.example.org/", cookieStoreId: id, parentKey: "f", saved: { url: "https://evil.example.org/" } } };
+    copy.data.rules = [{ url: "evil.example.org", space: id }];
+    copy.data.spaceOrder = [id];
+    const lines = plain(await x.js("copySummary")(copy));
+    assert.ok(Object.values(lines).every(n => !n.essentials && !n.savedTabs && !n.rules), `nothing comes from ${id}: ${JSON.stringify(lines)}`);
+    assert.deepEqual(plain(await x.js("mergeCopy")(copy, [id])), { essentials: 0, folders: 0, tabs: 0, rules: 0, spaces: 0 });
+    const { spaces, ...older } = copy;
+    assert.deepEqual(plain(await x.js("copySummary")(older)), {}, `nor, with no names, from ${id}`);
+  }
+  // Written directly in JSON, as a file has it: "__proto__" is then an ordinary key.
+  const named = JSON.parse(`{"tidier":"1.6","spaces":[{"id":"__proto__","name":"Work"},{"id":"constructor","name":"Elsewhere"}],"data":{"essentials":[{"key":"p","url":"https://p.example.org/","cookieStoreId":"__proto__"},{"key":"c","url":"https://c.example.org/","cookieStoreId":"constructor"}]}}`);
+  const lines = plain(await x.js("copySummary")(named));
+  assert.equal(lines.__proto__.name, "Work", "a line like any other, which changes nothing else");
+  await x.js("mergeCopy")(named);
+  await wait(500);
+  assert.equal(x.js("Object.prototype.essentials"), undefined, "nothing was added to every object");
+  assert.equal(x.js("Object.prototype.savedTabs"), undefined);
+  for (const e of ff.store.essentials || []) assert.equal(typeof e.cookieStoreId, "string");
+  assert.equal(ff.store.essentials?.find(e => e.key === "p")?.cookieStoreId, C2, "and an odd id with a good name is simply that name");
+  const r = await x.js("importSidebery")(JSON.parse(`{"ver":"5","containers":{"a":{"id":"a","name":"Home"}},"sidebar":{"nav":["constructor","__proto__","p"],"panels":{"p":{"newTabCtx":"constructor","moveRules":[{"active":true,"url":"x.example.org"}]}}}}`));
+  assert.equal(r.rules, 0);
+  assert.equal(r.order, 0);
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+test("an older copy's id with no such container here stays out: Firefox would refuse its tabs again and again", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const { spaces, ...older } = swappedCopy();
+  delete older.data.spaceOrder;
+  const lines = plain(await x.js("copySummary")(older));
+  assert.deepEqual(Object.keys(lines).sort(), [C1, C2], "not offered");
+  const r = plain(await x.js("mergeCopy")(older));
+  assert.deepEqual(r, { essentials: 2, folders: 1, tabs: 1, rules: 0, spaces: 0 });
+  await wait(500);
+  assert.ok(!ff.store.essentials.some(e => e.key === "client-board" || e.key === "gone"));
+  assert.equal(ff.synced.G, undefined);
+  assert.deepEqual(x.errors, [], "and no tab was refused");
+  x.kill();
+});
+
+test("what cannot be used in a copy is left out, and the rest comes", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.spaces.push(null, 3, { name: "No id" }, { id: "no-name" }, { id: "number", name: 5 });
+  copy.data.essentials.push(null, 7, { url: "https://no-key.example.org/", cookieStoreId: C1 }, { key: "no-url", cookieStoreId: C1 }, { key: "about", url: "about:config", cookieStoreId: C1 },
+    { key: "script", url: "javascript:alert(1)", cookieStoreId: C1 }, { key: "work-mail", url: "https://twice.example.org/", cookieStoreId: C1 });
+  Object.assign(copy.data.syncedTabs, {
+    empty: null, text: "x",
+    noName: { group: true, own: true, cookieStoreId: C1 }, noAddress: { group: true, cookieStoreId: C1 }, badAddress: { group: true, url: "moz-extension://x/sidebery/group.html#100%", cookieStoreId: C1 },
+    notWeb: { cookieStoreId: C1, parentKey: "F", saved: { url: "javascript:alert(1)" } }, oddSaved: { cookieStoreId: C1, parentKey: "F", saved: true },
+  });
+  copy.data.rules.push(null, "text", { space: C1 }, { url: 5, space: C1 }, { url: "   ", space: C1 }, { url: " spaced.example.org ", space: C1 });
+  const lines = plain(await x.js("copySummary")(copy));
+  assert.deepEqual([lines[C1].essentials, lines[C1].folders, lines[C1].savedTabs, lines[C1].rules], [1, 1, 1, 2], "only what can be used is promised");
+  const r = plain(await x.js("mergeCopy")(copy));
+  assert.deepEqual(r, { essentials: 3, folders: 2, tabs: 1, rules: 3, spaces: 1 });
+  await wait(500);
+  assert.equal(ff.store.essentials.filter(e => e.key === "work-mail").length, 1);
+  assert.equal(ff.store.essentials.find(e => e.key === "work-mail").url, "https://mail.example.org/", "the first of a key in it twice");
+  assert.ok(ff.store.rules.some(r => r.url === "spaced.example.org" && r.space === C2), "as Sidebery reads a rule, without spaces around it");
+  assert.ok((await x.js("moveReport")()).folders.length >= 2, "and the settings page still opens");
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+test("spaces with no usable name at all count as nothing known, not as an older copy", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.spaces = [null, { id: C1 }];
+  const r = plain(await x.js("mergeCopy")(copy));
+  assert.deepEqual(r, { essentials: 0, folders: 0, tabs: 0, rules: 0, spaces: 0 });
+  x.kill();
+});
+
+test("the colour a copy gives a line is only ever a colour: the page puts it in a style", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.spaces[2].colorCode = "red;background:url(https://evil.example.org/)";
+  assert.equal(plain(await x.js("copySummary")(copy))[C3].color, "");
+  copy.spaces[2].colorCode = "#00f";
+  assert.equal(plain(await x.js("copySummary")(copy))[C3].color, "#00f");
+  x.kill();
+});
+
+test("a rule cannot send tabs to no container: the tab would be opened in the space again, and again", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.data.rules = [{ url: "loop.example.org", space: "firefox-default" }];
+  assert.equal(plain(await x.js("mergeCopy")(copy)).rules, 0);
+  x.kill();
+});
+
+test("a live folder stays out: the search on this machine decides it, and its tabs do not come anyway", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.data.syncedTabs.L = { group: true, own: true, live: "reviews", name: "Reviews", cookieStoreId: C1, parentKey: null, rank: 3, added: 1 };
+  copy.data.syncedTabs.P = { liveFolder: "reviews", url: "https://pr.example.org/", cookieStoreId: C1, parentKey: "L", added: 1 };
+  const lines = plain(await x.js("copySummary")(copy));
+  assert.equal(lines[C1].folders, 1, "not counted");
+  await x.js("mergeCopy")(copy);
+  await wait(300);
+  assert.equal(ff.synced.L, undefined);
+  assert.equal(ff.synced.P, undefined);
+  x.kill();
+});
+
+test("Sidebery's export is read as Sidebery reads it", async () => {
+  const ff = machine();
+  ff.identities = { [C1]: { name: "Space 1" }, [C2]: { name: "Space 2" } };
+  const x = await run(ff);
+  const backup = fixture();
+  const one = backup.containers[C1], p1 = backup.sidebar.panels.p1;
+  one.reopenRules = [{ id: "a", active: true, type: 1, url: "  trimmed.example.org " }, { id: "b", active: true, url: "no-type-is-no-include.example.org" }, { id: "c", active: true, type: 1, url: "  " }];
+  // A panel's rule can be for tabs in one container only. Another container's would be
+  // another login here, since a space is its container, so it stays out.
+  p1.moveRules = [{ id: "d", active: true, url: "its-own.example.org", containerId: C1 }, { id: "e", active: true, url: "other-login.example.org", containerId: C2 }, null];
+  backup.sidebar.nav = ["p2", "p1", "p2-again"];
+  backup.sidebar.panels["p2-again"] = { id: "p2-again", newTabCtx: C2, moveRules: [] };
+  const r = plain(await x.js("importSidebery")(backup));
+  await wait(300);
+  assert.deepEqual(ff.store.rules.map(r => r.url).sort(), ["its-own.example.org", "trimmed.example.org", "two.example.org"]);
+  assert.equal(r.order, 2, "two panels with one container are one space");
+  assert.deepEqual(ff.store.spaceOrder, [C2, C1]);
+  x.kill();
+});
+
+test("an export with no names, its containers left out, gives no rules: an id alone could be another machine's logins", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const { containers, ...backup } = fixture();
+  const r = plain(await x.js("importSidebery")(backup));
+  await wait(300);
+  assert.equal(r.rules, 0);
+  assert.equal(ff.store.rules, undefined);
+  assert.equal(r.panelsLeftOut, 3, "and the page says so");
+  assert.deepEqual(ff.store.spaceOrder, [C2, C1], "the order is no harm: it only sorts the bar");
+  x.kill();
+});
+
+test("a window closed while a copy is taken in does not stop it (with Sidebery, a folder needs a page in each window)", async () => {
+  const ff = machine({ alone: false, windows: false });
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  ff.addTab(w.id, { url: `${GROUP}Here`, title: "Here", cookieStoreId: C1 });
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.spaces = copy.spaces.slice(0, 2);
+  copy.data.essentials = [];
+  copy.data.syncedTabs = { F: { group: true, url: `${GROUP}Clients`, cookieStoreId: C1, parentKey: null, added: 1 } };
+  copy.data.rules = [{ url: "still.example.org", space: C1 }];
+  const create = x.b.tabs.create;
+  x.b.tabs.create = async p => p.url?.includes("Clients") ? Promise.reject(new Error("Invalid window ID")) : create(p);
+  const r = plain(await x.js("mergeCopy")(copy));
+  assert.equal(r.rules, 1, "the rest still comes");
+  x.kill();
+});
+
+test("older Sidebery's \":id:\" in a folder's address is no part of its name, and its snapshot leaves it out", async () => {
+  const ff = machine();
+  ff.identities = { [C1]: { name: "Space 1" }, [C2]: { name: "Space 2" } };
+  const x = await run(ff);
+  assert.equal(x.js("groupName")(`${GROUP}My%20folder:id:abc123~!abcdefghijkl!ch!~`), "My folder");
+  assert.equal(x.js("groupName")(`${GROUP}My%20folder%3Aid%3Aabc123`), "My folder");
+  const key = x.js("foldKey");
+  assert.equal(key(C1, `${GROUP}Old:id:abc~!abcdefghijkl!ch!~`), key(C1, "moz-extension://other/sidebery/group.html#Old"), "an open page's address, in a snapshot and in the record");
+  assert.equal(key(C1, `${GROUP}Old:id:abc`), key(C1, `${GROUP}Old`), "an unloaded page's");
+  assert.notEqual(key(C1, `${GROUP}Old`), key(C2, `${GROUP}Old`), "the same name in another space is another folder");
+  assert.notEqual(key(C1, `${GROUP}Old`), key(C1, `${GROUP}Older`));
+  x.kill();
+});
+
+test("a copy taken in while Tidier is still starting is refused: without the tabs' roles every tab would get a second placeholder", async () => {
+  const ff = machine({ alone: false, windows: false });
+  const w = ff.addWindow({ focused: true });
+  ff.store.syncedTabs = { mine: { url: "https://mine.example.org/", title: "Mine", cookieStoreId: C1, parentKey: null, added: 1 } };
+  ff.addTab(w.id, { url: "https://mine.example.org/", active: true, cookieStoreId: C1 }, { syncKey: "mine", syncRole: "live" });
+  const x = ff.boot(); // and no start yet: Firefox has only just restored the settings page
+  await assert.rejects(x.send({ type: "settings:merge", copy: swappedCopy() }), /still starting/);
+  await wait(300);
+  assert.equal(ff.list(w.id).length, 1, "no tab was added");
+  assert.equal(ff.store.essentials, undefined);
+  x.kill();
+});

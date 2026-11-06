@@ -459,7 +459,7 @@ test("a copy is taken in by merging: only the chosen spaces, and nothing removed
   ff.addTab(w.id, { url: "https://mine.example/", active: true, cookieStoreId: C1 }, { syncKey: "mine", syncRole: "live" });
   const x = await run(ff);
   const C2 = "firefox-container-2";
-  const copy = { data: {
+  const copy = { tidier: "1.6", data: {
     essentials: [
       { key: "e1", url: "https://e1.example/", cookieStoreId: C1, title: "E1" },
       { key: "e2", url: "https://e2.example/", cookieStoreId: C2, title: "E2" },
@@ -624,8 +624,8 @@ test("Sidebery's rules and order of spaces come from its export", async () => {
   const x = await run(ff);
   const r = await x.js("importSidebery")({
     containers: {
-      "firefox-container-1": { id: "firefox-container-1", reopenRulesActive: true, reopenRules: [{ active: true, url: "/^https:\\/\\/a\\//" }, { active: false, url: "off" }] },
-      "firefox-container-2": { id: "firefox-container-2", reopenRulesActive: false, reopenRules: [{ active: true, url: "ignored" }] },
+      "firefox-container-1": { id: "firefox-container-1", name: "firefox-container-1", reopenRulesActive: true, reopenRules: [{ active: true, type: 1, url: "/^https:\\/\\/a\\//" }, { active: false, type: 1, url: "off" }] },
+      "firefox-container-2": { id: "firefox-container-2", name: "firefox-container-2", reopenRulesActive: false, reopenRules: [{ active: true, type: 1, url: "ignored" }] },
     },
     sidebar: { nav: ["p2", "p1", "settings"], panels: { p1: { newTabCtx: "firefox-container-1" }, p2: { newTabCtx: "firefox-container-2" } } },
   });
