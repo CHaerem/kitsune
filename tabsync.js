@@ -881,6 +881,7 @@ async function start(delayMs) {
     await initSynced();
     await reconcileAll(); // also adds missing essentials, via fillWindow
     await foldersFirstAll(); // folders.js
+    await oneLoadedEach(); // essentials.js: Firefox may have restored a page in several windows
   });
   for (const w of await normalWindows()) noteOrder(w.id);
   started = true;

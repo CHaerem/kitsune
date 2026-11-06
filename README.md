@@ -19,7 +19,12 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    the new order, in every window and in new windows. Dragging one to another
    window takes it there (in its place, not twice) and leaves a copy behind. An essential's
    title and icon follow its page, but only from the essential's own site,
-   so a redirect to a sign-in page does not rename it.
+   so a redirect to a sign-in page does not rename it. Like every other tab,
+   an essential is loaded in one window only (two loaded Slacks would play
+   every notification sound twice): selecting its copy in the window you are
+   using moves the loaded tab there and leaves an unloaded copy behind, and a
+   copy that loads its page anyway (as after a restart) makes the others
+   unloaded copies again (`essentials.js`, "One loaded copy").
 2. **Tabs in every window.** Every other tab is *live* in one window and an
    unloaded *ghost* in the others (same URL, title, container and place in the
    Sidebery tree). Selecting a ghost moves the live tab into your window and

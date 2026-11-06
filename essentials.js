@@ -226,9 +226,17 @@ async function onClosed(tabId, windowId) {
   await ensureWindow(windowId);
 }
 
+// An unloaded essential dragged to another window is unpinned there for a
+// moment and then pinned again (Firefox moves it as a new tab), so an unpin
+// counts only if the tab is still unpinned UNPIN_SETTLE_MS later.
+const UNPIN_SETTLE_MS = 500;
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (busy.has(tabId) || !("pinned" in change)) return;
-  serial(() => (change.pinned ? onPinned(tab) : onUnpinned(tab)));
+  if (change.pinned) { serial(() => onPinned(tab)); return; }
+  setTimeout(() => serial(async () => {
+    const now = await browser.tabs.get(tabId).catch(() => null);
+    if (now && !now.pinned && !busy.has(tabId)) await onUnpinned(now);
+  }), UNPIN_SETTLE_MS);
 }, { properties: ["pinned"] });
 
 // Keep each essential's title and icon current, from whichever copy is loaded.
@@ -339,6 +347,90 @@ async function dropDoubleCopies(tabId, windowId) {
   await forgetClosedPlaceholders("essential", [key]);
   await sortEssentials(windowId, await getList());
 }
+
+// --- One loaded copy -------------------------------------------------------
+// Like a synced tab (tabsync.js), an essential is loaded in one window only:
+// two loaded copies of Slack would both play every notification sound, and
+// take twice the memory. Every other copy is a placeholder (ghost.html).
+// Selecting a placeholder in the window you are using moves the loaded copy
+// in (the window it leaves gets a placeholder, as when you drag an essential
+// there, see onDetached); only if no copy is loaded does it open the page
+// itself. A copy that loads anyway (restored by Firefox, or unloaded by it
+// and selected again) makes the other copies placeholders (oneLoaded).
+
+const isLoadedCopy = t => !t.discarded && !isGhostUrl(t.url);
+
+async function copiesOf(key) {
+  const pinned = await browser.tabs.query({ pinned: true });
+  const keys = await Promise.all(pinned.map(keyOf));
+  return pinned.filter((t, i) => keys[i] === key);
+}
+
+// A placeholder shown in `tab`'s window: returns whether it should open the
+// page itself. In a window you are not using it waits (it may have just become
+// a placeholder, see oneLoaded); when you switch to it, onFocusChanged asks again.
+async function essentialShown(tab) {
+  if (tab.windowId !== focusedWindowId) return false;
+  const key = await keyOf(tab);
+  if (!key || !(await getList()).some(e => e.key === key)) return true;
+  const loaded = (await copiesOf(key)).find(t => t.id !== tab.id && t.windowId !== tab.windowId && isLoadedCopy(t));
+  if (!loaded) return true;
+  if (loaded.active) {
+    // Leave the old window on a tab that is already loaded, so it does not
+    // load anything in the background.
+    const calm = (await browser.tabs.query({ windowId: loaded.windowId, hidden: false, discarded: false }))
+      .find(t => t.id !== loaded.id && !isGhostUrl(t.url));
+    if (calm) await browser.tabs.update(calm.id, { active: true }).catch(() => {});
+  }
+  // Moved into the placeholder's place; onAttached then removes the
+  // placeholder, and onDetached gives the old window one.
+  await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index });
+  await browser.tabs.update(loaded.id, { active: true }).catch(() => {});
+  return false;
+}
+
+// Keep one loaded copy of essential `key`: the one selected in the window you
+// are using, else a loaded one there, else the one used last. Every other copy
+// that shows the real page (loaded, or unloaded by Firefox) becomes a placeholder.
+async function oneLoaded(key) {
+  const real = (await copiesOf(key)).filter(t => !isGhostUrl(t.url));
+  const loaded = real.filter(t => !t.discarded);
+  const here = loaded.filter(t => t.windowId === focusedWindowId);
+  const keep = here.find(t => t.active) || here[0] || loaded.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  for (const t of real) {
+    if (t === keep) continue;
+    await browser.tabs.update(t.id, { url: ghostUrl("essential", key) }).catch(() => {});
+  }
+}
+
+async function oneLoadedEach() {
+  for (const e of await getList()) await oneLoaded(e.key);
+}
+
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.type !== "essentialShown" || !sender.tab || sender.id !== browser.runtime.id) return;
+  return serial(() => essentialShown(sender.tab)).then(load => ({ load }), () => ({ load: true }));
+});
+
+// Switching to a window whose selected tab is an essential's placeholder.
+browser.windows.onFocusChanged.addListener(windowId => {
+  if (!started || windowId === browser.windows.WINDOW_ID_NONE) return;
+  serial(async () => {
+    const [active] = await browser.tabs.query({ windowId, active: true });
+    if (!active?.pinned || !isGhostUrl(active.url) || !(await keyOf(active))) return;
+    if (await essentialShown(active)) {
+      const entry = (await getList()).find(e => e.key === keyByTab.get(active.id));
+      if (entry) await browser.tabs.update(active.id, { url: entry.url }).catch(() => {});
+    }
+  });
+});
+
+// A copy started loading its page: the others become placeholders.
+browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || isGhostUrl(tab.url)) return;
+  const key = keyByTab.get(tabId);
+  if (key) serial(() => oneLoaded(key));
+}, { properties: ["status"] });
 
 // Startup is driven from tabsync.js, so both features start in one order.
 async function startEssentials() {

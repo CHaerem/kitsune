@@ -5,18 +5,21 @@
 // and icon, and is then unloaded again (an unloaded tab keeps both).
 //
 // When the placeholder is shown:
-// - essential copy, or a live tab that has never been loaded ("lazy", e.g. a
-//   live folder's pull request): it goes straight to the real page;
-// - ghost: the background script pulls the live tab into this window; only
-//   if there is no live tab anywhere does the ghost load the page itself.
+// - a live tab that has never been loaded ("lazy", e.g. a live folder's pull
+//   request): it goes straight to the real page;
+// - ghost or essential copy: the background script moves the loaded tab into
+//   this window; only if there is none does the placeholder load the page itself.
 
 const params = new URLSearchParams(location.search);
 const kind = params.get("kind"); // "ghost" | "essential" | "lazy"
 const key = params.get("key");
 
 function shown(info) {
-  if (kind === "essential" || kind === "lazy") { location.replace(info.url); return; }
-  browser.runtime.sendMessage({ type: "ghostShown" }).then(r => { if (r?.load) location.replace(info.url); });
+  if (kind === "lazy") { location.replace(info.url); return; }
+  // An essential opens its page itself only if no other window has it loaded
+  // (essentialShown, essentials.js); a ghost only if there is no live tab.
+  const type = kind === "essential" ? "essentialShown" : "ghostShown";
+  browser.runtime.sendMessage({ type }).then(r => { if (r?.load) location.replace(info.url); });
 }
 
 // The first icon that loads: the one saved for the page, else the site's
