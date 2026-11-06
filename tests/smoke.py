@@ -1712,8 +1712,15 @@ def alone_many(m):
       row.scrollIntoView();
       const seen = await new Promise(resolve => { const look = n => { const i = row.querySelector("img"); if ((i && i.naturalWidth) || !n) resolve(i); else setTimeout(() => look(n - 1), 100); }; look(50); });
       doc.getElementById("tabs").scrollTop = 0;
-      return {unloaded: row.classList.contains("unloaded"), icon: seen?.src.slice(0, 22), drawn: seen?.naturalWidth};""")
+      // An icon that does not load becomes the letter, and is not asked for again at the next draw.
+      const bad = {icon: args[0] + "/no-icon-here.png", title: "Letter"}, first = page.icon(bad);
+      first.style.position = "fixed"; first.style.top = "0"; doc.body.append(first);
+      const letter = await new Promise(resolve => { const look = n => { const l = doc.body.querySelector(":scope > .letter"); if (l || !n) resolve(l); else setTimeout(() => look(n - 1), 100); }; look(50); });
+      const again = page.icon(bad).tagName;
+      letter?.remove(); first.remove();
+      return {unloaded: row.classList.contains("unloaded"), icon: seen?.src.slice(0, 22), drawn: seen?.naturalWidth, firstTag: first.tagName, letter: letter?.textContent, again};""", m.pages)
     check("a placeholder made without a page shows its page's title and icon", r.get("unloaded") and r.get("icon") == "data:image/png;base64," and r.get("drawn") == 16, str(r))
+    check("an icon that does not load shows the letter, and is not asked for at every draw", r.get("firstTag") == "IMG" and r.get("letter") == "L" and r.get("again") == "SPAN", str(r))
     m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__before; await removeWhere((x, t) => url(t).endsWith("/icon")); return 1;""")
 
     # From the event to the sidebar showing it, and a view's build, one at a time.
