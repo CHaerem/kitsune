@@ -20,6 +20,7 @@ const BAR_PAGE = "commandbar/commandbar.html";
 // never changes, so nothing jumps while you type.
 const BAR_WIDTH = 640, BAR_HEIGHT = 432;
 const BAR_OPEN_LIMIT_MS = 10000; // a window that never came must not take the key for good
+const BAR_FORGET_MS = 10000; // Firefox lists a closed window a moment after it has closed, once it has its last state
 // ⌘⇧K on a Mac (Firefox reads Ctrl as ⌘ there). The plain ⌘K and ⌘T would be nicer, but
 // Firefox keeps those for itself; ⌘T goes to the bar as soon as Firefox lets go of it
 // (customKeys.json in the dotfiles), through a second command that does nothing until then.
@@ -69,12 +70,31 @@ function barPlaceOver(win) {
 
 async function barClose(bar, refocus) {
   if (commandBar === bar) commandBar = null;
+  barForgetUntil = Date.now() + BAR_FORGET_MS;
   await browser.windows.remove(bar.id).catch(() => {});
   // Not after losing the focus: you clicked somewhere else, and that is where you want to be.
   if (refocus) await browser.windows.update(bar.from, { focused: true }).catch(() => {});
 }
 
-browser.windows.onRemoved.addListener(id => { if (commandBar?.id === id) commandBar = null; });
+// Firefox keeps every closed window with a page in it under History, Recently Closed
+// Windows, popups too: ⌘⇧T would bring the bar back rather than the tab you closed. It is
+// only ever forgotten after the fact, and that list holds three by default, so with
+// three real windows in it the oldest goes the first time; from then on it keeps two.
+let barForgetUntil = 0;
+async function barForgetClosed() {
+  if (Date.now() > barForgetUntil) return;
+  const page = browser.runtime.getURL(BAR_PAGE);
+  for (const { window: win } of await browser.sessions.getRecentlyClosed().catch(() => [])) {
+    if (win?.tabs?.length === 1 && win.tabs[0].url === page) await browser.sessions.forgetClosedWindow(win.sessionId).catch(() => {});
+  }
+}
+browser.sessions.onChanged.addListener(barForgetClosed);
+
+browser.windows.onRemoved.addListener(id => {
+  if (commandBar?.id !== id) return;
+  commandBar = null; // closed by something else than the bar itself: ⌘W, say
+  barForgetUntil = Date.now() + BAR_FORGET_MS;
+});
 browser.commands.onCommand.addListener((name, tab) => {
   if ((name === "command-bar" || name === "command-bar-t") && tidierAlone && started) toggleCommandBar(tab).catch(noteError);
 });

@@ -337,6 +337,26 @@ test("a bar brought back with the session closes itself, and never a normal wind
   x.kill();
 });
 
+test("a closed bar is not left under Recently Closed Windows, but a real window is", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  ff.recentlyClosed = [{ lastModified: 1, window: { sessionId: "real", tabs: [{ url: "https://real.example/" }] } }];
+  await pressKey(ff, x, w.id);
+  const bar = barWindows(ff)[0];
+  ff.tabs.get(bar.order[0]).url = "moz-extension://tidier/commandbar/commandbar.html";
+  await pressKey(ff, x, w.id);
+  await wait(300);
+  assert.deepEqual(Array.from(ff.recentlyClosed, c => c.window.sessionId), ["real"]);
+  // Long after, a window with the same page in it is not looked for any more.
+  x.js("barForgetUntil = 0");
+  ff.recentlyClosed.unshift({ lastModified: 2, window: { sessionId: "later", tabs: [{ url: "moz-extension://tidier/commandbar/commandbar.html" }] } });
+  x.b.sessions.onChanged.fire();
+  await wait(100);
+  assert.equal(ff.recentlyClosed.length, 2);
+  x.kill();
+});
+
 test("if the page goes away the window goes with it", async () => {
   const ff = new FakeFirefox();
   const { w } = world(ff);

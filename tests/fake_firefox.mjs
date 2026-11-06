@@ -132,7 +132,7 @@ export class FakeFirefox {
       get: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); return { id, type: w.type, incognito: w.incognito, focused: ff.focused === id, left: w.left, top: w.top, width: w.width, height: w.height }; },
       getLastFocused: async () => { const w = ff.wins.get(ff.focused); return w ? { id: w.id, focused: true } : { id: -1, focused: false }; },
       create: async ({ type = "normal", url, left, top, width, height }) => { const w = ff.addWindow({ type, left, top, width, height }); ff.focused = w.id; b.windows.onCreated.fire({ id: w.id, type, incognito: false }); const t = ff.addTab(w.id, { url, active: true }); b.tabs.onCreated.fire(ff.snap(t)); b.windows.onFocusChanged.fire(w.id); return { id: w.id, type, left, top, width, height }; },
-      remove: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); for (const t of [...w.order]) ff.rm(t, { closing: true }); ff.wins.delete(id); if (ff.focused === id) ff.focused = undefined; b.windows.onRemoved.fire(id); },
+      remove: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); const tabs = w.order.map(t => ff.snap(ff.tabs.get(t))); for (const t of [...w.order]) ff.rm(t, { closing: true }); ff.wins.delete(id); if (ff.focused === id) ff.focused = undefined; b.windows.onRemoved.fire(id); (ff.recentlyClosed ||= []).unshift({ lastModified: Date.now(), window: { sessionId: `closed-window-${id}`, tabs } }); T.setTimeout(() => b.sessions.onChanged.fire(), 100); },
       update: async (id, { focused }) => { if (!ff.wins.has(id)) throw new Error(`Invalid window ID: ${id}`); if (focused) { ff.focused = id; b.windows.onFocusChanged.fire(id); } return { id }; },
     };
     b.sessions = {
@@ -143,6 +143,7 @@ export class FakeFirefox {
       getWindowValue: async () => undefined, setWindowValue: async () => {},
       getRecentlyClosed: async () => ff.recentlyClosed || [],
       forgetClosedTab: async (windowId, sessionId) => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.tab?.sessionId !== sessionId); },
+      forgetClosedWindow: async sessionId => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.window?.sessionId !== sessionId); },
     };
     b.storage = { managed: { get: async () => ff.managed || {} }, local: {
       get: async k => { const ks = typeof k === "string" ? [k] : k; const o = {}; for (const x of ks) if (x in ff.store) o[x] = JSON.parse(JSON.stringify(ff.store[x])); return o; },

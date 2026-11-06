@@ -1720,6 +1720,28 @@ def alone_command_bar(m):
     m.js(BAR + "main().focus(); return 1;")
     check("losing the focus closes it", wait_for_bar(m, False))
 
+    # Firefox lists a closed popup under Recently Closed Windows: ⌘⇧T would bring the bar back.
+    r = {}
+    for _ in range(50):
+        r = m.js(H + """return main().SessionStore.getClosedWindowData().map(w => w.tabs[0]?.entries?.[0]?.url).filter(u => u?.includes("/commandbar/commandbar.html")).length;""")
+        if not r:
+            break
+        time.sleep(0.1)
+    check("a closed bar is not kept under Recently Closed Windows", r == 0, str(r))
+    m.js(H + """const w = main(); w.focus(); const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-bar-undo", {userContextId: w.gBrowser.selectedTab.userContextId}); w.gBrowser.selectedTab = t;
+      for (let i = 0; i < 100 && (!key(w, t) || t.linkedBrowser.webProgress?.isLoadingDocument); i++) await wait(100); await wait(1500); w.gBrowser.removeTab(t); await wait(1000); return 1;""")
+    bar_open(m)
+    bar_keys(m, [ESC])
+    wait_for_bar(m, False)
+    m.js(H + "const w = main(); w.focus(); for (let i = 0; i < 100 && Services.focus.activeWindow !== w; i++) await wait(50); await wait(1500); return 1;")
+    press(m, "t", CMD, SHIFT)
+    r = m.js(BAR + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("smoke-bar-undo"); i++) await wait(100);
+      const u = url(w.gBrowser.selectedTab); return {url: u, bar: !!bar()};""")
+    check("⌘⇧T after the bar brings back the tab you closed", "smoke-bar-undo" in r["url"] and not r["bar"], str(r))
+    m.js(H + """await removeWhere((w, t) => url(t).includes("smoke-bar-undo") || t.label.includes("smoke-bar-undo")); const w = main(); w.focus(); return 1;""")
+    press(m, str(start["space"]), CTRL)
+    time.sleep(1)
+
     # A tab of another space: unloaded here or not, Enter goes to it and takes you there.
     bar_open(m)
     bar_keys(m, "smoke-bar-one")
