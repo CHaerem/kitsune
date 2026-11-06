@@ -385,6 +385,7 @@ async function reopenedEssential(tab) {
   await dropDoubleCopies(tab.id, tab.windowId);
 }
 
+  await oneLoaded(key); // its load began before it was known as this essential
 // A container removed: its essentials go with it. Firefox refuses to create tabs
 // in it, and Firefox closes its tabs, which onClosed would try to bring back.
 browser.contextualIdentities.onRemoved.addListener(({ contextualIdentity }) => {

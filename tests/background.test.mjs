@@ -1062,3 +1062,26 @@ test("a tab dragged to another window right after a pull is handled", async () =
   for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1, `one in window ${w.id}`);
   x.kill();
 });
+
+test("an essential reopened with ⌘⇧T while loaded in another window ends up loaded once", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.run(3000);
+  ff.focusWindow(b.id);
+  ff.select(ff.list(b.id).find(y => y.pinned).id); // it moves to the second window
+  await ff.clock.idle(60000);
+  ff.closeTab(ff.list(b.id).find(y => y.pinned).id); // closed there, it stays in Recently Closed
+  await ff.clock.run(1000);
+  const again = ff.list(a.id).find(y => y.pinned);
+  ff.focusWindow(a.id);
+  ff.select(again.id); // and is opened again in the first
+  await ff.clock.idle(60000);
+  ff.focusWindow(b.id);
+  ff.reopenLast();
+  await ff.clock.idle(60000);
+  const loaded = [...ff.tabs.values()].filter(y => y.pinned && !y.discarded && y.url === "https://e.example/");
+  assert.equal(loaded.length, 1, `loaded in ${loaded.map(y => y.windowId)}`);
+  x.kill();
+});
