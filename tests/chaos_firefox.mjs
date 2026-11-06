@@ -373,6 +373,7 @@ export class ChaosFirefox extends FakeFirefox {
   hideTab(t) {
     if (t.hidden || t.pinned || t.active) return;
     t.hidden = true;
+    this.wins.get(t.windowId).changedAt = this.clock.now;
     this.replaceInSuccession(t);
     this.updated(t, { hidden: true });
   }
@@ -456,7 +457,8 @@ export class ChaosFirefox extends FakeFirefox {
     this.b.tabs.onAttached.fire(t.id, { newWindowId: to.id, newPosition: at });
     if (blurTo) this.select(blurTo.id);
     if (last) {
-      if (this.moveByCall) this.noteUnhandled(new Error(`Tidier moved the last tab out of window ${from.id}, which closed it`), "a window closed by itself");
+      // (Not if the other tabs just went: a look at them and the move cannot be one step.)
+      if (this.moveByCall && this.clock.now - (from.changedAt ?? 0) > 1000) this.noteUnhandled(new Error(`Tidier moved the last tab out of window ${from.id}, which closed it`), "a window closed by itself");
       this.closeWindow(from.id);
     }
   }
@@ -478,6 +480,7 @@ export class ChaosFirefox extends FakeFirefox {
     const t = this.tabs.get(id);
     if (!t) return;
     const w = this.wins.get(t.windowId);
+    w.changedAt = this.clock.now;
     const last = !w.order.some(x => x !== id && !this.tabs.get(x).hidden);
     if (last && this.closeWindowWithLastTab) { this.closeWindow(w.id); return; }
     const blurTo = t.active && !last ? this.findTabToBlurTo(t, w) : null;

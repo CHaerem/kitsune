@@ -1252,3 +1252,21 @@ test("a placeholder reopened before Recently Closed forgets it is no double", as
   assert.equal(x.js("syncKeyByTab").has(reopened.id) === ff.tabs.has(reopened.id), true);
   x.kill();
 });
+
+test("an essential reopened after you unpinned it is an essential again", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id)); // closes the loaded copy in the first window
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials, []);
+  ff.focusWindow(a.id);
+  const reopened = ff.reopenLast();
+  await ff.clock.idle(60000);
+  assert.ok(reopened.pinned);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://e.example/"]);
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "the other window has it");
+  x.kill();
+});

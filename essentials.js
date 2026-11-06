@@ -382,7 +382,14 @@ browser.tabs.onCreated.addListener(tab => {
 
 async function reopenedEssential(tab) {
   const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
-  if (!key || busy.has(tab.id) || !(await getList()).some(e => e.key === key)) return;
+  if (!key || busy.has(tab.id)) return;
+  if (!(await getList()).some(e => e.key === key)) {
+    // Reopened after you unpinned it: pinned again, so an essential again, like any other.
+    const now = await browser.tabs.get(tab.id).catch(() => null);
+    keyByTab.delete(tab.id);
+    if (now?.pinned && isWeb(now.url)) await onPinned(now);
+    return;
+  }
   keyByTab.set(tab.id, key);
   // Closed right after it was pinned, it can still have what it had as a synced tab.
   await clearRole(tab.id);
