@@ -1464,6 +1464,169 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+def alone_quiet_undo(m):
+    # Clear by a real click, the quiet line, and Undo, compared with before in two windows;
+    # closes with the ×, a saved tab removed for good, and a folder deleted (quiet.js).
+    more_tabs_here(m, "quiet")
+    # Two windows; alone_second_window has usually opened the other one, and it stays open.
+    m.js(H + """if (!other()) { const w = main().OpenBrowserWindow(); w.__smoke = true; await wait(4000); } return 1;""")
+    # What is compared: the tabs of the active space, in order, per window.
+    # (Each window's tab strip can have them in another order; what counts is the list drawn.)
+    LIST = H + """const ctx = Number(args[0].split("-").pop()), all = (await storage("%s", ["syncedTabs"])).syncedTabs;
+      return wins().map(w => { const keys = w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === ctx && key(w, t)).map(t => key(w, t));
+        return [keys.filter(k => !all[JSON.parse(k)]?.parentKey), keys.filter(k => all[JSON.parse(k)]?.parentKey)]; });""" % EXT_ID
+    setup = sidebar_page(m, """
+      const space = spaces().find(s => s.active).id;
+      send({type: "newFolder", space, name: "Quiet"});
+      for (let i = 0; i < 50 && !folders().some(f => f.name === "Quiet"); i++) await wait(100);
+      const head = () => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Quiet");
+      const [inside, also] = plainTabs().map(r => Number(r.dataset.tab));
+      send({type: "moveTab", tabId: inside, folder: head().dataset.folderHead, before: null});
+      send({type: "moveTab", tabId: also, folder: head().dataset.folderHead, before: null});
+      // A tab that has never been loaded, as a link opened in the background can be.
+      await page.browser.tabs.create(page.JSON.parse(JSON.stringify({url: "https://example.org/?smoke-quiet-never", title: "Never loaded", cookieStoreId: space, discarded: true, active: false})));
+      for (let i = 0; i < 60 && folders().find(f => f.name === "Quiet").tabs.length < 2; i++) await wait(100);
+      for (let i = 0; i < 60 && !rows().includes("Never loaded"); i++) await wait(100);
+      // A tab with a page before this one, which only Firefox's own memory can give back.
+      const history = await page.browser.tabs.create(page.JSON.parse(JSON.stringify({url: "https://example.org/?smoke-quiet-one", cookieStoreId: space, active: false})));
+      await wait(1500);
+      await page.browser.tabs.update(history.id, page.JSON.parse(JSON.stringify({url: "https://example.org/?smoke-quiet-two"})));
+      await wait(3000); // all of it is in the other window too
+      // Stand on one of today's tabs, with a real click.
+      const here = plainTabs()[0];
+      here.click();
+      await wait(1500);
+      return {space, key: head().dataset.folderHead, here: Number(here.dataset.tab), rows: rows(), folders: folders()};""")
+    space = setup["space"]
+    before = m.js(LIST, space)
+    check("a tab that was never loaded is on today's list, for Clear to take", "Never loaded" in setup["rows"], str(setup))
+
+    r = sidebar_page(m, """
+      const out = {};
+      const button = doc.querySelector("#tabs .divider .clear"), box = button.parentElement.getBoundingClientRect();
+      out.reach = box.height; out.divider = doc.querySelector("#tabs .divider").getBoundingClientRect().height;
+      out.faded = page.getComputedStyle(button).opacity;
+      const closing = plainTabs().length - 1;
+      button.click();
+      for (let i = 0; i < 100 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(100);
+      out.closing = closing;
+      out.shown = doc.getElementById("note").classList.contains("shown");
+      out.line = doc.querySelector("#note .text").textContent;
+      out.rows = plainTabs().map(r => Number(r.dataset.tab));
+      out.folders = folders();
+      out.tiles = tiles().length;
+      return out;""", setup["here"])
+    check("Clear shows only near the line, in an area that takes no room", r["reach"] >= 18 and r["divider"] <= 2 and r["faded"] == "0", str(r))
+    check("Clear by a real click closes today's tabs, except the one you are on", r["rows"] == [setup["here"]], str(r))
+    check("Clear leaves the folders", r["folders"] == setup["folders"], str(r))
+    check("the line says how many", r["shown"] and r["line"] == f"{r['closing']} tabs closed", str(r))
+    after = m.js(LIST, space)
+    check("Clear closes them in the other window too", len(after) == 2 and after[0] == after[1] and len(after[0][0]) == 1 and after[0][1] == before[0][1], f"{before} -> {after}")
+
+    r = sidebar_page(m, """
+      const selected = async () => (await page.browser.tabs.query({active: true, currentWindow: true}))[0].id;
+      const was = await selected();
+      doc.querySelector("#note .act").click();
+      const gone = !doc.getElementById("note").classList.contains("shown");
+      for (let i = 0; i < 100 && rows().length < args[0].length; i++) await wait(100);
+      await wait(1500);
+      return {gone, rows: rows(), folders: folders(), still: was === await selected()};""", setup["rows"])
+    check("Undo brings the same list back, in order", r["rows"] == setup["rows"], f"{setup['rows']} -> {r['rows']}")
+    check("Undo leaves the folders as they were", r["folders"] == setup["folders"], str(r))
+    check("Undo stays on the tab you are on, and the line goes at once", r["still"] and r["gone"], str(r))
+    back = m.js(LIST, space)
+    check("Undo brings them back under their own keys, in order, in both windows", back == before, f"{before} -> {back}")
+    loaded = m.js(H + """await wait(1500); const w = main(), ctx = Number(args[0].split("-").pop());
+      return wins().flatMap(w => w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === ctx && t.linkedPanel && !t.selected && key(w, t)).map(t => t.label));""", space)
+    check("nothing loads because of Clear and Undo but what was loaded and not cleared", not [x for x in loaded if x == "Never loaded" or "smoke-quiet" in x], str(loaded))
+
+    # The page's history is back, once it is selected and loads.
+    h = m.js(H + """const w = main(), was = w.gBrowser.selectedTab, t = w.gBrowser.tabs.find(x => url(x).includes("smoke-quiet-two"));
+      if (!t) return {missing: true};
+      const unloaded = !t.linkedPanel;
+      w.gBrowser.selectedTab = t; await wait(2500);
+      const out = {unloaded, count: t.linkedBrowser.browsingContext?.sessionHistory?.count, at: url(t), ctx: t.userContextId};
+      w.gBrowser.selectedTab = was; await wait(800);
+      return out;""")
+    check("a page brought back is unloaded, in its container, and keeps its history", h.get("unloaded") and h.get("count", 0) >= 2 and "smoke-quiet-two" in h.get("at", "") and h.get("ctx") == int(space.split("-")[-1]), str(h))
+
+    # Two closed with the ×: a group, and the line goes by itself.
+    r = sidebar_page(m, """
+      const chosen = plainTabs().filter(r => !r.classList.contains("active")).slice(0, 2);
+      const ids = chosen.map(r => Number(r.dataset.tab));
+      for (const r of chosen) r.querySelector(".close").click();
+      const note = doc.getElementById("note");
+      for (let i = 0; i < 50 && !note.classList.contains("shown"); i++) await wait(100);
+      const line = doc.querySelector("#note .text").textContent, t0 = Date.now();
+      for (let i = 0; i < 300 && note.classList.contains("shown"); i++) await wait(100);
+      return {line, ids, ms: Date.now() - t0, shown: note.classList.contains("shown"), rows: plainTabs().map(r => Number(r.dataset.tab))};""")
+    check("two tabs closed with the × are one line", r["line"] == "2 tabs closed", str(r))
+    check("the line goes by itself, after about ten seconds", not r["shown"] and 8000 < r["ms"] < 13000, str(r))
+    check("they stay closed", not set(r["ids"]) & set(r["rows"]), str(r))
+
+    # A saved tab: closing it loaded says nothing, closing its placeholder removes it for good.
+    s = m.js(H + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
+      return Object.keys(all).filter(k => all[k].parentKey === args[0]);""" % EXT_ID, setup["key"])
+    inside_before = m.js(LIST, space)
+    r = sidebar_page(m, """
+      const row = () => [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".head .title").textContent === "Quiet").querySelector(".tab");
+      const note = doc.getElementById("note"), count = () => folders().find(f => f.name === "Quiet").tabs;
+      row().querySelector(".close").click();
+      await wait(1500);
+      const unloaded = {said: note.classList.contains("shown"), tabs: count(), dim: row().classList.contains("unloaded")};
+      row().querySelector(".close").click();
+      for (let i = 0; i < 50 && !note.classList.contains("shown"); i++) await wait(100);
+      const line = doc.querySelector("#note .text").textContent, gone = count();
+      doc.querySelector("#note .act").click();
+      for (let i = 0; i < 50 && folders().find(f => f.name === "Quiet").tabs.length < unloaded.tabs.length; i++) await wait(100);
+      await wait(1000);
+      return {unloaded, line, gone, tabs: count()};""")
+    check("a loaded saved tab only unloads, with no line", r["unloaded"]["said"] is False and r["unloaded"]["dim"] and len(r["unloaded"]["tabs"]) == 2, str(r))
+    check("its placeholder closed is removed for good, and the line offers it back", r["line"] == "Tab removed" and len(r["gone"]) == 1, str(r))
+    check("Undo puts it back in its place in the folder", r["tabs"] == r["unloaded"]["tabs"], str(r))
+    check("and in both windows", m.js(LIST, space) == inside_before, str(m.js(LIST, space)))
+    stored = m.js(H + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs; await wait(800);
+      return Object.keys((await storage("%s", ["syncedTabs"])).syncedTabs).filter(k => all[k]?.parentKey === args[0]);""" % (EXT_ID, EXT_ID), setup["key"])
+    check("under its own key, in its folder", sorted(stored) == sorted(s), f"{s} -> {stored}")
+
+    # A folder deleted: its tabs stay, and Undo gives it back.
+    r = sidebar_page(m, """
+      const note = doc.getElementById("note"), was = folders();
+      send({type: "deleteFolder", key: args[0]});
+      for (let i = 0; i < 50 && !note.classList.contains("shown"); i++) await wait(100);
+      const line = doc.querySelector("#note .text").textContent, without = folders(), rowsThen = rows();
+      doc.querySelector("#note .act").click();
+      for (let i = 0; i < 50 && !folders().some(f => f.name === "Quiet"); i++) await wait(100);
+      await wait(500);
+      return {was, line, without, rowsThen, folders: folders()};""", setup["key"])
+    check("a folder deleted keeps its tabs, and says so with an undo", r["line"] == "Folder deleted" and not [f for f in r["without"] if f["name"] == "Quiet"]
+          and all(t in r["rowsThen"] for t in [t for f in r["was"] if f["name"] == "Quiet" for t in f["tabs"]]), str(r))
+    check("Undo gives the folder back, with its name, place and tabs", r["folders"] == r["was"], str(r))
+
+    # With no line between folders and tabs, Clear is in the list's menu. Then quiet
+    # again, for alone_idle: the line gone, and its timer with it.
+    r = sidebar_page(m, """
+      const note = doc.getElementById("note");
+      send({type: "deleteFolder", key: args[0]});
+      for (let i = 0; i < 50 && folders().some(f => f.name === "Quiet"); i++) await wait(100);
+      const others = folders();
+      const menu = doc.getElementById("tabs");
+      menu.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: 40, clientY: 200}));
+      const items = [...doc.querySelectorAll("#menu .item")];
+      const labels = items.map(b => b.textContent), n = plainTabs().length;
+      items.find(b => b.textContent === "Clear tabs")?.click();
+      await wait(1500);
+      const line = doc.querySelector("#note .text").textContent, left = plainTabs().length;
+      doc.querySelector("#note .act").click();
+      for (let i = 0; i < 50 && plainTabs().length < n; i++) await wait(100);
+      const back = plainTabs().length;
+      for (let i = 0; i < 20 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(50);
+      return {others, labels, line, left, n, back, shown: note.classList.contains("shown")};""", setup["key"])
+    check("the list's menu has Clear too, and it can be undone", "Clear tabs" in r["labels"] and r["line"].endswith("closed") and r["left"] == 1 and r["back"] == r["n"], str(r))
+    check("Undo leaves no line behind", r["shown"] is False, str(r))
+    no_problems(m, "after Clear and Undo")
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1632,7 +1795,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_quiet_undo, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

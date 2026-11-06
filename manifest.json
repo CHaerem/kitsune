@@ -55,6 +55,7 @@
       "ownfolders.js",
       "copies.js",
       "moveover.js",
+      "quiet.js",
       "sidebar-view.js",
       "archive.js",
       "shortcuts.js"

@@ -38,17 +38,22 @@ async function foldFolder(key, collapsed) {
 
 // Deleting a folder loses nothing: its tabs become ordinary tabs, which archiving
 // then tidies as usual. (A live folder's tabs go with it: the search decides them.)
-async function deleteFolder(key) {
+// Archiving would otherwise take a tab last used over 12 hours ago at its next look,
+// so "its tabs stay" would not be true: a tab that leaves counts as new from here.
+// In the sidebar (`windowId`) the line offers to undo it (quiet.js).
+async function deleteFolder(key, windowId) {
   const all = await getSynced();
   if (!isOwnFolder(all[key])) return;
+  const undo = windowId === undefined ? undefined : await rememberFolder(all, key, windowId);
   const gone = Object.keys(all).filter(k => all[k].parentKey === key);
   for (const k of gone) {
     if (all[k].liveFolder) await closeEverywhere(k, { dismiss: false });
-    else all[k].parentKey = all[key].parentKey ?? null;
+    else Object.assign(all[k], { parentKey: all[key].parentKey ?? null, added: Date.now() });
   }
   delete all[key];
   noteSaved(all);
   saveSynced(all);
+  if (undo) say(windowId, "Folder deleted", { undo });
 }
 
 // A folder moved among its space's folders (`beforeKey` null: last).

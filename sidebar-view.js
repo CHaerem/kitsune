@@ -51,7 +51,7 @@ async function viewFor(windowId) {
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
     (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
   }
-  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
+  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, note: noteFor(windowId), spaces, space, essentials, folders, tabs: loose };
 }
 
 function viewSoon(windowId) {
@@ -80,7 +80,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "select") {
       await browser.tabs.update(msg.tabId, { active: true }).catch(() => {});
     } else if (msg.type === "close") {
-      await browser.tabs.remove(msg.tabId).catch(() => {});
+      await closeFromSidebar(windowId, msg.tabId); // quiet.js: remembered for undo
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
@@ -104,7 +104,9 @@ async function sidebarAction(windowId, msg) {
   if (msg.type === "newFolder") await createFolder(msg.name || "New folder", msg.space);
   else if (msg.type === "renameFolder") await renameFolder(msg.key, msg.name);
   else if (msg.type === "foldFolder") await foldFolder(msg.key, msg.collapsed);
-  else if (msg.type === "deleteFolder") await deleteFolder(msg.key);
+  else if (msg.type === "deleteFolder") await deleteFolder(msg.key, windowId);
+  else if (msg.type === "clearSpace") await clearSpace(windowId, msg.space); // quiet.js
+  else if (msg.type === "undo") await undoNote(windowId, msg.note); // quiet.js
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
