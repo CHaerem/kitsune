@@ -213,6 +213,14 @@ test("a removed container takes its list along", async () => {
   x.kill();
 });
 
+test("every space's list leaves out a container that is gone, whatever left its rows behind", async () => {
+  const { x, ff } = await session([["a", "https://a.example/"], ["b", "https://b.example/", { cookieStoreId: C2 }], ["c", "https://c.example/", { cookieStoreId: "firefox-default" }]]);
+  await archive(x, ["a", "b", "c"]);
+  ff.containers.delete(C1); // no event: removed while Tidier was not running, say
+  assert.deepEqual((await listed(x)).map(r => r.space).sort(), ["firefox-default", C2].sort());
+  x.kill();
+});
+
 test("a tab without a container shows in whichever space you are in, and comes back there", async () => {
   const { x, ff, w } = await session([["a", "https://a.example/", { cookieStoreId: "firefox-default" }]]);
   await archive(x, ["a"]);
@@ -220,6 +228,7 @@ test("a tab without a container shows in whichever space you are in, and comes b
   x.js("(win, s) => activeSpace.set(win, s)")(w.id, C2);
   assert.equal(await x.send({ type: "reopenArchived", item: { space: "firefox-default", url: "https://a.example/" }, windowId: w.id }), true);
   assert.equal(ff.list(w.id).find(t => t.url === "https://a.example/").cookieStoreId, C2);
+  assert.deepEqual(await listed(x, C1), [], "it left the list, though it opened in another space than it was listed under");
   x.kill();
 });
 
@@ -247,6 +256,48 @@ test("a placeholder that was selected ages by its own use again", async () => {
   assert.match(r.kept.held, /^used/);
   assert.equal((await x.js("getSynced()")).held.placeholderSince, undefined);
   assert.ok(ff.tabs.has(ids.held));
+  x.kill();
+});
+
+test("a placeholder you selected starts its time anew when it is one again, also if no check saw it in use", async () => {
+  const { x, ff, ids, w } = await session([["held", "https://held.example/", {}, placeholder("held")]]);
+  const page = ff.list(w.id).find(t => t.url === "about:home").id, now = Date.now();
+  await archive(x, ["held"], now);
+  assert.ok((await x.js("getSynced()")).held.placeholderSince, "its time has started");
+  ff.select(ids.held); // the only way it becomes a page again; a check would stop at "selected"
+  ff.select(page);
+  await wait(100);
+  assert.equal((await x.js("getSynced()")).held.placeholderSince, undefined);
+  // Still a placeholder here (its window closed, handed over): 13 hours after that first time it stays.
+  const r = await archive(x, ["held"], now + 13 * 3600e3);
+  assert.match(r.kept.held, /^used 0 min/);
+  x.kill();
+});
+
+test("a placeholder stays when the list cannot take it: it has no other way back", async () => {
+  const { x, ff, ids } = await session([["held", "https://held.example/", {}, placeholder("held")], ["real", "https://real.example/"]]);
+  const now = Date.now();
+  await archive(x, ["held"], now); // its time starts
+  const get = x.b.storage.local.get;
+  x.b.storage.local.get = async k => { if ([k].flat().includes("archivedTabs")) throw new Error("no storage"); return get(k); };
+  const r = await archive(x, ["held", "real"], now + 13 * 3600e3);
+  assert.equal(r.kept.held, "no list");
+  assert.ok(ff.tabs.has(ids.held));
+  assert.ok((await x.js("getSynced()")).held);
+  assert.deepEqual([...r.archived], ["https://real.example/"], "a real page has Recently Closed as well");
+  assert.ok(!ff.tabs.has(ids.real));
+  x.kill();
+});
+
+test("a list holding something it should not does not stop a close, in any window", async () => {
+  const { x, ff, ids } = await session([["a", "https://a.example/"]], { more: f => { f.store.archivedTabs = { [C2]: "not rows" }; } });
+  const other = ff.addWindow();
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  x.js("(id) => { syncKeyByTab.set(id, 'a'); syncRoleByTab.set(id, 'ghost'); }")(ghost.id);
+  ff.rm(ids.a);
+  await wait(1000);
+  assert.ok(!ff.tabs.has(ghost.id), "closed everywhere");
+  assert.ok(!(await x.js("getSynced()")).a);
   x.kill();
 });
 

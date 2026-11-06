@@ -29,31 +29,41 @@ const saveArchived = list => { archivedList.set(list); viewAllSoon(); }; // an o
 
 // `entry` is the tab's record, `why` "archived" or "closed". A later close of the same
 // address in the same space replaces the earlier one: it is the same way back. A list
-// that cannot be read is no reason not to close your tab, so this never fails the close.
+// that cannot be read, or holds something it should not, is no reason not to close your
+// tab, so this never fails the close. It says whether the row is there: for a tab that is
+// only a placeholder that row is all there is (archiveIdleTabs).
 async function noteArchived(entry, why) {
-  if (!tidierAlone || !entry || entry.group || entry.liveFolder || !isWeb(entry.url)) return;
-  const list = await archivedNow().catch(noteError), now = Date.now();
-  if (!list) return;
-  const icon = entry.icon?.length <= ARCHIVED_ICON_MAX ? entry.icon : null;
-  list[entry.cookieStoreId] = [
-    { url: entry.url, title: entry.title || entry.url, icon, when: now, why },
-    ...(list[entry.cookieStoreId] || []).filter(r => r.url !== entry.url),
-  ];
-  for (const [space, rows] of Object.entries(list)) {
-    list[space] = rows.filter(r => now - r.when < ARCHIVED_KEEP_MS).slice(0, ARCHIVED_PER_SPACE);
-    if (!list[space].length) delete list[space];
+  if (!tidierAlone || !entry || entry.group || entry.liveFolder || !isWeb(entry.url)) return false;
+  try {
+    const list = await archivedNow(), now = Date.now();
+    const icon = entry.icon?.length <= ARCHIVED_ICON_MAX ? entry.icon : null;
+    list[entry.cookieStoreId] = [
+      { url: entry.url, title: entry.title || entry.url, icon, when: now, why },
+      ...(list[entry.cookieStoreId] || []).filter(r => r.url !== entry.url),
+    ];
+    for (const [space, rows] of Object.entries(list)) {
+      list[space] = rows.filter(r => now - r.when < ARCHIVED_KEEP_MS).slice(0, ARCHIVED_PER_SPACE);
+      if (!list[space].length) delete list[space];
+    }
+    saveArchived(list);
+    return true;
+  } catch (err) {
+    noteError(err);
+    return false;
   }
-  saveArchived(list);
 }
 
 // What the list holds, newest first, as { url, title, icon, when, why, space }: one
 // space's (a tab without a container belongs to whichever space you are in, as in the
 // sidebar), or every space's with no `space` (the command bar). Old entries are left out
-// here too, since they are only removed at the next close.
+// here too, since they are only removed at the next close, and so is a container that is
+// gone: its tabs cannot be opened in it any more, and a tab still closing after it was
+// removed, or one removed while Tidier was not running, can leave a row behind.
 async function archivedTabs(space) {
   if (!tidierAlone) return [];
   const list = await archivedNow(), now = Date.now();
-  return [...new Set(space ? [space, NO_CONTAINER] : Object.keys(list))]
+  const spaces = space ? [space, NO_CONTAINER] : [NO_CONTAINER, ...(await containerSpaces()).map(s => s.id)];
+  return [...new Set(spaces)]
     .flatMap(s => (list[s] || []).filter(r => now - r.when < ARCHIVED_KEEP_MS).map(r => ({ ...r, space: s })))
     .sort((a, b) => b.when - a.when);
 }

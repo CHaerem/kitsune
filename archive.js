@@ -49,8 +49,11 @@ async function archiveIdleTabs({ now = Date.now(), onlyKeys, explain = false } =
     const why = keepReason(all, key, repsOf(key, tabs), tabsById, now, since, hours);
     if (why) { kept[key] = why; continue; }
     if (!(await closesQuietly(key))) { kept[key] = "unsaved"; continue; }
+    // A real page has Recently Closed as well. A tab that is only a placeholder has nothing
+    // there, so if the list cannot take it, closing it would lose it for good: it stays.
+    const noted = await noteArchived(all[key], "archived");
+    if (!noted && isGhostUrl(tabsById.get(liveTabId(key))?.url)) { kept[key] = "no list"; continue; }
     archived.push(all[key].url);
-    await noteArchived(all[key], "archived");
     await closeEverywhere(key, { dismiss: false });
   }
   return explain ? { archived, kept } : archived;
@@ -91,6 +94,19 @@ function keepReason(all, key, reps, tabsById, now, since, hours) {
   if (now - lastUsed < hours * 3600e3) return "used " + Math.round((now - lastUsed) / 60000) + " min ago";
   return null;
 }
+
+// Selected, it is in use: if its window then closes, its time as a placeholder starts
+// anew from there. A check cannot see this: it stops at "selected" while it is, and may
+// not come at all before the window closes, and then an old time would close a tab you
+// used a minute ago.
+browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  const key = syncKeyByTab.get(tabId);
+  if (!tidierAlone || !started || !key) return;
+  const all = await getSynced();
+  if (!all[key]?.placeholderSince) return;
+  delete all[key].placeholderSince;
+  saveSynced(all, { lazy: true });
+});
 
 browser.alarms.create("archive", { periodInMinutes: ARCHIVE_CHECK_MINUTES });
 browser.alarms.onAlarm.addListener(alarm => {
