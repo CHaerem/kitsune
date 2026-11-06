@@ -85,6 +85,7 @@ export class FakeFirefox {
       onCreated: ev(), onUpdated: ev(), onRemoved: ev(), onMoved: ev(), onActivated: ev(), onAttached: ev(), onDetached: ev(),
       query: async (q = {}) => { if (ff.hooks.query) await ff.hooks.query(q); let out = [...ff.wins.values()].flatMap(w => ff.list(w.id));
         for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId"]) if (q[k] !== undefined) out = out.filter(t => t[k] === q[k]);
+        if (q.currentWindow) out = out.filter(t => t.windowId === ff.focused);
         return out; },
       get: async id => ff.snap(need(id)),
       create: async p => {
@@ -104,6 +105,7 @@ export class FakeFirefox {
         return ff.snap(t);
       },
       move: async (id, { windowId, index }) => {
+        if (index === -1) index = ff.wins.get(windowId ?? need(id).windowId).order.length - ((windowId ?? need(id).windowId) === need(id).windowId ? 1 : 0);
         const t = need(id); const from = ff.wins.get(t.windowId);
         const to = windowId ?? t.windowId;
         const fromIndex = from.order.indexOf(id);
@@ -120,6 +122,8 @@ export class FakeFirefox {
         return ff.snap(t);
       },
       remove: async ids => { ids = Array.isArray(ids) ? ids : [ids]; ids.forEach(need); for (const id of ids) { ff.log.push(["remove", id, ff.tabs.get(id).url]); ff.rm(id); } },
+      show: async ids => { ff.log.push(["show", ids]); for (const id of [ids].flat()) need(id).hidden = false; },
+      hide: async ids => { ff.log.push(["hide", ids]); for (const id of [ids].flat()) { const t = need(id); if (!t.pinned && !t.active) t.hidden = true; } },
       discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id)) t.discarded = true; },
     };
     b.windows = {
@@ -137,15 +141,19 @@ export class FakeFirefox {
       getRecentlyClosed: async () => ff.recentlyClosed || [],
       forgetClosedTab: async (windowId, sessionId) => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.tab?.sessionId !== sessionId); },
     };
-    b.storage = { local: {
+    b.storage = { managed: { get: async () => ff.managed || {} }, local: {
       get: async k => { const ks = typeof k === "string" ? [k] : k; const o = {}; for (const x of ks) if (x in ff.store) o[x] = JSON.parse(JSON.stringify(ff.store[x])); return o; },
       set: async o => { ff.storeWrites = (ff.storeWrites || 0) + 1; Object.assign(ff.store, JSON.parse(JSON.stringify(o))); },
     } };
     b.alarms = { create() {}, onAlarm: ev() };
-    b.runtime = { id: "tidier", getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
+    b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
       sendNativeMessage: () => reject("no host") };
-    b.contextualIdentities = { query: async () => [], onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
-    b.commands = { onCommand: ev() };
+    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(c => ({ cookieStoreId: c, name: c, colorCode: "#000", icon: "circle" })), onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
+    b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
+    b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
+    b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
+    b.permissions = { onAdded: ev(), onRemoved: ev() };
+    b.sidebarAction = { toggle: async () => {} };
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };
     const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {} });

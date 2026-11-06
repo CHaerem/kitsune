@@ -17,6 +17,7 @@
 const ownFolderMoves = new Set();
 
 async function foldersFirst(windowId) {
+  if (tidierAlone) return; // Tidier's sidebar draws folders first itself
   const win = await browser.windows.get(windowId).catch(() => null);
   if (!win || win.type !== "normal" || win.incognito) return;
   const tabs = (await browser.tabs.query({ windowId, pinned: false })).sort((a, b) => a.index - b.index);

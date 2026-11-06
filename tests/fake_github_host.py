@@ -23,7 +23,10 @@ def main():
         data = json.load(open(os.environ["TIDIER_FAKE_PRS"]))
     except (KeyError, OSError, ValueError):
         data = {}
-    if msg.get("list"):
+    if "backup" in msg:
+        json.dump(msg["backup"], open(os.environ["TIDIER_FAKE_PRS"] + ".copy", "w"))
+        reply = {"saved": "copy"}
+    elif msg.get("list"):
         reply = {"folders": data.get("folders", [])}
     elif msg.get("folder") in data.get("items", {}):
         reply = {"items": data["items"][msg["folder"]]}

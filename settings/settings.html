@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tidier settings</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <h1>Tidier</h1>
+  <div id="notices"></div>
+
+  <section id="alone-section">
+    <h2>Tidier alone</h2>
+    <p id="alone-state"></p>
+    <button id="allow-hiding" hidden>Let Tidier hide the other spaces' tabs</button>
+    <div id="move" hidden>
+      <p>This moves this browser from Sidebery to Tidier's own sidebar, spaces and folders. Nothing is closed until the record of it is written, and it can be undone.</p>
+      <ul id="report"></ul>
+      <ol>
+        <li>Disable Sidebery in <code>about:addons</code>. Keep it installed. (With it running, closing a folded folder's page would close the tabs in it.)</li>
+        <li><button id="move-over">Move to Tidier alone</button></li>
+      </ol>
+    </div>
+    <div id="move-back" hidden>
+      <p>To go back: enable Sidebery in <code>about:addons</code> first.</p>
+      <button id="do-move-back">Go back to Sidebery</button>
+    </div>
+    <p><label><input type="file" id="sidebery-file" accept=".json"> Import rules and the order of spaces from Sidebery's export</label></p>
+    <p id="sidebery-result"></p>
+  </section>
+
+  <section>
+    <h2>Spaces</h2>
+    <p class="hint">A space is a Firefox container, with its own logins.</p>
+    <div id="spaces"></div>
+  </section>
+
+  <section>
+    <h2>Rules</h2>
+    <p class="hint">An address always opens in a given space. Text to find in the address, or /a regular expression/. Looked at for a tab's first page only.</p>
+    <div id="rules"></div>
+    <button id="add-rule">Add a rule</button>
+  </section>
+
+  <section>
+    <h2>Tabs that tidy themselves</h2>
+    <label>Close tabs not used for <input type="number" id="archive-hours" min="0" step="1"> hours (0: never)</label>
+  </section>
+
+  <section>
+    <h2>A copy of your essentials and folders</h2>
+    <p id="copy-state"></p>
+    <button id="copy-now">Make a copy now</button>
+    <button id="copy-save">Save a copy as a file…</button>
+    <p><label><input type="file" id="copy-file" accept=".json"> Take in a copy (from this or another machine)</label></p>
+    <div id="merge" hidden>
+      <div id="merge-spaces"></div>
+      <button id="merge-go">Take these in</button>
+    </div>
+    <p id="merge-result"></p>
+  </section>
+
+  <p class="hint" id="version"></p>
+  <script src="settings.js"></script>
+</body>
+</html>

@@ -48,21 +48,22 @@ step, and then grows into everything wanted from Arc and Zen.
 
 ### Where it stands (November 2026)
 
-Tidier still runs on top of Sidebery, which draws the vertical tabs, folders
-and the space bar; everything below this section describes that setup. It is
-being replaced by Tidier's own sidebar (`sidebar/`, `sidebar-view.js`):
-essentials of the active space as tiles at the top, its folders and tabs
-below, the spaces at the bottom. In order:
+The daily browser still runs on top of Sidebery, which draws the vertical tabs,
+folders and the space bar; everything below this section describes that setup.
 
-1. The sidebar's view (done; not yet your default sidebar).
-2. Spaces: hiding the other spaces' tabs, and new tabs in the active space.
-3. Folders as Tidier's own data, instead of Sidebery's folder pages.
-4. Dragging, a context menu and keys in the sidebar.
-5. Moving Sidebery's folders and spaces over, once, without losing anything.
-6. Removing what exists only because of Sidebery (folders first, its tree
-   rules, waiting for its sidebar), and Sidebery itself.
-7. The same essentials, folders and spaces on every machine, by sync, with
-   spaces that can be hidden per machine (a workplace's space only on its Mac).
+**Tidier alone** replaces it: Tidier's own sidebar (`sidebar/`, `sidebar-view.js`),
+with essentials of the active space as tiles at the top, its folders and tabs below
+and the spaces at the bottom; spaces that hide each other's tabs (`spaces.js`);
+folders as Tidier's own data (`ownfolders.js`); rules for addresses; and a settings
+page. It sits behind a setting, off by default, since Sidebery and Tidier would fight
+over the same tabs: `tidierAlone` in the extension's storage, or declared for a
+machine in managed storage. A browser is moved over on the settings page
+(`moveover.js`), never by an update, and can be moved back.
+
+In order: a second Mac on Tidier alone first; then the daily browser; then Sidebery
+and what exists only because of it removed; then the same essentials, folders and
+spaces on every machine by sync, with spaces that can be hidden per machine (a
+workplace's space only on its Mac). All of it is in [PLAN.md](PLAN.md).
 
 All the features worth having from Zen, Arc and Sidebery, and where Tidier
 stands with each, are listed in [FEATURES.md](FEATURES.md). Everything that has to
@@ -305,9 +306,16 @@ changes how new tabs are handled.
 ## Permissions
 
 `tabs`, `sessions`, `storage`, `cookies` (to open tabs in a container),
-`nativeMessaging` (the pull request search), `alarms` (its refresh) and
-`clipboardWrite` (⌘⇧C). `alarms` also runs the archiving check. No host
-permissions, no network access from the extension, no data collection.
+`contextualIdentities` (the spaces), `nativeMessaging` (the pull request search and
+the daily copy), `alarms` (their timing, and archiving), `clipboardWrite` (⌘⇧C), and
+`menus` and `menus.overrideContext` (the context menu in Tidier's sidebar).
+`tabHide` is optional, asked for when Tidier alone is turned on: a permission
+added to the required ones makes Firefox hold every later update until it is
+approved, with only a badge to show it (a unit test stops that).
+
+No host permissions and no data collection. The only network use is icons: a
+placeholder with no saved icon tries the site's `/favicon.ico`, and Tidier's sidebar
+loads tabs' icons from where the site has them.
 
 ## Files
 
@@ -322,6 +330,11 @@ permissions, no network access from the extension, no data collection.
 - `ghost.html` / `ghost.js` – placeholder page for ghosts, essential copies and never-loaded live tabs.
 - `archive.js` – archiving of unused tabs.
 - `shortcuts.js` – ⌘⇧C, copy the address.
+- `spaces.js` – spaces: hiding, switching, new tabs and links, rules.
+- `ownfolders.js` – Tidier's own folders, moving tabs, the tab's context menu.
+- `sidebar-view.js`, `sidebar/` – Tidier's own sidebar.
+- `copies.js` – the daily copy of Tidier's data, and taking one in.
+- `moveover.js`, `settings/` – the settings page, and moving a browser over from Sidebery.
 - `tools/fix_spaces.py` – put tabs back in their own Sidebery space (in your
   own Firefox, which it restarts).
 - `tests/` – the smoke test, the test Firefox and its fixtures.
@@ -384,7 +397,7 @@ From fastest to most complete:
 ```bash
 node --test                          # unit tests, a few seconds
 tests/smoke.py --only trees,folders  # some smoke test groups, about a minute
-tests/smoke.py                       # the whole smoke test, about three minutes
+tests/smoke.py                       # the whole smoke test, about five minutes
 tests/smoke.py --installed           # the signed version installed in your Firefox
 tests/smoke.py --xpi FILE            # a given signed .xpi
 tests/smoke.py --serial              # in one test Firefox, as on GitHub (about nine minutes)
@@ -400,8 +413,10 @@ call during a start, an essential in a removed container.
 
 The group names for `--only` are the check functions in `tests/smoke.py`
 (`new_window`, `essentials`, `folders`, `trees`, …); a group that needs the
-second window gets it first. Without `--only`, the groups run in three test
-Firefoxes at once (`SHARDS`).
+second window gets it first. Without `--only`, the groups run in several test
+Firefoxes at once (`SHARDS`), one of them without Sidebery, for Tidier alone
+(`ALONE_GROUPS`, in `alone_*`). Only one smoke test can run at a time on a machine:
+they would use the same ports. A second one says so.
 
 The smoke test runs in an invisible test Firefox with a throwaway profile
 (`tests/testfirefox.py`), so it never touches your own Firefox: no restart, no

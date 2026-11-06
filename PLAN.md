@@ -41,34 +41,35 @@ Rules for all of it:
       0.6 s of a pull closes everywhere.
 - [x] A title or icon change writes the tab record only when something changed.
 - [x] A page with unsaved input is not closed by archiving or a live folder.
-- [ ] Tidier keeps a copy of its own data: essentials, folders and saved tabs, as a
-      dated file through the native host, restored from Tidier itself.
-- [ ] A live folder that has stopped (no host, no `gh` login) shows it.
-- [ ] README's permissions, files and claims match what is there.
+- [x] Tidier keeps a copy of its own data: essentials, folders and saved tabs, as a
+      dated file through the native host, taken in again from Tidier itself.
+- [x] A live folder that has stopped (no host, no `gh` login) shows it.
+- [x] README's permissions, files and claims match what is there.
 
 ## B. Tidier alone (behind the setting)
 
-1. **The setting and the test Firefox.** `tidierAlone`, from the extension's storage or
-   declared in managed storage for a machine. A test Firefox without Sidebery, with
-   folders and essentials as Tidier's own data, run in every smoke test. With the
-   setting on, the waits and moves that exist only for Sidebery do not run.
-2. **The sidebar as the sidebar.** A key and a toolbar button for it, back after
-   every update. Checks of what it shows and does, and of its idle cost. It draws
-   only what changed, so clicks and drags are not lost.
-3. **Spaces.** Other spaces' tabs hidden, also from ⌃Tab (`tabHide`, optional, so
-   updates never wait for a click). Switching with the bar and ⌃1/2/3, also to an
-   empty space. New tabs and links from other apps in the active space. Closing the
-   last tab of a space stays in the space. Space names and order in the sidebar.
-4. **Folders as Tidier's data.** Create, rename, delete, fold. A folder has no tab
-   of its own, and no tab event can delete it. Saved tabs, archiving and live
-   folders work on these folders.
-5. **Using it.** Drag tabs, into and out of folders, between essentials and
-   tabs and to other spaces; the order follows in every window. A new tab button.
-   The context menu on tabs, folders and spaces. Sound indicator and mute. Keys.
-6. **Rules.** An address always opens in a given space, as Sidebery's container
-   rules do, edited in Tidier.
-7. **Settings in Tidier.** A page for all of the above, and the shortcuts in one
-   place.
+A first version of all of it works in the test Firefox, without Sidebery.
+
+- [x] **The setting and the test Firefox.** `tidierAlone`, from the extension's storage or
+      declared in managed storage for a machine. A test Firefox without Sidebery, run in
+      every smoke test. With the setting on, what exists only for Sidebery does not run.
+- [x] **The sidebar as the sidebar.** A key and a button for it, back after an update.
+      Checks of what it shows and does, and of its idle cost. It draws only what
+      changed, so clicks and drags are not lost.
+- [x] **Spaces.** Other spaces' tabs hidden, also from ⌃Tab (`tabHide`, optional, so
+      updates never wait for a click). Switching with the bar and ⌃1/2/3, also to an
+      empty space. New tabs and links from other apps in the active space. Closing the
+      last tab of a space stays in the space.
+- [x] **Folders as Tidier's data.** Create, rename, delete, fold. A folder has no tab
+      of its own, and no tab event can delete it. Saved tabs, archiving and live
+      folders work on these folders.
+- [x] **Using it.** Drag tabs, into and out of folders, between essentials and tabs and to
+      other spaces; the order follows in every window. A new tab button. Firefox's tab
+      menu with Tidier's items, and a menu on folders. Sound indicator and mute. Keys.
+- [x] **Rules.** An address always opens in a given space, edited in Tidier.
+- [x] **Settings in Tidier.** A page for the rules, spaces' names, archiving, copies and
+      moving over.
+- [ ] **What Sidebery does well**, in Tidier's own simple way: see below.
 
 ## C. Trying it on the second Mac
 
@@ -81,11 +82,11 @@ Rules for all of it:
 ## D. Moving the daily browser
 
 - [ ] A copy taken first, by hand, of the whole Firefox profile and Sidebery's export.
-- [ ] Rules, order of spaces and folds imported from Sidebery's export, which is the
-      only place they can be read from.
-- [ ] One explicit click, never an update: a report of what will happen, then the
-      record is written, and only then are folder pages closed. It can be resumed
-      after a crash, and undone.
+- [x] Rules and order of spaces imported from Sidebery's export, which is the only
+      place they can be read from.
+- [x] One explicit click, never an update: a report of what will happen, then the
+      record is written, and only then are folder pages closed. It can be undone.
+      Checked with a real Sidebery in the test Firefox, there and back.
 - [ ] Sidebery disabled but installed for a few weeks.
 
 ## E. Without Sidebery, everywhere

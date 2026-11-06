@@ -432,3 +432,243 @@ test("placeholders Firefox closed at an update are not left in Recently Closed",
   assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["2"]);
   x.kill();
 });
+
+// --- A copy of Tidier's data ---------------------------------------------------------
+test("a copy can be made, and a failure to is shown", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = four().slice(0, 1);
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  emptySession(ff);
+  const x = await run(ff);
+  x.b.runtime.sendNativeMessage = async (host, msg) => { ff.copied = msg.backup; return { saved: "file" }; };
+  await x.js("makeCopy()");
+  assert.deepEqual(Object.keys(ff.copied.data.syncedTabs), ["a"]);
+  assert.equal(ff.copied.data.essentials[0].key, "a");
+  assert.ok(ff.store.lastCopy > 0);
+  x.b.runtime.sendNativeMessage = async () => { throw new Error("no host"); };
+  await x.js("makeCopy()");
+  assert.equal(ff.badge, "!");
+  x.kill();
+});
+
+test("a copy is taken in by merging: only the chosen spaces, and nothing removed", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "here", url: "https://here.example/", cookieStoreId: C1, title: "Here", icon: "x" }];
+  ff.store.syncedTabs = { mine: entry("https://mine.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://mine.example/", active: true, cookieStoreId: C1 }, { syncKey: "mine", syncRole: "live" });
+  const x = await run(ff);
+  const C2 = "firefox-container-2";
+  const copy = { data: {
+    essentials: [
+      { key: "e1", url: "https://e1.example/", cookieStoreId: C1, title: "E1" },
+      { key: "e2", url: "https://e2.example/", cookieStoreId: C2, title: "E2" },
+      { key: "dup", url: "https://here.example/", cookieStoreId: C1, title: "Here" },
+    ],
+    syncedTabs: {
+      F: entry("moz-extension://sb/sidebery/group.html#Work", { group: true }),
+      kept: entry("https://kept.example/deep", { parentKey: "F", saved: { url: "https://kept.example/", title: "Kept" } }),
+      skip: entry("https://skip.example/"),
+      other: entry("https://other.example/", { cookieStoreId: C2, parentKey: "G", saved: { url: "https://other.example/", title: "Other" } }),
+      G: entry("moz-extension://sb/sidebery/group.html#Elsewhere", { group: true, cookieStoreId: C2 }),
+    },
+  } };
+  const r = await x.js("mergeCopy")(copy, [C1]);
+  assert.deepEqual({ ...r }, { essentials: 1, folders: 1, tabs: 1 });
+  await wait(1000);
+  assert.deepEqual(ff.store.essentials.map(e => e.key).sort(), ["e1", "here"]);
+  assert.deepEqual(Object.keys(ff.synced).sort(), ["F", "kept", "mine"]);
+  assert.equal(ff.synced.kept.url, "https://kept.example/", "back at its saved address");
+  assert.ok(ff.urls(w.id).includes("https://mine.example/"));
+  assert.ok(ff.list(w.id).some(t => t.url === GHOST("ghost", "kept")));
+  x.kill();
+});
+
+// --- Tidier alone ----------------------------------------------------------------------
+async function alone(ff) {
+  ff.managed = { tidierAlone: true };
+  ff.containers.add("firefox-container-4");
+  return run(ff);
+}
+
+test("with the setting off, nothing is hidden or reopened", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/", { cookieStoreId: "firefox-container-2" }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: "firefox-container-2" }, { syncKey: "b", syncRole: "live" });
+  const x = await run(ff);
+  ff.select(ff.list(w.id)[1].id);
+  await wait(500);
+  const fresh = ff.addTab(w.id, { url: "about:newtab" });
+  x.b.tabs.onCreated.fire(ff.snap(fresh));
+  await wait(500);
+  assert.equal(x.js("tidierAlone"), false);
+  assert.ok(ff.tabs.has(fresh.id), "not opened again");
+  assert.ok(!ff.log.some(l => l[0] === "hide"));
+  assert.equal(ff.commandsSet, undefined, "keys are left to Sidebery");
+  x.kill();
+});
+
+test("folders are in the record and no tab event can delete them", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  const t = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  const key = await x.js("createFolder")("Work", C1);
+  await x.js("moveTab")(w.id, t.id, null, key);
+  await wait(500);
+  assert.equal(ff.synced[key].name, "Work");
+  assert.equal(ff.synced.a.parentKey, key);
+  assert.ok(ff.synced.a.saved, "a tab in a folder is saved");
+  // Another start: the folder has no tab, and stays. No tab appears for it.
+  x.kill();
+  const y = await run(ff);
+  assert.ok(ff.synced[key]);
+  assert.equal(ff.list(w.id).length, 1);
+  // Deleting it keeps the tab, as an ordinary tab.
+  await y.js("deleteFolder")(key);
+  await wait(500);
+  assert.ok(!ff.synced[key]);
+  assert.equal(ff.synced.a.parentKey, null);
+  assert.ok(!ff.synced.a.saved);
+  y.kill();
+});
+
+test("closing a saved tab in Tidier's own folder unloads it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: { group: true, own: true, name: "Work", cookieStoreId: C1, parentKey: null, rank: 1 }, a: entry("https://a.example/", { parentKey: "F", saved: { url: "https://a.example/", title: "A" } }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const t = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  await wait(500);
+  ff.rm(t.id);
+  await wait(1000);
+  assert.ok(ff.synced.a);
+  assert.ok(ff.list(w.id).some(y => y.url === GHOST("ghost", "a")));
+  x.kill();
+});
+
+test("a rule opens an address in its space, for a tab's first page only", async () => {
+  const ff = new FakeFirefox();
+  ff.store.rules = [{ url: "/^https:\\/\\/work\\.example\\//", space: "firefox-container-2" }];
+  const w = ff.addWindow({ focused: true });
+  const home = ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const x = await alone(ff);
+  const t = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  await wait(100);
+  ff.navigate(t.id, "https://work.example/page");
+  await wait(500);
+  assert.ok(!ff.tabs.has(t.id), "the first page moved it");
+  assert.ok(ff.list(w.id).some(y => y.url === "https://work.example/page" && y.cookieStoreId === "firefox-container-2"));
+  // A tab that already has a page stays when it passes through the address (a sign-in).
+  const other = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(other));
+  ff.navigate(other.id, "https://other.example/");
+  await wait(200);
+  ff.navigate(other.id, "https://work.example/sign-in");
+  await wait(500);
+  assert.ok(ff.tabs.has(other.id));
+  assert.ok(ff.tabs.has(home.id));
+  x.kill();
+});
+
+// --- Moving over from Sidebery ------------------------------------------------------------
+test("moving over keeps every folder and tab, and moving back brings the pages back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = {
+    F: entry("moz-extension://sb/sidebery/group.html#Work", { group: true }),
+    a: entry("https://a.example/", { parentKey: "F", saved: { url: "https://a.example/", title: "A" } }),
+    b: entry("https://b.example/"),
+  };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "moz-extension://sb/sidebery/group.html#Work", cookieStoreId: C1 }, { syncKey: "F", syncRole: "copy" });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const x = await run(ff);
+  let reloaded = 0;
+  x.b.runtime.reload = () => { reloaded++; };
+  x.b.runtime.sendNativeMessage = async () => ({ saved: "file" });
+  const report = await x.js("moveReport")();
+  assert.deepEqual(JSON.parse(JSON.stringify(report.folders.map(f => [f.name, f.tabs]))), [["Work", 1]]);
+  await x.js("moveOver")();
+  assert.equal(reloaded, 1);
+  assert.equal(ff.store.tidierAlone, true);
+  assert.equal(ff.store.syncedTabs.F.own, true, "the record is written before Tidier starts again");
+  assert.equal(ff.store.syncedTabs.F.name, "Work");
+  // Tidier starts again: only now is the page closed, and every tab stays.
+  x.kill();
+  const y = await run(ff, "onInstalled");
+  assert.equal(y.js("tidierAlone"), true);
+  assert.ok(!ff.list(w.id).some(t => t.url.includes("group.html")));
+  assert.deepEqual(Object.keys(ff.synced).sort(), ["F", "a", "b"]);
+  assert.ok(ff.synced.a.saved);
+  // And back.
+  let again = 0;
+  y.b.runtime.reload = () => { again++; };
+  await y.js("moveBack")();
+  assert.equal(again, 1);
+  assert.equal(ff.store.tidierAlone, false);
+  assert.ok(ff.list(w.id).some(t => t.url.includes("group.html")));
+  assert.equal(ff.store.syncedTabs.F.url, "moz-extension://sb/sidebery/group.html#Work");
+  assert.ok(!ff.store.syncedTabs.F.own);
+  y.kill();
+});
+
+test("Sidebery's rules and order of spaces come from its export", async () => {
+  const ff = new FakeFirefox();
+  emptySession(ff);
+  const x = await run(ff);
+  const r = await x.js("importSidebery")({
+    containers: {
+      "firefox-container-1": { id: "firefox-container-1", reopenRulesActive: true, reopenRules: [{ active: true, url: "/^https:\\/\\/a\\//" }, { active: false, url: "off" }] },
+      "firefox-container-2": { id: "firefox-container-2", reopenRulesActive: false, reopenRules: [{ active: true, url: "ignored" }] },
+    },
+    sidebar: { nav: ["p2", "p1", "settings"], panels: { p1: { newTabCtx: "firefox-container-1" }, p2: { newTabCtx: "firefox-container-2" } } },
+  });
+  assert.deepEqual({ ...r }, { rules: 1, order: 2 });
+  await wait(500);
+  assert.deepEqual(ff.store.rules, [{ url: "/^https:\\/\\/a\\//", space: "firefox-container-1" }]);
+  assert.deepEqual(ff.store.spaceOrder, ["firefox-container-2", "firefox-container-1"]);
+  x.kill();
+});
+
+test("a tab's first web page in no container is opened again in the active space", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const home = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const x = await alone(ff);
+  await wait(200);
+  const typed = ff.addTab(w.id, { url: "about:blank", active: false });
+  x.b.tabs.onCreated.fire(ff.snap(typed));
+  await wait(4000); // long after a new tab is expected to have got an address
+  ff.navigate(typed.id, "https://typed.example/");
+  await wait(500);
+  assert.ok(!ff.tabs.has(typed.id));
+  assert.ok(ff.list(w.id).some(t => t.url === "https://typed.example/" && t.cookieStoreId === C1));
+  assert.ok(ff.tabs.has(home.id));
+  x.kill();
+});
+
+test("an essential unpinned while loaded is an ordinary synced tab again", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  await x.b.tabs.update(t.id, { pinned: false });
+  await wait(3000);
+  const key = ff.values.get(t.id)?.syncKey;
+  assert.ok(key, "it has a key");
+  assert.ok(ff.synced[key]);
+  assert.ok(ff.list(other.id).some(y => y.url === GHOST("ghost", key)), "and a ghost in the other window");
+  x.kill();
+});
+

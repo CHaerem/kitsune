@@ -46,8 +46,13 @@ async function ensureFolderGroup(folder, state) {
   const all = await getSynced();
   if (state.groupKey && all[state.groupKey]) return state.groupKey;
   const existing = Object.entries(all).find(([, e]) =>
-    e.group && e.cookieStoreId === folder.cookieStoreId && groupName(e.url) === folder.name);
+    e.group && e.cookieStoreId === folder.cookieStoreId && (e.own ? e.name : groupName(e.url)) === folder.name);
   if (existing) { state.groupKey = existing[0]; await saveFolderState(); return state.groupKey; }
+  if (tidierAlone) {
+    state.groupKey = await createFolder(folder.name, folder.cookieStoreId, { live: folder.id }); // ownfolders.js
+    await saveFolderState();
+    return state.groupKey;
+  }
 
   const [base, windowId] = await Promise.all([sideberyGroupBase(), homeWindowId()]);
   if (!base || windowId === undefined) return null;
@@ -93,7 +98,12 @@ function searchLiveFolder(folder) {
 }
 
 async function refreshLiveFolder(folder, res) {
-  if (!res || res.error || !Array.isArray(res.items)) { console.warn("Tidier: live folder", folder.id, res?.error); return; }
+  if (!res || res.error || !Array.isArray(res.items)) {
+    console.warn("Tidier: live folder", folder.id, res?.error);
+    // A live folder that has stopped keeps its tabs, so it looks as if nothing has happened.
+    setNotice("live", `Live folder "${folder.name}" is not updating: ${res?.error || "no answer"}`);
+    return;
+  }
   const state = await folderState(folder.id);
   const groupKey = await ensureFolderGroup(folder, state);
   if (!groupKey) return;
@@ -143,14 +153,18 @@ async function noteLiveFolderDismissed(entry) {
   await saveFolderState();
 }
 
-// The folders from the host's config; none if the host is not installed.
+// The folders from the host's config; none if the host is not installed, which is
+// only a problem if there have been live folders here.
 async function liveFolders() {
   const res = await browser.runtime.sendNativeMessage(NATIVE_HOST, { list: true }).catch(() => null);
+  if (!res && Object.keys(await liveFolderState.get()).length) setNotice("live", "Live folders are not updating: their helper does not answer (native/install.sh)");
   return Array.isArray(res?.folders) ? res.folders.map(f => ({ id: f.id, name: f.name, cookieStoreId: f.container })) : [];
 }
 
 async function refreshAllLiveFolders() {
-  for (const f of await liveFolders()) {
+  const folders = await liveFolders();
+  if (folders.length) setNotice("live", null);
+  for (const f of folders) {
     const res = await searchLiveFolder(f);
     await serial(() => refreshLiveFolder(f, res)).catch(() => {}); // logged by serial()
   }

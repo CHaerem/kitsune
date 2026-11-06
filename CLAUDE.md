@@ -22,11 +22,13 @@ sidebar. Nothing that exists only for Sidebery gets better from here.
 ```bash
 node --test                                   # unit tests, a few seconds
 tests/smoke.py --only essentials,tab_sync     # some groups, about a minute
-tests/smoke.py                                # everything, three Firefoxes at once, about four minutes
+tests/smoke.py                                # everything, several Firefoxes at once, about five minutes
 ```
 
 - Run the smoke test under `nice -n 19` (and `taskpolicy -b` on macOS) so the
   user's machine stays responsive.
+- Two smoke tests at once need their own ports: `--port 3000` (it uses the next
+  ones as well), or the second one stops and says so.
 - `--only` adds the setup groups a group needs (NEEDS in smoke.py).
 - A failure that happens "sometimes" is real: rerun the group alone and with
   two runs in parallel (load makes timing bugs show), and compare with the

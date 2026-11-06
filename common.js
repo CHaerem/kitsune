@@ -39,8 +39,32 @@ globalThis.addEventListener?.("unhandledrejection", event => noteError(event.rea
 // jobs run in the queue and how long they held it (waits for Sidebery
 // included), tab lookups made outside it (noteOrder, tabsync.js), and the
 // timed checks (archiving, live folders), the only work with nothing happening.
-const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0, errors: 0 };
+const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0, errors: 0, views: 0 };
 browser.alarms.onAlarm.addListener(() => { work.alarms++; });
+
+// Tidier alone: Tidier's own sidebar, spaces and folders, with no Sidebery. Off by
+// default, since Sidebery and Tidier would fight over the same tabs: every commit
+// reaches the daily browser, which runs Sidebery until it is moved over (PLAN.md).
+// Set in the extension's storage, or declared for a machine in managed storage.
+// Everything that exists only because of Sidebery is skipped when it is on.
+let tidierAlone = false;
+async function readAlone() {
+  const managed = await browser.storage.managed.get("tidierAlone").catch(() => ({}));
+  const local = await browser.storage.local.get("tidierAlone");
+  tidierAlone = !!(managed.tidierAlone ?? local.tidierAlone);
+}
+
+// Something you should know and would otherwise not see, such as a live folder that
+// has stopped: shown on Tidier's button (in the Extensions menu) and in its sidebar.
+const notices = new Map(); // kind -> text
+function setNotice(kind, text) {
+  if ((notices.get(kind) ?? null) === (text ?? null)) return;
+  if (text) notices.set(kind, text); else notices.delete(kind);
+  const first = [...notices.values()][0];
+  browser.browserAction.setBadgeText({ text: first ? "!" : "" });
+  browser.browserAction.setTitle({ title: first ? "Tidier: " + first : "Tidier" });
+  viewAllSoon();
+}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const isWeb = url => /^https?:/i.test(url || "");
@@ -191,6 +215,10 @@ const FOLDERS_SETTLE_MS = 400;
 // folder closed with it is gone too (see onSyncedClosed in tabsync.js).
 const FOLDER_CLOSE_SETTLE_MS = 300;
 
+// A folder of Tidier's own (Tidier alone): only an entry in the tab record, with no
+// tab of its own, so no tab event can delete it (ownfolders.js).
+const isOwnFolder = entry => !!entry?.group && !!entry.own;
+
 // --- Saved tabs --------------------------------------------------------------
 // A tab in a Sidebery folder (at any depth) is *saved*, like a tab in Arc's
 // pinned section: ⌘W unloads it instead of closing it, and it goes back to the
@@ -248,12 +276,15 @@ browser.windows.onFocusChanged.addListener(id => { focusedWindowId = id; });
 // It is written at most once every LAZY_WRITE_MS; a title lost in a crash comes back
 // with the page. Any other change is written at once and takes the lazy one along.
 const WRITE_DELAY_MS = 300, LAZY_WRITE_MS = 30000;
+const unwritten = new Set(); // what `flushWrites` must write now
 function storedValue(storageKey, empty) {
   let value = null, timer = null, lastWrite = 0;
   const write = () => {
+    clearTimeout(timer);
     timer = null;
+    unwritten.delete(write);
     lastWrite = Date.now();
-    browser.storage.local.set({ [storageKey]: value });
+    return browser.storage.local.set({ [storageKey]: value });
   };
   return {
     async get() {
@@ -262,12 +293,15 @@ function storedValue(storageKey, empty) {
     },
     set(next, { lazy = false } = {}) {
       value = next;
+      unwritten.add(write);
       if (lazy && timer !== null) return; // a write is on its way anyway
       clearTimeout(timer);
       timer = setTimeout(write, lazy ? Math.max(WRITE_DELAY_MS, lastWrite + LAZY_WRITE_MS - Date.now()) : WRITE_DELAY_MS);
     },
   };
 }
+
+const flushWrites = () => Promise.all([...unwritten].map(write => write()));
 
 // A tab's parent in Sidebery's tree, from openerTabId, which Sidebery keeps
 // equal to the parent. Sidebery counts a parent only before its children, and

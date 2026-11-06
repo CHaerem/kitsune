@@ -85,9 +85,10 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
   for (const { entry, index } of items) {
     // Refused if its container was removed while Tidier was not running. One bad
     // entry must not keep a window from getting the others, or stop Tidier starting.
+    // (Without Sidebery a copy can be pinned from the start.)
     const tab = await browser.tabs.create({
       windowId, url: ghostUrl("essential", entry.key), active: false,
-      cookieStoreId: entry.cookieStoreId, index,
+      cookieStoreId: entry.cookieStoreId, index, ...(tidierAlone ? { pinned: true } : {}),
     }).catch(err => { noteError(err); return null; });
     if (!tab) continue;
     busy.add(tab.id);
@@ -97,8 +98,10 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
   }
   if (!tabs.length) return;
   try {
-    await settle(tabs);
-    await pinEssentialCopies(tabs);
+    if (!tidierAlone) {
+      await settle(tabs);
+      await pinEssentialCopies(tabs);
+    }
     // Created unpinned, they could not be put among the pinned tabs, and
     // pinning puts each last: now each goes to its place in the list.
     await sortEssentials(windowId, await getList());
@@ -220,6 +223,9 @@ async function onUnpinned(tab) {
   const list = await getList();
   const entry = list.find(e => e.key === key);
   setList(list.filter(e => e.key !== key));
+  // A loaded page stays as it is, and nothing about it changes, so tab sync must be
+  // told: it is an ordinary tab now, in every window.
+  if (!isGhostUrl(tab.url)) registerSoon(tab.id);
   if (isGhostUrl(tab.url)) {
     if (entry) await browser.tabs.update(tab.id, { url: entry.url }).catch(() => {});
     else {

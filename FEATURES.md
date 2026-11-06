@@ -10,22 +10,24 @@ README); **Later** (wanted, after that); **Decide** (open question); **No**
 (not wanted, with the reason).
 
 Today "Done" often means done with Sidebery's help; the notes say so where
-it matters for moving off it.
+it matters for moving off it. "Tidier alone" is Tidier without Sidebery, behind its
+setting (README, PLAN.md), which the daily browser does not use yet; "checked" means
+there is a test.
 
 ## Sidebar and tab list
 
 | Feature | From | Status | Notes |
 |---|---|---|---|
-| Vertical tab list in a sidebar | Z A S | Partly | Sidebery today; Tidier's own sidebar shows it, not your default yet |
-| Unloaded tabs shown dimmed | Z A S | Done | in Tidier's sidebar |
+| Vertical tab list in a sidebar | Z A S | Done | Tidier alone, checked; Sidebery in the daily browser |
+| Unloaded tabs shown dimmed | Z A S | Done | in Tidier's sidebar; the look has no check |
 | Close button, middle click to close | Z A S | Done | in Tidier's sidebar |
-| New tab button at the top of the list | A Z | Planned | |
-| Drag tabs to reorder, into and out of folders | Z A S | Planned | |
+| New tab button at the top of the list | A Z | Done | Tidier alone |
+| Drag tabs to reorder, into and out of folders | Z A S | Done | Tidier alone, checked, every window follows; also to the essentials and to a space |
 | Select several tabs (⇧/⌘ click) and act on them | Z A S | Later | |
-| Context menu on tabs, folders and spaces | Z A S | Planned | |
-| Keyboard navigation in the sidebar | S | Later | |
+| Context menu on tabs, folders and spaces | Z A S | Partly | Tidier alone: Firefox's tab menu with Tidier's items, and folders; not yet spaces |
+| Keyboard navigation in the sidebar | S | Done | Tidier alone: ↑↓, Enter, ⌫, ←→ |
 | Search/filter the tabs | S A | Later | see the command bar |
-| Sound indicator and mute on a tab | Z A S | Planned | |
+| Sound indicator and mute on a tab | Z A S | Done | Tidier alone |
 | Tab preview on hover | S | Decide | |
 | Resizable sidebar width | Z A S | Done | Firefox's own sidebar handle (userChrome.css) |
 | Compact mode: sidebar hidden, shown at the edge | Z A | Done | userChrome.css, ⌘S |
@@ -35,15 +37,15 @@ it matters for moving off it.
 
 | Feature | From | Status | Notes |
 |---|---|---|---|
-| Spaces, one per container (own logins) | Z A S | Partly | Sidebery's panels today; Tidier's own in progress |
-| Space bar at the bottom with icons | Z A S | Partly | Tidier's sidebar shows coloured dots; icons and names to come |
-| Only the active space's tabs shown (⌃Tab too) | Z A S | Planned | Firefox's tabs.hide |
-| Switch with ⌃1/2/3 | Z A S | Partly | Sidebery's shortcuts today; to be Tidier's own |
+| Spaces, one per container (own logins) | Z A S | Done | Tidier alone, checked; Sidebery's panels in the daily browser |
+| Space bar at the bottom with icons | Z A S | Partly | Tidier alone shows coloured dots, and the name above the list; icons to come |
+| Only the active space's tabs shown (⌃Tab too) | Z A S | Done | Tidier alone, checked. Other spaces' essentials stay in ⌃Tab: Firefox cannot hide a pinned tab |
+| Switch with ⌃1/2/3 | Z A S | Done | Tidier alone, checked; Sidebery's shortcuts in the daily browser |
 | Switch by swiping sideways on the trackpad | Z A | Decide | tried with Sidebery and left out: vertical swipes switched space by mistake |
 | Colour per space, for the whole window | Z A | Done | userChrome.css and tidier.css |
-| Name, icon and colour of a space editable in Tidier | Z A | Later | today: Firefox's container settings |
-| New tabs and links from other apps open in the active space | A S | Planned | Sidebery today |
-| Rules: an address always opens in a given space ("Air Traffic Control") | A S | Planned | Sidebery's container rules today |
+| Name, icon and colour of a space editable in Tidier | Z A | Partly | the name, on the settings page; else Firefox's container settings |
+| New tabs and links from other apps open in the active space | A S | Done | Tidier alone, checked; Sidebery in the daily browser |
+| Rules: an address always opens in a given space ("Air Traffic Control") | A S | Done | Tidier alone, checked, on the settings page, and imported from Sidebery's export; Sidebery's rules in the daily browser |
 | Open a link in another space (context menu) | A | Later | |
 | The same essentials, folders and spaces on every machine, by sync | A | Planned | after Tidier has its own spaces and folders |
 | Hide a space on a given machine | | Planned | a workplace's space only on its Mac; hidden, not kept away |
@@ -52,7 +54,7 @@ it matters for moving off it.
 
 | Feature | From | Status | Notes |
 |---|---|---|---|
-| Essentials as tiles at the top, per space | Z A | Partly | per space in Tidier's sidebar; Sidebery shows them by space today |
+| Essentials as tiles at the top, per space | Z A | Done | Tidier alone, checked; Sidebery in the daily browser |
 | Essentials in every window | Z | Done | |
 | An essential keeps its address; closing it unloads it | Z A | Done | |
 | Short names for essentials | | Done | set in storage; editing in Tidier later |
@@ -65,12 +67,12 @@ it matters for moving off it.
 
 | Feature | From | Status | Notes |
 |---|---|---|---|
-| Folders, collapsible | Z A S | Partly | Sidebery's folder pages today; Tidier's own data planned |
+| Folders, collapsible | Z A S | Done | Tidier alone, Tidier's own data, checked; Sidebery's folder pages in the daily browser |
 | Folders first in each space | Z A | Done | Tidier keeps the order (folders.js, goes away with Sidebery) |
-| Create, rename and delete folders | Z A S | Planned | |
+| Create, rename and delete folders | Z A S | Done | Tidier alone, checked. Deleting one keeps its tabs |
 | Folders inside folders | A | Decide | you have none today |
 | Live folders (GitHub pull requests) | A | Done | |
-| Folder state (open/closed) kept per space and window | Z A S | Planned | |
+| Folder state (open/closed) kept per space and window | Z A S | Partly | Tidier alone: kept per folder, the same in every window |
 
 ## Tabs that tidy themselves
 
@@ -98,7 +100,7 @@ it matters for moving off it.
 |---|---|---|---|
 | ⌘⇧C copies the address | Z A | Done | |
 | A command bar: search tabs, essentials, history and commands | A Z | Later | |
-| All shortcuts set in one place, in Tidier | | Planned | today: Sidebery, about:keyboard and Tidier |
+| All shortcuts set in one place, in Tidier | | Partly | Tidier alone: Firefox's own page for extension shortcuts, plus about:keyboard |
 
 ## Look
 

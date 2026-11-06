@@ -215,3 +215,15 @@ test("a green run on main releases, whatever started it", () => {
   assert.ok(!/workflow_run\.event == 'push'/.test(release));
   assert.match(release, /workflow_run\.event != 'pull_request'/);
 });
+
+// --- Updates must never wait for a click ----------------------------------------------
+test("the manifest asks for no new permission that would hold updates", () => {
+  // Firefox holds an update that adds a permission on its list until it is approved, with
+  // only a badge to show it: every later release then silently stops arriving. New ones
+  // go in optional_permissions, asked for when needed.
+  const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  const allowed = ["tabs", "sessions", "storage", "cookies", "nativeMessaging", "alarms", "clipboardWrite",
+    "contextualIdentities", "menus", "menus.overrideContext"]; // the prompts already approved, and those without one
+  assert.deepEqual(manifest.permissions.filter(p => !allowed.includes(p)), []);
+});
+

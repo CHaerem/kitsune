@@ -129,9 +129,10 @@ def downloaded_sidebery():
 
 
 class TestFirefox:
-    def __init__(self, xpi=None, port=PORT):
+    def __init__(self, xpi=None, port=PORT, alone=False):
         self.xpi = xpi  # a signed Tidier .xpi; default: this folder (installed for real where Firefox allows it)
         self.port = port  # each test Firefox running at the same time needs its own
+        self.alone = alone  # Tidier alone (PLAN.md): no Sidebery, and the setting declared in managed storage
         self.dir = self.proc = self.m = self.pages = None
 
     def restart(self):
@@ -190,10 +191,11 @@ class TestFirefox:
             "sidebarCSS": open(f"{DOTFILES}/sidebery.css").read(),
         }}, open(f"{self.dir}/managed/ManagedStorage/{SIDEBERY_ID}.json", "w"))
         # Tidier's sidebar look (tidier.css), the same way, where dotfiles has one.
+        tidier = {"tidierAlone": True} if self.alone else {}
         if os.path.exists(f"{DOTFILES}/tidier.css"):
-            json.dump({"name": EXT_ID, "description": "test", "type": "storage", "data": {
-                "sidebarCSS": open(f"{DOTFILES}/tidier.css").read(),
-            }}, open(f"{self.dir}/managed/ManagedStorage/{EXT_ID}.json", "w"))
+            tidier["sidebarCSS"] = open(f"{DOTFILES}/tidier.css").read()
+        json.dump({"name": EXT_ID, "description": "test", "type": "storage", "data": tidier},
+                  open(f"{self.dir}/managed/ManagedStorage/{EXT_ID}.json", "w"))
         # The live folders' native host is a stand-in that answers from a file
         # the test writes (fake_github_host.py), never your gh login.
         os.makedirs(f"{self.dir}/managed/NativeMessagingHosts")
@@ -230,15 +232,18 @@ class TestFirefox:
     def _setup(self):
         m = self.m
         m.js(USE_TEST_MANAGED_STORAGE, f"{self.dir}/managed")
-        sb = sidebery_xpi()  # a folder is loaded as a temporary add-on (e.g. a patched Sidebery)
-        m.cmd("Addon:Install", {"path": sb, "temporary": os.path.isdir(sb)})
-        time.sleep(4)
-        fixture = json.load(open(f"{FIXTURES}/sidebery.json"))
-        m.js(SETUP_SIDEBERY, SIDEBERY_ID, fixture, SIDEBERY_PERMISSIONS, SIDEBERY_SHORTCUTS)
-        seed = m.js(SEED_TABS, SIDEBERY_ID)
-        if seed["restarts"] or seed["misplaced"]:
-            # Shown so a setup that often needs it is noticed; the checks run either way.
-            print(f"(setup: Sidebery started again {seed['restarts']}x for tabs in the wrong space; {seed['misplaced']} still are)", flush=True)
+        if self.alone:
+            m.js(SEED_TABS_ALONE)
+        else:
+            sb = sidebery_xpi()  # a folder is loaded as a temporary add-on (e.g. a patched Sidebery)
+            m.cmd("Addon:Install", {"path": sb, "temporary": os.path.isdir(sb)})
+            time.sleep(4)
+            fixture = json.load(open(f"{FIXTURES}/sidebery.json"))
+            m.js(SETUP_SIDEBERY, SIDEBERY_ID, fixture, SIDEBERY_PERMISSIONS, SIDEBERY_SHORTCUTS)
+            seed = m.js(SEED_TABS, SIDEBERY_ID)
+            if seed["restarts"] or seed["misplaced"]:
+                # Shown so a setup that often needs it is noticed; the checks run either way.
+                print(f"(setup: Sidebery started again {seed['restarts']}x for tabs in the wrong space; {seed['misplaced']} still are)", flush=True)
         m.can_restart = True
         if self.xpi:
             m.cmd("Addon:Install", {"path": os.path.abspath(self.xpi), "temporary": False})
@@ -252,6 +257,11 @@ class TestFirefox:
                 m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
         m.restart = self.restart
         time.sleep(8)  # Tidier starts: essentials, tab sync, live folders
+        if self.alone:
+            m.js(AFTER_TIDIER_ALONE, EXT_ID)
+        else:
+            # Tidier's sidebar opens by itself when installed, as a sidebar does; here Sidebery stays the sidebar.
+            m.js('await Services.wm.getMostRecentWindow("navigator:browser").SidebarController.show("_3c078156-979c-498b-8990-85f7987dd929_-sidebar-action"); return 1;')
 
     def _newer_xpi(self):
         """This folder as an .xpi with a higher version than the installed one, to update to."""
@@ -285,6 +295,38 @@ USE_TEST_MANAGED_STORAGE = """
   const lookup = NativeManifests._lookup;
   NativeManifests._lookup = (type, name, context) =>
     type === "storage" || name === "tidier_github" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
+"""
+
+# Tidier alone: the same test tabs as below, in each space, and no Sidebery. Folders
+# are not seeded: they are made through the sidebar by the checks themselves.
+SEED_TABS_ALONE = """
+  const {setTimeout: sT} = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
+  const wait = ms => new Promise(r => sT(r, ms));
+  const w = Services.wm.getMostRecentWindow("navigator:browser"), gB = w.gBrowser;
+  const principal = Services.scriptSecurityManager.getSystemPrincipal();
+  for (const ctx of [1, 2, 3]) {
+    for (const i of [1, 2]) {
+      const e = gB.addTrustedTab("https://example.org/?fixture-essential-" + ctx + "-" + i, {userContextId: ctx, inBackground: true});
+      await wait(300); gB.pinTab(e);
+    }
+    for (const i of [1, 2]) { gB.addTrustedTab("https://example.org/?fixture-tab-" + ctx + "-" + i, {userContextId: ctx, inBackground: true}); await wait(300); }
+  }
+  await wait(1000);
+  for (const t of [...gB.tabs]) if (!t.pinned && !/example\\.org/.test(t.linkedBrowser.currentURI.spec)) gB.removeTab(t);
+  await wait(500);
+  return 1;
+"""
+
+# What you click once in the sidebar, the same way (permissions.request needs a
+# click, which a test has no way to make), and Tidier's sidebar shown.
+AFTER_TIDIER_ALONE = """
+  const [id] = args;
+  const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
+  const ext = WebExtensionPolicy.getByID(id).extension;
+  await ExtensionPermissions.add(id, {permissions: ["tabHide"], origins: []}, ext);
+  const w = Services.wm.getMostRecentWindow("navigator:browser");
+  await w.SidebarController.show("_6844a953-9931-4334-9ff6-257c246485cb_-sidebar-action");
+  return 1;
 """
 
 # Sidebery: permissions, shortcuts, and the fixture written to its storage

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# Native messaging host for Tidier's live folders.
+# Native messaging host for Tidier: its live folders, and its daily copy.
 #
 # The folders are set up in a local file, not in the extension or this
 # repository: $XDG_CONFIG_HOME/tidier/live-folders.json (default
@@ -9,19 +9,27 @@
 # no GitHub token ever reaches the browser. The search runs with the gh CLI
 # and your existing gh login.
 #
+# The extension can also hand over a copy of its own data ({"backup": ...}), since
+# it cannot write files itself: kept next to the config, the last COPIES days. It
+# holds your addresses, so only you can read it.
+#
 # Installed for Firefox by install.sh.
 import getpass
+import glob
 import json
 import os
 import shutil
 import struct
 import subprocess
 import sys
+import time
 
-CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "tidier", "live-folders.json")
+HOME = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "tidier")
+CONFIG = os.path.join(HOME, "live-folders.json")
+COPIES = 14
 # Every folder shows open pull requests you are involved in, within its search.
 BASE = "is:open is:pr archived:false (review-requested:@me OR author:@me OR assignee:@me)"
-JQ = '[.items[] | {url: .html_url, title, number, draft, repo: (.repository_url | split("/") | .[-1])}]'
+JQ = '{incomplete: .incomplete_results, items: [.items[] | {url: .html_url, title, number, draft, repo: (.repository_url | split("/") | .[-1])}]}'
 
 
 def folders():
@@ -54,12 +62,36 @@ def send(obj):
     sys.stdout.buffer.flush()
 
 
+def save_copy(copy):
+    folder = os.path.join(HOME, "copies")
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    name = time.strftime("tidier-%Y-%m-%d.json")
+    tmp = os.path.join(folder, name + ".part")
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as out:
+        json.dump(copy, out)
+    os.replace(tmp, os.path.join(folder, name))
+    for old in sorted(glob.glob(os.path.join(folder, "tidier-*.json")))[:-COPIES]:
+        os.remove(old)
+    return name
+
+
 def main():
     msg = read_message()
-    if msg.get("list"):
-        send({"folders": [{k: f[k] for k in ("id", "name", "container")} for f in folders()]})
+    if "backup" in msg:
+        try:
+            send({"saved": save_copy(msg["backup"])})
+        except OSError as err:
+            send({"error": str(err)[:300]})
         return
-    folder = next((f for f in folders() if f["id"] == msg.get("folder")), None)
+    try:
+        configured = folders()
+    except ValueError as err:  # a typo in the config: say so, rather than crash without an answer
+        send({"error": f"{CONFIG}: {err}"[:300]})
+        return
+    if msg.get("list"):
+        send({"folders": [{k: f[k] for k in ("id", "name", "container")} for f in configured]})
+        return
+    folder = next((f for f in configured if f["id"] == msg.get("folder")), None)
     if not folder:
         send({"error": "unknown folder"})
         return
@@ -77,8 +109,14 @@ def main():
         return
     if result.returncode != 0:
         send({"error": result.stderr.strip()[:300]})
+        return
+    answer = json.loads(result.stdout or "{}")
+    # GitHub's search can answer with only part of the result when it runs out of time.
+    # Taken as complete, tabs of pull requests that are still open would be closed.
+    if answer.get("incomplete") or not isinstance(answer.get("items"), list):
+        send({"error": "GitHub's search answered with only part of the result"})
     else:
-        send({"items": json.loads(result.stdout or "[]")})
+        send({"items": answer["items"]})
 
 
 main()

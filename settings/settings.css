@@ -1,0 +1,11 @@
+:root { color-scheme: light dark; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+body { max-width: 640px; margin: 32px auto; padding: 0 16px; }
+h1 { font-size: 22px; margin-bottom: 24px; }
+h2 { font-size: 15px; margin: 0 0 8px; }
+section { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); }
+.hint { color: color-mix(in srgb, CanvasText 60%, transparent); margin: 0 0 10px; }
+.notice { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, orange 18%, transparent); margin-bottom: 10px; }
+.line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.line input[type=text] { flex: 1; min-width: 0; }
+button, input, select { font: inherit; }
+[hidden] { display: none !important; }

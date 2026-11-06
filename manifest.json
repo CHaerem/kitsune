@@ -23,13 +23,26 @@
     "nativeMessaging",
     "alarms",
     "clipboardWrite",
-    "contextualIdentities"
+    "contextualIdentities",
+    "menus",
+    "menus.overrideContext"
   ],
+  "optional_permissions": [
+    "tabHide"
+  ],
+  "options_ui": {
+    "page": "settings/settings.html",
+    "open_in_tab": true
+  },
   "sidebar_action": {
     "default_panel": "sidebar/sidebar.html",
     "default_title": "Tidier",
+    "default_icon": "icon.svg"
+  },
+  "browser_action": {
+    "default_title": "Tidier",
     "default_icon": "icon.svg",
-    "open_at_install": false
+    "default_area": "menupanel"
   },
   "background": {
     "scripts": [
@@ -38,6 +51,10 @@
       "tabsync.js",
       "folders.js",
       "livefolders.js",
+      "spaces.js",
+      "ownfolders.js",
+      "copies.js",
+      "moveover.js",
       "sidebar-view.js",
       "archive.js",
       "shortcuts.js"
@@ -50,7 +67,13 @@
         "default": "Ctrl+Shift+C"
       },
       "description": "Copy the address of the current tab"
-    }
+    },
+    "_execute_sidebar_action": { "description": "Show or hide Tidier's sidebar" },
+    "space-1": { "description": "Go to the first space" },
+    "space-2": { "description": "Go to the second space" },
+    "space-3": { "description": "Go to the third space" },
+    "space-4": { "description": "Go to the fourth space" },
+    "space-5": { "description": "Go to the fifth space" }
   },
   "icons": {
     "48": "icon.svg",
