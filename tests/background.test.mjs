@@ -851,3 +851,26 @@ test("a tab closed while it is being pinned does not stop the rest", async () =>
     x.kill();
   }
 });
+
+test("the space you switched to with the bar is the one you are in after a restart", async () => {
+  const C2 = "firefox-container-2";
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/", { cookieStoreId: C2 }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const inC2 = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C2 }, { syncKey: "b", syncRole: "live" });
+  let x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.run(8000);
+  ff.select(inC2.id); // written, as it always was
+  await ff.clock.run(500);
+  await ff.clock.settled(x.js(`switchSpace(${w.id}, "${C1}")`));
+  await ff.clock.idle(60000);
+  x = ff.restart();
+  await ff.clock.idle(60000);
+  const [win] = ff.wins.values();
+  assert.equal(x.js("activeSpace").get(win.id), C1);
+  assert.equal(ff.list(win.id).find(t => t.active).cookieStoreId, C1);
+  x.kill();
+});

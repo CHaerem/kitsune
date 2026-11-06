@@ -83,6 +83,8 @@ async function switchSpace(windowId, space) {
   const last = await lastUsedIn(windowId, space);
   if (!await browser.windows.get(windowId).catch(() => null)) return; // closed meanwhile
   activeSpace.set(windowId, space); // before the tab is selected, so onActivated agrees
+  // And written here, since setSpace below now sees no change: this is what a restart reads.
+  await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {});
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
   else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space }).catch(ifGone);
   await setSpace(windowId, space);
