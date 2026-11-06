@@ -245,6 +245,22 @@ test("realOf: a new tab is no page, and a closed tab is nothing", async () => {
   x.kill();
 });
 
+test("realOf: a tab closed while its values are read is no error", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const copy = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1, index: 0 }, { essentialKey: "e" });
+  const x = await alone(ff);
+  x.js("keyByTab").delete(copy.id);
+  ff.hooks.getTabValue = async () => { throw new Error("Invalid tab ID"); };
+  const r = await x.js("realOf")(copy.id);
+  assert.equal(r.tab.id, copy.id);
+  assert.equal(r.loaded, false);
+  delete ff.hooks.getTabValue;
+  x.kill();
+});
+
 test("what the menu is told is about the real tab", async () => {
   const ff = new FakeFirefox();
   const { x, ghost, live } = await twoWindows(ff);

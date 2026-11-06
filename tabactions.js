@@ -19,9 +19,10 @@ async function realOf(tabId) {
   if (!own) return null;
   let key, entry = null, tab = own;
   if (own.pinned) {
-    key = await keyOf(own);
+    // (Firefox refuses to read the values of a tab closed a moment ago.)
+    key = await keyOf(own).catch(() => undefined);
     entry = (await getList()).find(e => e.key === key) ?? null;
-    if (entry) tab = (await copiesOf(key)).find(isLoadedCopy) ?? own;
+    if (entry) tab = (await copiesOf(key).catch(() => [])).find(isLoadedCopy) ?? own;
   } else {
     key = syncKeyByTab.get(tabId);
     entry = key ? (await getSynced())[key] ?? null : null;

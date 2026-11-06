@@ -32,9 +32,14 @@ function showMenu(items, x, y) {
 function drawMenu(items, back = null, byKey = false) {
   const menu = document.getElementById("menu");
   const rows = items.map(item => {
-    if (!item) return el("div", "line");
+    if (!item) {
+      const line = el("div", "line");
+      line.setAttribute("role", "separator");
+      return line;
+    }
     const [label, act, { color } = {}] = item;
     const b = el("button", "item");
+    b.setAttribute("role", "menuitem");
     b.append(el("span", "label", label));
     if (color) {
       const dot = el("span", "dot");
@@ -43,8 +48,8 @@ function drawMenu(items, back = null, byKey = false) {
     }
     if (Array.isArray(act)) {
       b.classList.add("more");
-      // Stays open: the click must not reach the listener below that closes the menu.
-      b.onclick = ev => { ev.stopPropagation(); drawMenu(act, { label, items }, !ev.detail); };
+      b.setAttribute("aria-haspopup", "menu");
+      b.onclick = ev => drawMenu(act, { label, items }, !ev.detail);
     } else {
       b.onclick = () => { closeMenu(); act(); };
     }
@@ -52,8 +57,9 @@ function drawMenu(items, back = null, byKey = false) {
   });
   if (back) {
     const b = el("button", "item back");
+    b.setAttribute("role", "menuitem");
     b.append(el("span", "label", back.label));
-    b.onclick = ev => { ev.stopPropagation(); drawMenu(back.items, null, !ev.detail); };
+    b.onclick = ev => drawMenu(back.items, null, !ev.detail);
     rows.unshift(b, el("div", "line"));
   }
   menu.replaceChildren(...rows);
@@ -71,15 +77,31 @@ const closeMenu = () => {
   document.getElementById("menu").hidden = true;
   for (const e of document.querySelectorAll(".menu-for")) e.classList.remove("menu-for");
 };
-addEventListener("click", closeMenu);
 addEventListener("blur", closeMenu);
 addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
 
-// ↑ and ↓ move through it, → opens a list, ← goes back, Enter is the button's own.
+// A click outside only closes the menu, as with a menu of Firefox's own: the × or the row
+// under the pointer must not act on the way. (The right button's release is no such click:
+// the menu is open by then.) Scrolling the list would leave the menu about nothing in view.
+function clickOutsideMenu(e) {
+  if (document.getElementById("menu").hidden || e.target.closest?.("#menu")) return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  closeMenu();
+}
+addEventListener("click", clickOutsideMenu, true);
+addEventListener("auxclick", e => { if (e.button === 1) clickOutsideMenu(e); }, true);
+addEventListener("wheel", e => { if (!e.target.closest?.("#menu")) closeMenu(); }, { passive: true });
+
+// ↑ and ↓ move through it, → opens a list, ← goes back, Enter is the button's own. The
+// pointer moves the same highlight, so there is never more than one.
 {
   const menu = document.getElementById("menu");
   menu.tabIndex = -1;
+  menu.setAttribute("role", "menu");
   menu.oncontextmenu = e => e.preventDefault();
+  menu.addEventListener("mouseover", e => e.target.closest?.(".item")?.focus({ preventScroll: true }));
+  menu.addEventListener("mouseleave", () => menu.focus({ preventScroll: true }));
   menu.addEventListener("keydown", e => {
     const items = [...menu.querySelectorAll(".item")], at = items.indexOf(document.activeElement);
     if (e.key === "ArrowDown") items[(at + 1) % items.length]?.focus();

@@ -1569,13 +1569,18 @@ def alone_tab_menu(m):
           const more = [...menu.querySelectorAll(".item")].find(x => x.textContent === "Move to space"); more.focus();
           key("ArrowRight"); const sub = {top: menu.firstChild.textContent, focus: doc.activeElement.classList.contains("back"), at: at()};
           key("ArrowLeft"); const back = menu.querySelectorAll(".back").length;
-          menu.hidden = true;
-          return {labels, about, closed, left, tileLabels, keys: {inMenu, first, last, sub, back}};""", a)
+          // A click outside only closes it: the row under the pointer stays as it is.
+          const selectedBefore = doc.querySelector("#tabs .tab.active")?.dataset.tab;
+          rowOf(args[1]).click();
+          await wait(500);
+          const outside = {closed: menu.hidden, selected: doc.querySelector("#tabs .tab.active")?.dataset.tab === selectedBefore};
+          return {labels, about, closed, left, tileLabels, keys: {inMenu, first, last, sub, back}, outside};""", a, b)
         check("a right click on a row shows Tidier's menu, in its order", r["labels"] == ROW_MENU, str(r))
         check("the menu marks the row it is about, and Esc closes it", r["about"] and r["closed"] and not r["left"], str(r))
         k = r["keys"]
         check("the arrow keys go through the menu, and into a list and back", k["inMenu"] and k["first"] == "Reload" and k["last"] == "Close" and k["sub"]["top"] == "Move to space"
               and not k["sub"]["focus"] and k["sub"]["at"] and k["back"] == 0, str(k))
+        check("a click outside the menu only closes it", r["outside"] == {"closed": True, "selected": True}, str(r["outside"]))
         tile_rest = ["Duplicate", "Copy address", "|", "Remove from essentials"]
         check("a right click on a tile offers no folder, space or rule", r["tileLabels"] in (tile_rest, ["Reload", "Mute", "Unload", "|", *tile_rest, "|", "Close"]), str(r))
 
@@ -1617,6 +1622,9 @@ def alone_tab_menu(m):
           await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "settings:rules", rules: [{url: "smoke-menu-b", space: spaces().find(s => !s.active && s.id !== "firefox-container-4").id}]})));
           await wait(800);
           return 1;""", b)
+        r = sidebar_page(m, MENU_PAGE + """const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Menu kept");
+          await rightClick(head); const folder = shown(), list = await rightClick(doc.getElementById("tabs")); menu.hidden = true; return {folder, list};""")
+        check("a folder and the empty list keep their own short menus", r == {"folder": ["Rename", "Delete folder (its tabs stay)"], "list": ["New folder"]}, str(r))
         act(b, "Duplicate")
         r = m.js(MENU_TABS + """const has = () => tabs().filter(x => idOf(x.t) !== args[0] && url(x.t).includes("smoke-menu-b") && x.t.linkedPanel);
           await until(() => has().length && role(has()[0].w, has()[0].t) === "live");

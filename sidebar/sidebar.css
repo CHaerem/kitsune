@@ -114,7 +114,7 @@ body {
   display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; color: inherit;
   padding: 5px 8px; border-radius: 5px; text-align: left; font: inherit; white-space: nowrap; outline: none; cursor: default;
 }
-#menu .item:hover, #menu .item:focus { background: var(--hover); }
+#menu .item:focus { background: var(--hover); }
 #menu .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #menu .more::after { content: "›"; color: var(--muted); font-size: 15px; line-height: 1; }
 #menu .back { color: var(--muted); }
