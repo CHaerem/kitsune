@@ -262,7 +262,7 @@ async function fillWindow(windowId, { fresh = false } = {}) {
       if (!tab) continue;
       reps.set(key, tab.id);
       created++;
-      await sleep(CREATE_GAP_MS);
+      if (!tidierAlone) await sleep(CREATE_GAP_MS); // a pause even at 0: 4 ms or more per tab, for Sidebery only
     }
   };
   if (fresh && !tidierAlone) {
@@ -887,8 +887,9 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
 //
 // One look at a time, and if tabs changed meanwhile, another after a rest in proportion
 // to what this one took: a burst of events in a window of a thousand tabs would otherwise
-// keep Firefox busy describing tabs to no one, the whole time.
-const ORDER_REST = 3;
+// keep Firefox busy describing tabs to no one, the whole time. (With 50 tabs the rest is
+// a few milliseconds, with 1000 it is less than a tenth of a second.)
+const ORDER_REST = 9;
 const lastOrder = new Map(); // windowId -> [{ id, cookieStoreId, unloaded }]
 const orderQueries = new Map(); // windowId -> whether to look again when the query in progress is done
 function noteOrder(windowId) {

@@ -94,33 +94,35 @@ const isGhostUrl = url => (url || "").startsWith(GHOST_PAGE);
 // looked for again whenever that list changes, for FORGET_MS. (An essential
 // copy's address may end in "&placed=N", see essentials.js.)
 //
-// Closing many tabs changes that list once per tab, and each look reads all of it.
-// One look runs at a time, and one more follows if the list changed meanwhile, so
-// everyone waiting sees a look that began after their tab was closed.
-const FORGET_MS = 10000;
+// Closing many tabs changes that list once per tab, and a look makes Firefox copy
+// everything in it, also a closed window with all its tabs. So nobody waits for a look,
+// one runs at a time, and if the list changed meanwhile, another follows after a rest in
+// proportion to what this one took. With a few tabs that rest is hardly anything.
+const FORGET_MS = 10000, FORGET_REST = 9;
 const toForget = new Map(); // placeholder URL -> until when to look for it
-let forgetTimer = null, forgetting = null, forgetAgain = false;
-async function forgetClosedPlaceholders(kind, keys) {
+let forgetTimer = null, forgetBusy = false, forgetAgain = false;
+function forgetClosedPlaceholders(kind, keys) {
   for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
   clearTimeout(forgetTimer);
   forgetTimer = setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
-  await forgetClosedNow();
+  forgetClosedNow();
 }
-function forgetClosedNow() {
-  if (forgetting) { forgetAgain = true; return forgetting; }
-  forgetting = (async () => {
-    do { forgetAgain = false; await lookForClosedPlaceholders(); } while (forgetAgain);
-  })().finally(() => { forgetting = null; });
-  return forgetting;
-}
-async function lookForClosedPlaceholders() {
+async function forgetClosedNow() {
+  if (forgetBusy) { forgetAgain = true; return; }
   for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
   if (!toForget.size) return;
+  forgetBusy = true;
+  const t0 = performance.now();
   const ours = url => toForget.has(url) || toForget.has(url?.split("&placed=")[0]);
   const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
   for (const t of closed.map(item => item.tab).filter(Boolean)) {
     if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
   }
+  // The rest counts as busy, so that what changes during it waits for the look after it.
+  setTimeout(() => {
+    forgetBusy = false;
+    if (forgetAgain) { forgetAgain = false; forgetClosedNow(); }
+  }, FORGET_REST * (performance.now() - t0));
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
 

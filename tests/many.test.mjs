@@ -354,17 +354,30 @@ test("closing many tabs looks at Recently Closed far less than once per tab, and
   const x = await alone(ff);
   const keys = Object.keys(ff.synced);
   let looks = 0;
-  const closedList = keys.map((k, i) => ({ tab: { url: GHOST("ghost", k), windowId: other.id, sessionId: "s" + i } }));
-  ff.recentlyClosed = [...closedList];
+  ff.recentlyClosed = keys.map((k, i) => ({ tab: { url: GHOST("ghost", k), windowId: other.id, sessionId: "s" + i } }));
   const read = x.b.sessions.getRecentlyClosed;
   x.b.sessions.getRecentlyClosed = async () => { looks++; await realSleep(1); return read(); };
   for (const t of ff.list(w.id)) { ff.rm(t.id); x.b.sessions.onChanged.fire(); }
-  await wait(500);
   for (let i = 0; i < 200 && Object.keys(ff.synced).length; i++) await wait(100);
   assert.equal(Object.keys(ff.synced).length, 0);
-  await wait(300);
+  await realSleep(100); // the last look comes after a rest
   assert.equal(ff.recentlyClosed.length, 0, "no placeholder is left there");
-  assert.ok(looks < keys.length * 2, `${looks} looks for ${keys.length} tabs`);
+  assert.ok(looks < keys.length / 2, `${looks} looks for ${keys.length} tabs`);
+  x.kill();
+});
+
+test("a placeholder that reaches Recently Closed late is still forgotten, during a rest too", async () => {
+  const ff = new FakeFirefox();
+  ff.addWindow({ focused: true });
+  const x = ff.boot();
+  const read = x.b.sessions.getRecentlyClosed;
+  x.b.sessions.getRecentlyClosed = async () => { await realSleep(3); return read(); };
+  x.js("forgetClosedPlaceholders")("ghost", ["late"]);
+  await realSleep(10); // the first look is done and resting
+  ff.recentlyClosed = [{ tab: { url: GHOST("ghost", "late"), windowId: 1, sessionId: "s" } }];
+  x.b.sessions.onChanged.fire();
+  await realSleep(100);
+  assert.equal(ff.recentlyClosed.length, 0);
   x.kill();
 });
 
@@ -373,7 +386,8 @@ test("a placeholder with &placed= in its address is forgotten too", async () => 
   ff.addWindow({ focused: true });
   const x = ff.boot();
   ff.recentlyClosed = [{ tab: { url: GHOST("essential", "e") + "&placed=3", windowId: 1, sessionId: "s" } }, { tab: { url: "https://keep.example/", windowId: 1, sessionId: "r" } }];
-  await x.js("forgetClosedPlaceholders")("essential", ["e"]);
+  x.js("forgetClosedPlaceholders")("essential", ["e"]);
+  await wait(100);
   assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["r"]);
   x.kill();
 });
