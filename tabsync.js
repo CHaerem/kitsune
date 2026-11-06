@@ -841,6 +841,8 @@ function noteOrder(windowId) {
   orderQueries.set(windowId, false);
   work.lookups++;
   browser.tabs.query({ windowId }).then(tabs => {
+    // No tabs: the window closed while this was on its way, and nothing will remove it again.
+    if (!tabs.length) { lastOrder.delete(windowId); return; }
     lastOrder.set(windowId, tabs.sort((a, b) => a.index - b.index)
       .map(t => ({ id: t.id, cookieStoreId: t.cookieStoreId, unloaded: t.discarded || isGhostUrl(t.url) })));
   }, () => lastOrder.delete(windowId)).finally(() => {

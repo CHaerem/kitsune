@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { FakeFirefox, wait, GHOST } from "./fake_firefox.mjs";
+import { ChaosFirefox } from "./chaos_firefox.mjs";
 
 const C1 = "firefox-container-1", GONE = "firefox-container-9";
 const FOLDER = "moz-extension://sb/sidebery/group.html#F";
@@ -672,3 +673,29 @@ test("an essential unpinned while loaded is an ordinary synced tab again", async
   x.kill();
 });
 
+
+// --- Found by random use (chaos.test.mjs) ----------------------------------------------
+// On the fake that follows Firefox's source, with virtual time: each of these once left
+// tabs in the wrong state, for good.
+async function chaosStart({ windows = 2, ...options } = {}) {
+  const ff = new ChaosFirefox(options);
+  const made = [];
+  for (let i = 0; i < windows; i++) {
+    const w = ff.addWindow({ focused: i === 0 });
+    ff.addTab(w.id, { url: "about:home", active: true });
+    made.push(w);
+  }
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "install" });
+  await ff.clock.run(3000);
+  return { ff, x, windows: made };
+}
+
+test("a window closed right after it opened leaves nothing behind", async () => {
+  const { ff, x } = await chaosStart({ windows: 1 });
+  const { window: w } = ff.openWindow();
+  ff.closeWindow(w.id);
+  await ff.clock.idle(60000);
+  assert.ok(!x.js("lastOrder").has(w.id));
+  x.kill();
+});
