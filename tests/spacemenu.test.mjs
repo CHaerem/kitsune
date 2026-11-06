@@ -127,6 +127,31 @@ test("renaming a space changes its container, and an empty name does nothing", a
   x.kill();
 });
 
+// The way in from a sidebar: what its port does with a message.
+async function sidebarPort(x, windowId) {
+  const heard = [];
+  x.b.runtime.onConnect.fire({ name: "sidebar", sender: { id: x.b.runtime.id }, postMessage() {}, onMessage: { addListener: f => heard.push(f) }, onDisconnect: { addListener() {} } });
+  const say = msg => Promise.all(heard.map(f => f(msg)));
+  await say({ type: "hello", windowId });
+  return say;
+}
+
+test("with the setting off a space's messages do nothing, and with it on they do", async () => {
+  for (const setting of [false, true]) {
+    const ff = new FakeFirefox();
+    const { a, tabs } = session(ff);
+    const x = setting ? await alone(ff) : ff.boot();
+    const calls = [];
+    x.b.contextualIdentities.update = async id => { calls.push(id); };
+    const say = await sidebarPort(x, a.id);
+    await say({ type: "unloadSpace", space: C1 });
+    await say({ type: "renameSpace", space: C1, name: "Home" });
+    assert.equal(tabs.here.discarded, setting);
+    assert.equal(calls.length, setting ? 1 : 0);
+    x.kill();
+  }
+});
+
 // --- What it offers ---------------------------------------------------------------
 // The sidebar's own scripts, with the little of a page that they need. Text-only, as a
 // menu is: what is drawn is for the smoke test.

@@ -66,7 +66,7 @@ function openSpaceBox(space) {
   const room = line.getBoundingClientRect().height;
   line.hidden = true;
   line.after(input);
-  input.style.marginBottom = room - input.getBoundingClientRect().height + "px";
+  input.style.marginBottom = Math.max(0, room - input.getBoundingClientRect().height) + "px"; // no name: no line
   markSpaceDot(document.querySelector(`#spaces .space[data-space="${space}"]`));
   input.focus();
   input.select();

@@ -1689,7 +1689,8 @@ def alone_space_menu(m):
       const pins = (w, ctx) => w.gBrowser.tabs.filter(t => t.pinned && t.userContextId === ctx);"""
     m.js(SPACE_TABS + """const w = main();
       for (const [space, name] of args[0]) for (const i of [1, 2, 3]) { w.gBrowser.addTrustedTab("https://example.org/?smoke-menu-" + name + "-" + i, {userContextId: ctxOfId(space), inBackground: true}); await wait(200); }
-      await wait(3000);
+      const ready = () => w.gBrowser.tabs.filter(t => url(t).includes("smoke-menu-") && t.linkedPanel && role(w, t) === "live").length;
+      for (let i = 0; i < 300 && ready() < 6; i++) await wait(100);
       w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-1"));
       await wait(1000); return 1;""", [[here, "here"], [there, "there"]])
 
@@ -1774,7 +1775,7 @@ def alone_space_menu(m):
         time.sleep(0.1)
     check("unloading reaches a page loaded in another window", other["role"] == "live" and other["placeholder"] and gone == {"loaded": False, "kept": True}, f"{other} -> {gone}")
     m.js(H + """const a = main(); a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => key(a, t) === args[0]); return 1;""", other["key"])
-    settled = lambda b: "smoke-menu-other-window" in b["page"] and b["loaded"] and sorted(s for w in b["everywhere"] for s in w) == ["ghost/unloaded", "live/loaded"]
+    settled = lambda b: "smoke-menu-other-window" in b["page"] and b["loaded"] and sorted(set(s for w in b["everywhere"] for s in w)) == ["ghost/unloaded", "live/loaded"] and sum(w.count("live/loaded") for w in b["everywhere"]) == 1
     for _ in range(300):  # the pull has steps: only its end says anything
         back = m.js(H + """const a = main(), t = a.gBrowser.selectedTab; return {page: url(t), loaded: !!t.linkedPanel, everywhere: find(args[0])};""", other["key"])
         if settled(back):
@@ -1811,6 +1812,15 @@ def alone_space_menu(m):
     press(m, ESC)
     sidebar_until(m, "() => !box()")
     in_sidebar(m, """() => { doc.getElementById("space-name").style.fontSize = ""; return 1; }""")
+    # A space without a name has no line, so the box is simply put there, over nothing.
+    in_sidebar(m, """() => { const line = doc.getElementById("space-name"); line.dataset.was = line.textContent; line.textContent = ""; return 1; }""")
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Rename")
+    r = sidebar_until(m, """() => { if (!box()) return {wait: 1}; const b = box().getBoundingClientRect(); return {bottom: b.bottom, actions: top("actions")}; }""")
+    check("a space with no name opens a box that covers nothing", r.get("bottom", 1e9) <= r.get("actions", 0), str(r))
+    press(m, ESC)
+    sidebar_until(m, "() => !box()")
+    in_sidebar(m, """() => { const line = doc.getElementById("space-name"); line.textContent = line.dataset.was; delete line.dataset.was; return 1; }""")
     # Esc leaves it as it was; leaving the box saves.
     menu_on(m, f"dot({json.dumps(here)})")
     choose(m, "Rename")
