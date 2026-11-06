@@ -57,6 +57,7 @@
       "moveover.js",
       "sidebar-view.js",
       "archive.js",
+      "keys-commands.js",
       "shortcuts.js"
     ],
     "persistent": true
@@ -73,7 +74,22 @@
     "space-2": { "description": "Go to the second space" },
     "space-3": { "description": "Go to the third space" },
     "space-4": { "description": "Go to the fourth space" },
-    "space-5": { "description": "Go to the fifth space" }
+    "space-5": { "description": "Go to the fifth space" },
+    "next-tab": { "description": "Next tab" },
+    "previous-tab": { "description": "Previous tab" },
+    "next-space": { "description": "Next space" },
+    "previous-space": { "description": "Previous space" },
+    "toggle-essential": { "description": "Make this tab an essential, or not" },
+    "new-folder": { "description": "New folder" },
+    "tab-1": { "description": "Go to the first tab of this space" },
+    "tab-2": { "description": "Go to the second tab of this space" },
+    "tab-3": { "description": "Go to the third tab of this space" },
+    "tab-4": { "description": "Go to the fourth tab of this space" },
+    "tab-5": { "description": "Go to the fifth tab of this space" },
+    "tab-6": { "description": "Go to the sixth tab of this space" },
+    "tab-7": { "description": "Go to the seventh tab of this space" },
+    "tab-8": { "description": "Go to the eighth tab of this space" },
+    "tab-9": { "description": "Go to the ninth tab of this space" }
   },
   "icons": {
     "48": "icon.svg",

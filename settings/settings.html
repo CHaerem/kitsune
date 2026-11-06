@@ -47,6 +47,13 @@
     <label>Close tabs not used for <input type="number" id="archive-hours" min="0" step="1"> hours (0: never)</label>
   </section>
 
+  <section id="keys-section" hidden>
+    <h2>Keys</h2>
+    <p class="hint">Click a key, then press the new one. ⌫ removes it, Esc keeps it. ⌥⌘ and an arrow stay Firefox's. So does a letter it uses, such as ⌘D for a bookmark, until you clear it in <code>about:keyboard</code>.</p>
+    <div id="keys"></div>
+    <button id="keys-back" hidden>Back to the usual keys</button>
+  </section>
+
   <section>
     <h2>A copy of your essentials and folders</h2>
     <p id="copy-state"></p>
@@ -62,5 +69,6 @@
 
   <p class="hint" id="version"></p>
   <script src="settings.js"></script>
+  <script src="keys.js"></script>
 </body>
 </html>

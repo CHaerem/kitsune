@@ -95,10 +95,6 @@ async function switchToNth(n) {
   const space = (await spaceList(used))[n];
   if (space) await switchSpace(tab.windowId, space.id);
 }
-browser.commands.onCommand.addListener(name => {
-  const n = /^space-(\d)$/.exec(name);
-  if (n && tidierAlone) serial(() => switchToNth(n[1] - 1));
-});
 
 // The selected tab decides the space: a tab in another space (a link, an essential,
 // ⌃Tab) takes you there. Closing the last tab of a space is different: Firefox then
@@ -220,27 +216,6 @@ async function intoSpace(tabId) {
 }
 
 // --- When Tidier starts ------------------------------------------------------
-// ⌃1/⌃2/... are given here, not in the manifest, so that they are not taken from
-// Sidebery while it is in use. A key you have changed yourself stays.
-const SPACE_KEYS = 5;
-async function setSpaceKeys() {
-  const { os } = await browser.runtime.getPlatformInfo();
-  const control = os === "mac" ? "MacCtrl" : "Ctrl";
-  const commands = await browser.commands.getAll();
-  for (let n = 1; n <= SPACE_KEYS; n++) {
-    const command = commands.find(c => c.name === `space-${n}`);
-    if (command && !command.shortcut) await browser.commands.update({ name: command.name, shortcut: `${control}+${n}` }).catch(noteError);
-  }
-  // Without a sidebar a window has no list of tabs at all: a key to bring it back.
-  if (commands.some(c => c.name === "_execute_sidebar_action" && !c.shortcut)) {
-    await browser.commands.update({ name: "_execute_sidebar_action", shortcut: `${control}+Shift+S` }).catch(noteError);
-  }
-}
-
-async function resetSpaceKeys() {
-  for (const c of await browser.commands.getAll()) if (c.name.startsWith("space-") || c.name === "_execute_sidebar_action") await browser.commands.reset(c.name).catch(() => {});
-}
-
 // The permission to hide tabs was given in the sidebar.
 browser.permissions.onAdded.addListener(() => { if (started) serial(startSpaces); });
 
@@ -248,7 +223,7 @@ browser.permissions.onAdded.addListener(() => { if (started) serial(startSpaces)
 // when an add-on with this permission as an optional one is updated.
 async function startSpaces() {
   if (!tidierAlone) return;
-  await setSpaceKeys();
+  await giveKeys(); // keys-commands.js: here and not in the manifest, so that they are not taken from Sidebery while it is in use
   startMenus(); // ownfolders.js
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
