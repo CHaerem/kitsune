@@ -318,20 +318,16 @@ async function syncApplyRecord(doc, here, idOf) {
   return changed;
 }
 
-function syncApplyRules(doc, here, idOf, st) {
-  return rulesList.get().then(rules => {
-    const rank = new Map((doc.order.rules?.list ?? []).map((short, i) => [short, i]));
-    const wanted = Object.entries(doc.rules).filter(([, r]) => !r.gone && idOf(r.space))
-      .sort((a, b) => (rank.get(syncShort(a[0])) ?? Infinity) - (rank.get(syncShort(b[0])) ?? Infinity))
-      .map(([id, r]) => ({ url: id.slice(2), space: idOf(r.space) }));
-    // A rule whose space this machine does not know is left as it was.
-    const known = new Set(Object.values(st.map));
-    known.add(NO_CONTAINER);
-    const next = [...wanted, ...rules.filter(r => !known.has(r.space))];
-    if (JSON.stringify(next) === JSON.stringify(rules)) return false;
-    rulesList.set(next);
-    return true;
-  });
+async function syncApplyRules(doc, idOf, st) {
+  const rules = await rulesList.get();
+  const wanted = syncRanked(Object.keys(doc.rules).filter(id => !doc.rules[id].gone && idOf(doc.rules[id].space)), doc.order.rules?.list)
+    .map(id => ({ url: id.slice(2), space: idOf(doc.rules[id].space) }));
+  // A rule whose space this machine does not know is left as it was.
+  const known = new Set([...Object.values(st.map), NO_CONTAINER]);
+  const next = [...wanted, ...rules.filter(r => !known.has(r.space))];
+  if (JSON.stringify(next) === JSON.stringify(rules)) return false;
+  rulesList.set(next);
+  return true;
 }
 
 // Put tabs in this order in a window, moving as few as can be: each must come before the
@@ -398,9 +394,7 @@ async function syncApplyOrders(doc, here, idOf) {
   }
   // Spaces: the bar's order.
   if (differs("spaces")) {
-    const inverse = Object.fromEntries(Object.entries(here.spaces).map(([sid]) => [sid, idOf(sid)]));
-    const sorted = syncRanked(Object.keys(inverse), doc.order.spaces.list);
-    const inOrder = sorted.map(sid => inverse[sid]).filter(Boolean);
+    const inOrder = syncRanked(Object.keys(here.spaces), doc.order.spaces.list).map(idOf).filter(Boolean);
     const stored = (await browser.storage.local.get("spaceOrder")).spaceOrder;
     if (JSON.stringify(stored) !== JSON.stringify(inOrder)) {
       await browser.storage.local.set({ spaceOrder: inOrder });
@@ -442,7 +436,7 @@ async function syncApply(doc, here, st) {
   const spaces = await syncApplySpaces(doc, here, st);
   const essentials = await syncApplyEssentials(doc, here, idOf);
   const record = await syncApplyRecord(doc, here, idOf);
-  const rules = await syncApplyRules(doc, here, idOf, st);
+  const rules = await syncApplyRules(doc, idOf, st);
   // As when a copy is taken in: every window gets what it is missing. It never closes a tab
   // you have open, and a hidden space gets nothing.
   if (essentials || record) await reconcileAll();
