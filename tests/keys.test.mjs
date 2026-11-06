@@ -54,7 +54,11 @@ async function aWindow() {
   const x = await alone(ff);
   const selected = () => ff.list(w.id).find(t => t.active).title;
   const press = async name => { x.b.commands.onCommand.fire(name, ff.snap([...ff.tabs.values()].find(t => t.active && t.windowId === w.id))); await wait(300); };
-  return { ff, w, x, tab, selected, press };
+  // shortcuts.js tells a second press from a repeat by the clock, which the fake does not speed up.
+  let now = performance.now();
+  x.ctx.performance = { now: () => now };
+  const keyPause = () => { now += 1100; };
+  return { ff, w, x, tab, selected, press, keyPause };
 }
 
 test("next and previous tab go as drawn: essentials of this space, folders, today's tabs, round the ends", async () => {
@@ -119,16 +123,18 @@ test("next and previous space go along the bar and round the ends, and back to t
 });
 
 test("the essential key pins a page and unpins it, and leaves a page without an address alone", async () => {
-  const { x, ff, w, selected, press, tab } = await aWindow();
+  const { x, ff, w, selected, press, tab, keyPause } = await aWindow();
   await press("toggle-essential");
   assert.equal(ff.tabs.get(tab.t1.id).pinned, true);
   await wait(500);
   assert.ok(ff.store.essentials.some(e => e.url === "https://t1.example/"), "it is an essential");
+  keyPause();
   await press("toggle-essential");
   assert.equal(ff.tabs.get(tab.t1.id).pinned, false);
   const blank = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1, title: "new" });
   ff.select(blank.id);
   await wait(100);
+  keyPause();
   await press("toggle-essential");
   assert.equal(ff.tabs.get(blank.id).pinned, false);
   assert.equal(selected(), "new");
@@ -151,6 +157,37 @@ test("the folder key makes a folder in the space you are in, and its view asks f
   x.kill();
 });
 
+test("a key held down makes one folder and pins once, and the next press counts again", async () => {
+  const { x, ff, w, tab, keyPause } = await aWindow();
+  // Firefox fires the command once for each repeat of the key, and says nothing of it.
+  const fire = name => x.b.commands.onCommand.fire(name, ff.snap([...ff.tabs.values()].find(t => t.active && t.windowId === w.id)));
+  const hold = async name => { for (let i = 0; i < 4; i++) { fire(name); await wait(40); } await wait(400); };
+  const newFolders = () => Object.values(ff.synced).filter(e => e.group && e.name === "New folder").length;
+  await hold("new-folder");
+  assert.equal(newFolders(), 1);
+  keyPause();
+  await hold("new-folder");
+  assert.equal(newFolders(), 2);
+  await hold("toggle-essential");
+  assert.equal(ff.tabs.get(tab.t1.id).pinned, true, "an even number of repeats, and it is pinned");
+  keyPause();
+  await hold("toggle-essential");
+  assert.equal(ff.tabs.get(tab.t1.id).pinned, false);
+  x.kill();
+});
+
+test("held down, the key for the next tab goes on, one row for each repeat", async () => {
+  const { x, ff, w, tab, selected } = await aWindow();
+  ff.select(tab.e1.id);
+  await wait(100);
+  const on = () => ff.snap([...ff.tabs.values()].find(t => t.active && t.windowId === w.id));
+  // All at once, from the same tab: each has to wait for the one before it to know where it goes.
+  for (let i = 0; i < 3; i++) x.b.commands.onCommand.fire("next-tab", on());
+  await wait(500);
+  assert.equal(selected(), "o1");
+  x.kill();
+});
+
 test("in a small window the keys do nothing, and copying the address still does", async () => {
   const { x, ff, w, selected, tab, press } = await aWindow();
   const small = ff.addWindow({ type: "popup" });
@@ -167,6 +204,20 @@ test("in a small window the keys do nothing, and copying the address still does"
   assert.ok(!Object.values(ff.synced).some(e => e.group && e.name === "New folder"));
   assert.deepEqual(copied, ["https://small.example/"]);
   assert.ok(tab);
+  await press("next-tab");
+  assert.equal(selected(), "t2", "the normal window's keys still work");
+  x.kill();
+});
+
+test("a private window's tab cannot be made an essential by a key", async () => {
+  const { x, ff, press, selected } = await aWindow();
+  const hidden = ff.addWindow();
+  hidden.incognito = true;
+  const page = ff.addTab(hidden.id, { url: "https://private.example/", active: true });
+  for (const name of ["toggle-essential", "new-folder", "next-tab"]) x.b.commands.onCommand.fire(name, ff.snap(page));
+  await wait(400);
+  assert.equal(ff.tabs.get(page.id).pinned, false);
+  assert.ok(!Object.values(ff.synced).some(e => e.group && e.name === "New folder"));
   await press("next-tab");
   assert.equal(selected(), "t2", "the normal window's keys still work");
   x.kill();
@@ -272,7 +323,80 @@ test("going back to Sidebery takes every key back, and moving over again gives t
   x.b.commands.reset = async name => { reset.push(name); };
   await x.js("takeKeysBack")();
   assert.ok(reset.includes("tab-1") && reset.includes("space-1") && reset.includes("_execute_sidebar_action"));
+  assert.ok(!reset.includes("copy-url"), "that one is the browser's with Sidebery too, and yours if you changed it");
   assert.deepEqual(ff.store.keysGiven, []);
+  x.kill();
+  ff.commands = commandsOf();
+  ff.commandsSet = {};
+  const again = await alone(ff);
+  assert.equal(ff.commandsSet["tab-1"], "Ctrl+1");
+  assert.equal(ff.commandsSet["next-tab"], "Ctrl+MacCtrl+Down");
+  again.kill();
+});
+
+test("keys left behind when Tidier alone ended without moving back are taken back, once", async () => {
+  const ff = new FakeFirefox();
+  ff.commands = commandsOf();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 });
+  const offStart = async () => {
+    const x = ff.boot(), reset = [];
+    x.b.commands.reset = async name => { reset.push(name); };
+    x.b.runtime.onStartup.fire({});
+    await wait(1500);
+    for (let i = 0; i < 300 && !x.started(); i++) await wait(1000);
+    await wait(100);
+    x.kill();
+    return reset;
+  };
+  assert.deepEqual(await offStart(), [], "a browser that never gave them has nothing to take back");
+  ff.store.keysGiven = ["tab-1", "next-tab"];
+  const reset = await offStart();
+  assert.ok(reset.includes("tab-1") && reset.includes("next-tab") && reset.includes("toggle-essential"));
+  assert.ok(!reset.includes("copy-url"));
+  assert.deepEqual(ff.store.keysGiven, []);
+  assert.deepEqual(await offStart(), [], "and nothing at the next start");
+});
+
+test("a key that could not be given is tried again at the next start, and only that one", async () => {
+  const ff = new FakeFirefox();
+  ff.commands = commandsOf();
+  ff.managed = { tidierAlone: true };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 });
+  const x = ff.boot();
+  const update = x.b.commands.update;
+  x.b.commands.update = async c => { if (c.name === "tab-1") throw new Error("no"); return update(c); };
+  x.b.runtime.onStartup.fire({});
+  await wait(1200);
+  for (let i = 0; i < 300 && !x.started(); i++) await wait(1000);
+  await wait(500);
+  x.kill();
+  assert.ok(!ff.store.keysGiven.includes("tab-1"));
+  assert.ok(ff.store.keysGiven.includes("next-tab"));
+  // Since then you removed another key: it stays removed.
+  ff.commands = commandsOf({ ...ff.commandsSet, "next-tab": "", "tab-1": "" });
+  ff.commandsSet = {};
+  const y = await alone(ff);
+  assert.deepEqual(ff.commandsSet, { "tab-1": "Ctrl+1" });
+  y.kill();
+});
+
+test("back to the usual keys doubles none where ⌃ and ⌘ are the same key, and then nothing counts as changed", async () => {
+  const ff = new FakeFirefox();
+  ff.commands = commandsOf();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 });
+  const x = await alone(ff);
+  x.b.runtime.getPlatformInfo = async () => ({ os: "linux" });
+  ff.commandsSet = {};
+  await x.js("keysBackToFirst")();
+  const keys = Object.values(ff.commandsSet).filter(Boolean);
+  assert.equal(new Set(keys).size, keys.length);
+  assert.equal(ff.commandsSet["space-1"], "Ctrl+1");
+  assert.equal(ff.commandsSet["tab-1"], "", "the space has that key, as it would have at a first start");
+  ff.commands = commandsOf(ff.commandsSet);
+  assert.ok((await x.js("commandKeys")()).every(c => !c.changed));
   x.kill();
 });
 

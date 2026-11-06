@@ -26,6 +26,23 @@ async function copyUrl(windowId) {
 // Through the queue: selecting a placeholder pulls its real tab in, which changes the
 // tabs, so a key held down must see the outcome of the press before it.
 const inQueue = fn => windowId => serial(() => fn(windowId));
+
+// A key held down repeats, and Firefox does not tell a command so. Going through tabs may
+// go on; what makes something may not, or a long press of ⌥⌘N is a row of folders, and one
+// of ⌘D pins and unpins the tab, opening and closing its copies in every window. No
+// key-up reaches an extension, so a press counts only after a pause since the last one.
+// A Mac starts repeating within a second unless set otherwise, and each repeat counts
+// as the last press, so a key held for as long as you like is one press.
+const KEY_PAUSE_MS = 1000;
+function oncePerPress(fn) {
+  let last = -Infinity;
+  return windowId => {
+    const now = performance.now(), repeat = now - last < KEY_PAUSE_MS;
+    last = now;
+    return repeat ? Promise.resolve() : serial(() => fn(windowId));
+  };
+}
+
 const ORDINAL = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth"];
 
 const COMMANDS = [
@@ -33,8 +50,8 @@ const COMMANDS = [
   { name: "previous-tab", label: "Previous tab", key: "Ctrl+MacCtrl+Up", action: inQueue(w => stepTab(w, -1)) },
   { name: "next-space", label: "Next space", key: "Ctrl+MacCtrl+Right", action: inQueue(w => stepSpace(w, 1)) },
   { name: "previous-space", label: "Previous space", key: "Ctrl+MacCtrl+Left", action: inQueue(w => stepSpace(w, -1)) },
-  { name: "toggle-essential", label: "Make this tab an essential, or not", key: "Ctrl+D", action: inQueue(toggleEssential) },
-  { name: "new-folder", label: "New folder", key: "Ctrl+Alt+N", action: inQueue(newFolderHere) },
+  { name: "toggle-essential", label: "Make this tab an essential, or not", key: "Ctrl+D", action: oncePerPress(toggleEssential) },
+  { name: "new-folder", label: "New folder", key: "Ctrl+Alt+N", action: oncePerPress(newFolderHere) },
   // Without a sidebar a window has no list of tabs at all: a key to bring it back. ⌘S, Arc's, is compact mode in the dotfiles.
   { name: "_execute_sidebar_action", label: "Show or hide Tidier's sidebar", key: "MacCtrl+Shift+S", action: () => browser.sidebarAction.toggle() },
   { name: "copy-url", label: "Copy the address of the current tab", key: "Ctrl+Shift+C", action: copyUrl, always: true },
@@ -48,6 +65,7 @@ browser.commands.onCommand.addListener(async (name, tab) => {
   if (!command || !(tidierAlone || command.always)) return;
   const windowId = tab?.windowId ?? (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.windowId;
   const win = windowId !== undefined && await browser.windows.get(windowId).catch(() => null);
-  // The keys work in any window of Firefox's, but a small window has no list and no spaces.
-  if (win && (win.type === "normal" || command.always)) await command.action(windowId).catch(err => console.error("Tidier:", name, err));
+  // The keys work in any window of Firefox's, but a small window has no list and no spaces,
+  // and a private window's tabs are none of Tidier's: as an essential, one would be in every window.
+  if (win && ((win.type === "normal" && !win.incognito) || command.always)) await command.action(windowId).catch(err => console.error("Tidier:", name, err));
 });

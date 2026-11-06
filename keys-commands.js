@@ -91,17 +91,29 @@ async function giveKeys() {
   const given = (await browser.storage.local.get(KEYS_GIVEN))[KEYS_GIVEN] ?? [];
   const named = COMMANDS.filter(c => c.key && commands.some(x => x.name === c.name)).map(c => c.name);
   if (named.every(name => given.includes(name))) return; // the usual start: nothing to change
-  let failed = false;
+  const failed = new Set();
   for (const update of keysToGive(COMMANDS, commands, given, os)) {
-    await browser.commands.update(update).catch(err => { failed = true; noteError(err); });
+    await browser.commands.update(update).catch(err => { failed.add(update.name); noteError(err); });
   }
-  if (!failed) await browser.storage.local.set({ [KEYS_GIVEN]: named });
+  // Only what failed is tried again at the next start: for the others, no key is now your choice.
+  await browser.storage.local.set({ [KEYS_GIVEN]: named.filter(name => !failed.has(name)) });
 }
 
+// The key each command starts with, as a machine with no keys at all would get them.
+const firstKeys = os => new Map(keysToGive(COMMANDS, COMMANDS.map(({ name }) => ({ name, shortcut: "" })), [], os).map(g => [g.name, g.shortcut]));
+
 // Back to Sidebery: the keys are the manifest's again, and a move over later gives them anew.
+// Not the key to copy an address, which is the one command Sidebery's browser has too.
 async function takeKeysBack() {
-  for (const { name, key } of COMMANDS) if (key) await browser.commands.reset(name).catch(() => {});
+  for (const { name, key, always } of COMMANDS) if (key && !always) await browser.commands.reset(name).catch(() => {});
   await browser.storage.local.set({ [KEYS_GIVEN]: [] });
+}
+
+// Tidier alone can also end without moving back: declared in managed storage, then no
+// longer. With the setting off the commands do nothing, so ⌘1 would be a key that does
+// nothing. Only a read at each start, unless keys were given.
+async function takeKeysBackIfGiven() {
+  if ((await browser.storage.local.get(KEYS_GIVEN))[KEYS_GIVEN]?.length) await takeKeysBack();
 }
 
 // --- The settings page ------------------------------------------------------------
@@ -135,10 +147,10 @@ const FIREFOX_KEYS = {
 async function commandKeys() {
   if (!tidierAlone) return null;
   const { os } = await browser.runtime.getPlatformInfo();
-  const have = await browser.commands.getAll();
-  return COMMANDS.filter(c => c.key).map(({ name, label, key }) => {
-    const shortcut = have.find(x => x.name === name)?.shortcut ?? "", first = keyForSystem(key, os);
-    return { name, label, pretty: prettyKey(shortcut, os), changed: keyId(shortcut, os) !== keyId(first, os) };
+  const have = await browser.commands.getAll(), first = firstKeys(os);
+  return COMMANDS.filter(c => c.key).map(({ name, label }) => {
+    const shortcut = have.find(x => x.name === name)?.shortcut ?? "";
+    return { name, label, pretty: prettyKey(shortcut, os), changed: keyId(shortcut, os) !== keyId(first.get(name), os) };
   });
 }
 
@@ -163,6 +175,6 @@ async function setCommandKey(name, shortcut) {
 // Every key as it was given. All together, so that keys you swapped cannot be in each
 // other's way, as they would be one by one through setCommandKey.
 async function keysBackToFirst() {
-  const { os } = await browser.runtime.getPlatformInfo();
-  for (const { name, key } of COMMANDS) if (key) await browser.commands.update({ name, shortcut: keyForSystem(key, os) }).catch(noteError);
+  const first = firstKeys((await browser.runtime.getPlatformInfo()).os);
+  for (const { name, key } of COMMANDS) if (key) await browser.commands.update({ name, shortcut: first.get(name) ?? "" }).catch(noteError);
 }

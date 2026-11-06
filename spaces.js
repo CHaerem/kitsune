@@ -222,8 +222,8 @@ browser.permissions.onAdded.addListener(() => { if (started) serial(startSpaces)
 // Each window's active space, shown again: Firefox shows every hidden tab again
 // when an add-on with this permission as an optional one is updated.
 async function startSpaces() {
-  if (!tidierAlone) return;
-  await giveKeys(); // keys-commands.js: here and not in the manifest, so that they are not taken from Sidebery while it is in use
+  if (!tidierAlone) return takeKeysBackIfGiven(); // keys-commands.js
+  await giveKeys().catch(noteError); // here and not in the manifest, so that they are not taken from Sidebery while it is in use; keys must not stop the rest
   startMenus(); // ownfolders.js
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
