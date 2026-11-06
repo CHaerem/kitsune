@@ -177,6 +177,11 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   have them mixed: Sidebery shows a tab added at the end of a window in its
   space without moving it there). That sort waits ~1.5 s for Sidebery to finish
   placing the new tabs; sorting sooner puts tabs in the wrong panel.
+- A tab in a folder that you pull into another window (by selecting its ghost)
+  takes its ghost's place there, but outside the folder; the
+  ghost it leaves behind stays in the folder. Sidebery decides a moved-in tab's
+  place in its tree itself, from the tab that opened it, and Firefox does not
+  report an opener in another window, so no extension can put it in the folder.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
 - A tab that exists before a new window's sidebar has started gets the last
