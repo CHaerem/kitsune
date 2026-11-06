@@ -77,7 +77,9 @@ export class FakeFirefox {
     if (this.ext) this.ext.kill();
     const ff = this, b = {}, timers = new Set();
     let dead = false;
-    const T = { setTimeout: (f, ms = 0, ...a) => { const h = setTimeout(() => { timers.delete(h); if (!dead) f(...a); }, ms / SCALE); timers.add(h); return h; }, clearTimeout: h => { timers.delete(h); clearTimeout(h); } };
+    // A fake with a clock of its own (chaos_firefox.mjs) runs the scripts' timers on that.
+    const clock = ff.clock ?? { setTimeout: (f, ms) => setTimeout(f, ms / SCALE), clearTimeout };
+    const T = { setTimeout: (f, ms = 0, ...a) => { const h = clock.setTimeout(() => { timers.delete(h); if (!dead) f(...a); }, ms); timers.add(h); return h; }, clearTimeout: h => { timers.delete(h); clock.clearTimeout(h); } };
     const reject = m => Promise.reject(new Error(m));
     const need = id => ff.tabs.get(id) || (() => { throw new Error(`Invalid tab ID: ${id}`); })();
     b.tabs = {
@@ -154,9 +156,10 @@ export class FakeFirefox {
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
     b.permissions = { onAdded: ev(), onRemoved: ev() };
     b.sidebarAction = { toggle: async () => {} };
+    ff.adapt?.(b); // a fake built on this one changes the API here, before the scripts see it
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };
-    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {} });
+    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: ff.crypto ?? globalThis.crypto, performance: ff.clock?.performance ?? performance, navigator: {}, ...(ff.clock ? { Date: ff.clock.Date } : {}) });
     const files = JSON.parse(readFileSync(new URL("manifest.json", REPO), "utf8")).background.scripts;
     for (const f of files) {
       const src = readFileSync(new URL(f, REPO), "utf8");
@@ -165,7 +168,7 @@ export class FakeFirefox {
     const ext = {
       b, ctx, errors,
       js: code => vm.runInContext(code, ctx),
-      kill() { dead = true; timers.forEach(clearTimeout); },
+      kill() { dead = true; timers.forEach(h => clock.clearTimeout(h)); },
       started: () => vm.runInContext("started", ctx),
       send(msg, sender) { for (const { f } of b.runtime.onMessage.ls) { const r = f(msg, { id: "tidier", url: "moz-extension://tidier/ghost.html", ...sender }); if (r !== undefined) return r; } },
     };
