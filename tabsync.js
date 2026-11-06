@@ -303,7 +303,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
 // Make sure every synced tab has exactly one live tab and every window exactly
 // one representation of it, then fill in what is missing. Safe to run repeatedly.
-async function reconcileAll() {
+async function reconcileAll({ keepMissing = false } = {}) {
   const all = await getSynced();
   const wins = await normalWindows();
   const winIds = new Set(wins.map(w => w.id));
@@ -329,10 +329,11 @@ async function reconcileAll() {
     if (isOwnFolder(all[key])) continue;
     const reps = repsOf(key, tabs);
     if (!reps.length) {
-      // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
-      // a placeholder that is loaded when Tidier updates, and it may have been
-      // the tab's last copy. fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved) delete all[key];
+      // Nothing left anywhere: the tab is gone. A saved tab stays. And nothing goes at an
+      // update (`keepMissing`): Firefox closes a placeholder that is loaded then, also a
+      // selected one in the last window, and it may have been the tab's last copy.
+      // fillWindow gives it a new placeholder.
+      if (sessionHere && !all[key].saved && !keepMissing) delete all[key];
       continue;
     }
     if (!all[key].group) {
@@ -987,7 +988,7 @@ async function start(delayMs) {
     // Without the roles every tab looks unsynced, and reconcileAll would act on that.
     if (await step(loadRoles)) {
       await step(initSynced);
-      await step(reconcileAll); // also adds missing essentials, via fillWindow
+      await step(() => reconcileAll({ keepMissing: !firefoxStarting })); // also adds missing essentials, via fillWindow
     }
     await step(foldersFirstAll); // folders.js
     await step(oneLoadedEach); // essentials.js: Firefox may have restored a page in several windows
@@ -1010,13 +1011,13 @@ async function seeUnseenTabs() {
     if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
   }
 }
-let startRequested = false;
+let startRequested = false, firefoxStarting = false;
 function requestStart(delayMs) {
   if (startRequested) return;
   startRequested = true;
   start(delayMs);
 }
-browser.runtime.onStartup.addListener(() => requestStart(5000));
+browser.runtime.onStartup.addListener(() => { firefoxStarting = true; requestStart(5000); });
 browser.runtime.onInstalled.addListener(() => requestStart(1000));
 // Enabled again after being disabled: neither event fires, so start anyway.
 // onStartup/onInstalled arrive right after the background page loads, well

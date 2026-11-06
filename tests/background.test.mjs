@@ -888,3 +888,22 @@ test("an essential's copy closed just after it was created comes back", async ()
   assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1);
   x.kill();
 });
+
+test("a tab whose last copy Firefox closes at an update comes back, saved or not", async () => {
+  const { ff, x: first, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  // Only its placeholder in the other window is left, selected and so loaded, there.
+  ff.closeWindow(a.id);
+  await ff.clock.run(1000);
+  ff.focusWindow(-1);
+  ff.select(ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key).id);
+  await ff.clock.run(1000);
+  assert.ok(ff.list(b.id).every(y => ff.values.get(y.id)?.syncKey !== key || !y.discarded));
+  const x = ff.update();
+  await ff.clock.idle(60000);
+  assert.ok(ff.synced[key], "it is still in the record");
+  assert.ok(ff.list(b.id).some(y => ff.values.get(y.id)?.syncKey === key), "and in the window");
+  first.kill(); x.kill();
+});
