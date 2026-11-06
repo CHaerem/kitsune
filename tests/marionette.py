@@ -33,13 +33,20 @@ class Marionette:
         self.cmd("WebDriver:SetTimeouts", {"script": 170000})
         self.chrome()
 
+    def _read(self):
+        # An empty read means Firefox has gone away; waiting on would spin for ever.
+        data = self.sock.recv(65536)
+        if not data:
+            raise ConnectionError("Firefox closed the connection")
+        return data
+
     def _recv(self):
         while b":" not in self.buf:
-            self.buf += self.sock.recv(65536)
+            self.buf += self._read()
         n, rest = self.buf.split(b":", 1)
         n = int(n)
         while len(rest) < n:
-            rest += self.sock.recv(65536)
+            rest += self._read()
         self.buf = rest[n:]
         return json.loads(rest[:n])
 

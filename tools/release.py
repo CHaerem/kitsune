@@ -28,8 +28,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "CHaerem/tidier"
 AMO = "https://addons.mozilla.org/api/v5"
 # Everything in git goes into the extension, except these.
-EXCLUDE = ("README.md", ".gitignore", ".github/", "native/", "tests/", "tools/")
+EXCLUDE = ("README.md", "FEATURES.md", "CLAUDE.md", ".gitignore", ".github/", "native/", "tests/", "tools/")
 POLL_SECONDS, POLL_LIMIT_SECONDS = 10, 30 * 60  # AMO usually signs within minutes
+GET_ATTEMPTS, GET_RETRY_SECONDS = 5, 30  # a passing fault at AMO must not end a 30-minute wait
 
 
 def git(*args):
@@ -96,7 +97,23 @@ def jwt():
 
 
 def amo(method, url, json_body=None, form=None, file=None, raw=False):
-    """One AMO request with a fresh token (a token lives one minute here)."""
+    """One AMO request with a fresh token (a token lives one minute here).
+
+    A GET is tried again if AMO has a passing fault: release.py is run once per
+    release, and without this one bad answer while polling loses the release.
+    Anything else is not tried again: a POST could upload the version twice.
+    """
+    for attempt in range(1, GET_ATTEMPTS + 1 if method == "GET" else 2):
+        try:
+            return amo_once(method, url, json_body, form, file, raw)
+        except (urllib.error.URLError, TimeoutError) as e:  # HTTPError (a URLError) only for 5xx, see amo_once
+            if attempt == (GET_ATTEMPTS if method == "GET" else 1):
+                raise SystemExit(f"AMO {method} {url}: {e}")
+            print(f"AMO {method} {url}: {e}; trying again in {GET_RETRY_SECONDS} s")
+            time.sleep(GET_RETRY_SECONDS)
+
+
+def amo_once(method, url, json_body, form, file, raw):
     headers = {"Authorization": f"JWT {jwt()}"}
     body = None
     if file:
@@ -117,6 +134,8 @@ def amo(method, url, json_body=None, form=None, file=None, raw=False):
     except urllib.error.HTTPError as e:
         if e.code == 404 and method == "GET":
             return None
+        if e.code >= 500:
+            raise
         raise SystemExit(f"AMO {method} {url}: HTTP {e.code}: {e.read().decode(errors='replace')[:2000]}")
     return data if raw else json.loads(data)
 

@@ -35,7 +35,7 @@ jobs:
     name: Firefox ${{ matrix.firefox }}
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 45  # a run takes about 10; twice that with the second try, and GitHub cancels silently
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +65,11 @@ jobs:
         run: node --test
       # One test Firefox at a time (--serial): GitHub's runner is slower than
       # a Mac, and three at once there would test the runner, not Tidier.
+      #
+      # A failure gets one more try, in the same job: on GitHub's slower machines
+      # a new window's essentials can land in the wrong space (a Sidebery bug, with
+      # a proposed fix in mbnuqw/sidebery#2497). It covers any failure, not only
+      # that one, so it is marked: a warning on the run, seen in Actions.
       - name: Smoke test
         env:
           TIDIER_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
@@ -72,4 +77,6 @@ jobs:
           TIDIER_DOTFILES: ${{ github.workspace }}/dotfiles/home/firefox
         run: |
           echo "Firefox ${{ steps.firefox.outputs.firefox-version }} at $TIDIER_FIREFOX"
+          python3 -I tidier/tests/smoke.py --serial && exit 0
+          echo "::warning::The smoke test failed on its first try in Firefox ${{ matrix.firefox }}; trying once more"
           python3 -I tidier/tests/smoke.py --serial

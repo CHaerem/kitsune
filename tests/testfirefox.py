@@ -209,8 +209,10 @@ class TestFirefox:
         path = f"{self.dir}/tidier.xpi"
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             for root, dirs, files in os.walk(EXT_DIR):
-                dirs[:] = [d for d in dirs if root != EXT_DIR or d not in ("tests", "tools", "native", ".git", ".github")]
+                dirs[:] = [d for d in dirs if root != EXT_DIR or d not in ("tests", "tools", "native", ".git", ".github", ".claude")]
                 for f in files:
+                    if root == EXT_DIR and f.endswith(".md"):  # as tools/release.py leaves them out
+                        continue
                     full = os.path.join(root, f)
                     z.write(full, os.path.relpath(full, EXT_DIR))
         return path

@@ -4,10 +4,11 @@
 # usually within a day (or at once with "Check for updates" in about:addons).
 # Nothing happens if nothing in the extension changed.
 #
-# A smoke test that fails on its first attempt is run once more: on GitHub's
-# slower machines a new window's essentials can land in the wrong space (a
-# Sidebery bug, fixed by mbnuqw/sidebery#2497). The second attempt is a full,
-# independent run; if it fails too, nothing is released and GitHub e-mails you.
+# Any green run on main can release, not only a push's: a run started by hand
+# or by the schedule cancels a push's run (same concurrency group in smoke.yml),
+# and that commit must not wait for the next push. tools/release.py does nothing
+# when there is nothing new, so "Run workflow" also recovers a commit left behind.
+# Pull requests never release (and their runs are not on the branch main).
 #
 # The AMO API key is in the secrets AMO_JWT_ISSUER and AMO_JWT_SECRET, set up
 # once with tools/setup-amo-key.sh. This workflow only runs code from main
@@ -28,19 +29,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  retry-smoke:
-    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.run_attempt == 1
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Run the failed smoke test once more
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
-
   release:
-    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
+    if: github.event.workflow_run.event != 'pull_request' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

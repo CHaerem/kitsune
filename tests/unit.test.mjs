@@ -8,7 +8,7 @@
 // below), so a move that would break the tree in Firefox breaks it here too.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const NONE = "firefox-default";
@@ -197,4 +197,21 @@ test("a tab gets its saved address when it comes into a folder, and loses it whe
   all.a.parentKey = null;                                            // dragged out
   noteSaved(all);
   assert.ok(!all.a.saved && !all.b.saved && !storedInFolder(all, "b"));
+});
+
+// --- Releases ---------------------------------------------------------------
+test("the documents stay out of the signed extension, so changing them is no release", () => {
+  const release = readFileSync(new URL("../tools/release.py", import.meta.url), "utf8");
+  const exclude = release.match(/^EXCLUDE = \((.*)\)$/m)[1];
+  for (const file of readdirSync(new URL("../", import.meta.url)).filter(f => f.endsWith(".md"))) {
+    assert.ok(exclude.includes(`"${file}"`), `${file} would go into the extension`);
+  }
+});
+
+test("a green run on main releases, whatever started it", () => {
+  // A run started by hand or by the schedule cancels a push's run, so a gate on
+  // event == 'push' would leave that commit unreleased, with nothing red.
+  const release = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  assert.ok(!/workflow_run\.event == 'push'/.test(release));
+  assert.match(release, /workflow_run\.event != 'pull_request'/);
 });

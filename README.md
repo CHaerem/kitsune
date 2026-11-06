@@ -101,7 +101,8 @@ container rules) is left to it and set up in the dotfiles.
 6. **Archiving**, as in Arc (`archive.js`): a tab not selected in any window
    for 12 hours is closed everywhere, and stays under History → Recently
    Closed Tabs (⌘⇧T). Essentials, folders and the tabs in them, selected tabs
-   and tabs playing sound are kept. The time never counts from before
+   and tabs playing sound are kept, and so is a tab that is only a placeholder
+   (its real page was in a window you closed) until you select it. The time never counts from before
    archiving was first turned on. Change it with `archiveAfterHours` in the
    extension storage (0 = off).
 7. **Saved tabs**, like Arc's pinned section and Zen's pinned tabs (in
@@ -320,8 +321,10 @@ Every push to `main` that changes the extension ends up in your Firefox on
 its own:
 
 1. The smoke test runs on GitHub (`.github/workflows/smoke.yml`). A failed
-   first attempt is run once more, because of the known pin race.
-2. When it passes, `.github/workflows/release.yml` runs `tools/release.py`:
+   first try gets one more try in the same job, whatever failed, and leaves a
+   warning on the run. It is there for the known pin race.
+2. When a run on `main` passes (a push, by hand or the weekly one),
+   `.github/workflows/release.yml` runs `tools/release.py`:
    - it builds the `.xpi` with version `major.minor.<number of commits>`, e.g.
      1.6.7, so nobody has to bump it;
    - addons.mozilla.org signs it as *unlisted* (not in its catalogue), because
@@ -331,9 +334,23 @@ its own:
    installs the new version by itself. It checks once a day; *Check for
    updates* in `about:addons` checks at once.
 
-Nothing is released when only the README, tests or tools changed. Change
-`major.minor` in `manifest.json` for a bigger change. `tools/release.py
+Nothing is released when only the documents (`README.md`, `FEATURES.md`,
+`CLAUDE.md`), tests, tools, `native/` or `.github/` changed; none of them goes
+into the extension. Change `major.minor` in `manifest.json` for a bigger change. `tools/release.py
 --dry-run DIR` builds the `.xpi` and `updates.json` locally without signing.
+
+If a release is bad, Firefox never goes back to an older version, so the way
+out is a newer one:
+
+1. To stop it spreading, mark the release before it as the latest:
+   `gh release edit v<older> --latest -R CHaerem/tidier`. `update_url` follows
+   the latest release, so Firefoxes that have not updated yet stay where they are.
+2. `git revert` the commit and push. It gets a higher version, and Firefox
+   updates to it.
+3. If the smoke test is red for another reason (a new Firefox or Sidebery) and
+   the fix cannot wait, run the release yourself from the reverted commit, with
+   the AMO key in `AMO_JWT_ISSUER` and `AMO_JWT_SECRET`: `tools/release.py`.
+   It skips the test, so do this only for a revert.
 
 Set up once:
 
@@ -351,7 +368,7 @@ Set up once:
 From fastest to most complete:
 
 ```bash
-node --test                          # unit tests, under a second
+node --test                          # unit tests, about a second
 tests/smoke.py --only trees,folders  # some smoke test groups, about a minute
 tests/smoke.py                       # the whole smoke test, about three minutes
 tests/smoke.py --installed           # the signed version installed in your Firefox
@@ -362,7 +379,10 @@ tests/smoke.py --serial              # in one test Firefox, as on GitHub (about 
 The unit tests (`tests/unit.test.mjs`) cover the logic that needs no Firefox:
 the order a window's tabs are put in, and moving tabs without breaking
 Sidebery's tree, against a small model of how Sidebery rebuilds its tree after
-a move. Change that logic test-first there.
+a move. Change that logic test-first there. `tests/background.test.mjs` runs
+the real background scripts on a fake Firefox (`tests/fake_firefox.mjs`), for
+what is hard to bring about in a real one: a start with no windows, a refused
+call during a start, an essential in a removed container.
 
 The group names for `--only` are the check functions in `tests/smoke.py`
 (`new_window`, `essentials`, `folders`, `trees`, …); a group that needs the

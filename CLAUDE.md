@@ -19,7 +19,7 @@ Tidier itself, and Sidebery being replaced by Tidier's own sidebar.
 ## The fast loop
 
 ```bash
-node --test                                   # unit tests, under a second
+node --test                                   # unit tests, about a second
 tests/smoke.py --only essentials,tab_sync     # some groups, about a minute
 tests/smoke.py                                # everything, three Firefoxes at once, about four minutes
 ```
@@ -59,9 +59,10 @@ tests/smoke.py                                # everything, three Firefoxes at o
 - A push to main runs the smoke test on GitHub (Firefox and Developer
   Edition); when it passes, the Release workflow signs the extension on AMO
   and publishes it with `updates.json`, and Firefox updates itself. A smoke
-  test that fails on its first attempt is run once more automatically.
-- The version is `1.6.<number of commits>` (tools/release.py), so every
-  commit on main is a new version.
+  test that fails on its first try gets one more in the same job, and a warning.
+- The version is `1.6.<number of commits>` (tools/release.py). A commit gets a
+  release only if it changes what goes into the extension: not the documents,
+  tests, tools, `native/` or `.github/`.
 - dotfiles: ask before each commit and push there (its own CLAUDE.md), and a
   change to a `.nix` file takes effect only after the user's switch.
 
