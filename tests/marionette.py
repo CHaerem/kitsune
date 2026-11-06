@@ -17,9 +17,11 @@ elif os.path.isdir(FIREFOX):
 
 
 class Marionette:
-    def __init__(self, port=2828, wait=90):
+    def __init__(self, port=2828, wait=90, alive=None):
         deadline = time.time() + wait
         while True:
+            if alive and not alive():
+                raise ConnectionError("Firefox has quit")
             try:
                 self.sock = socket.create_connection(("127.0.0.1", port), timeout=180)
                 break

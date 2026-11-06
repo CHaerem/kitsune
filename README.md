@@ -382,7 +382,7 @@ Set up once:
 From fastest to most complete:
 
 ```bash
-node --test                          # unit tests, about a second
+node --test                          # unit tests, a few seconds
 tests/smoke.py --only trees,folders  # some smoke test groups, about a minute
 tests/smoke.py                       # the whole smoke test, about three minutes
 tests/smoke.py --installed           # the signed version installed in your Firefox

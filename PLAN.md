@@ -33,14 +33,14 @@ Rules for all of it:
 - [x] ⌘⇧T on an essential does not double it, and doubles cannot lose another.
 - [x] Placeholders do not stay loaded when a new window gets many tabs, and the
       test no longer calls that a Sidebery bug.
-- [ ] A check of an update over a running session: same tabs, essentials and
+- [x] A check of an update over a running session: same tabs, essentials and
       folders before and after.
-- [ ] Tests see errors inside Tidier, show why Firefox did not start, and the
+- [x] Tests see errors inside Tidier, show why Firefox did not start, and the
       restart checks cannot quietly disappear from a green run.
-- [ ] A second ghost selected within 0.7 s of a pull opens; a tab closed within
+- [x] A second ghost selected within 0.7 s of a pull opens; a tab closed within
       0.6 s of a pull closes everywhere.
-- [ ] A title or icon change writes the tab record only when something changed.
-- [ ] A page with unsaved input is not closed by archiving or a live folder.
+- [x] A title or icon change writes the tab record only when something changed.
+- [x] A page with unsaved input is not closed by archiving or a live folder.
 - [ ] Tidier keeps a copy of its own data: essentials, folders and saved tabs, as a
       dated file through the native host, restored from Tidier itself.
 - [ ] A live folder that has stopped (no host, no `gh` login) shows it.

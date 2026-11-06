@@ -20,7 +20,7 @@ sidebar. Nothing that exists only for Sidebery gets better from here.
 ## The fast loop
 
 ```bash
-node --test                                   # unit tests, about a second
+node --test                                   # unit tests, a few seconds
 tests/smoke.py --only essentials,tab_sync     # some groups, about a minute
 tests/smoke.py                                # everything, three Firefoxes at once, about four minutes
 ```

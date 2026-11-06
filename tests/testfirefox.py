@@ -22,11 +22,14 @@ Paths can be set with TIDIER_FIREFOX, TIDIER_SIDEBERY_XPI and TIDIER_DOTFILES
         ...
 """
 import glob
+import http.server
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -61,7 +64,33 @@ TEST_PREFS = {
     # Firefox removes when it quits) where Firefox allows unsigned add-ons:
     # Developer Edition and Nightly. Release Firefox ignores it.
     "xpinstall.signatures.required": False,
+    # A page's leave-page handler counts without real user input (see PAGES).
+    "dom.require_user_interaction_for_beforeunload": False,
 }
+
+# Test pages served from here: what no public test page does, and no dependence on
+# a site for the checks that use them.
+PAGES = {
+    "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
+    "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+}
+
+
+def serve_pages():
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = PAGES.get(self.path.split("?")[0])
+            self.send_response(200 if body else 404)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write((body or "").encode())
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def sidebery_xpi():
@@ -103,7 +132,7 @@ class TestFirefox:
     def __init__(self, xpi=None, port=PORT):
         self.xpi = xpi  # a signed Tidier .xpi; default: this folder (installed for real where Firefox allows it)
         self.port = port  # each test Firefox running at the same time needs its own
-        self.dir = self.proc = self.m = None
+        self.dir = self.proc = self.m = self.pages = None
 
     def restart(self):
         """Quit the test Firefox and start it again with the same profile, so
@@ -140,6 +169,8 @@ class TestFirefox:
                 self.proc.wait(20)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        if self.pages:
+            self.pages.shutdown()
         if self.dir:
             shutil.rmtree(self.dir, ignore_errors=True)
 
@@ -173,11 +204,27 @@ class TestFirefox:
         json.dump({}, open(self.fake_prs, "w"))
 
     def _start(self):
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", self.port)) == 0:
+                # Two runs on one port get in each other's way, and only show as
+                # connections that break; say so instead.
+                raise SystemExit(f"Port {self.port} is in use: is another smoke test running? (--port for --only and --serial)")
         env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "TIDIER_FAKE_PRS": self.fake_prs}
-        self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
-                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        self.m = Marionette(port=self.port, wait=60)
+        log = f"{self.dir}/firefox.log"
+        with open(log, "ab") as out:
+            self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
+                                         env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
+        except OSError as err:
+            # Without Firefox's own words this is only "Connection refused".
+            lines = open(log, errors="replace").read().strip().splitlines()[-15:]
+            raise SystemExit(f"The test Firefox did not start ({err}). What it said:\n" + "\n".join(lines))
         self.m.fake_prs = self.fake_prs
+        if not self.pages:
+            self.pages = serve_pages()
+        self.m.pages = f"http://127.0.0.1:{self.pages.server_address[1]}"
+        self.m.update_xpi = self._newer_xpi
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
     def _setup(self):
@@ -199,14 +246,20 @@ class TestFirefox:
             try:
                 m.cmd("Addon:Install", {"path": self._unsigned_xpi(), "temporary": False})
             except RuntimeError:  # release Firefox: signed add-ons only
+                if os.environ.get("TIDIER_MUST_RESTART"):  # where it should work: else the restart checks would just not run
+                    raise
                 m.can_restart = False
                 m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
         m.restart = self.restart
         time.sleep(8)  # Tidier starts: essentials, tab sync, live folders
 
-    def _unsigned_xpi(self):
+    def _newer_xpi(self):
+        """This folder as an .xpi with a higher version than the installed one, to update to."""
+        return self._unsigned_xpi(version="1.6.999999", name="tidier-newer.xpi")
+
+    def _unsigned_xpi(self, version=None, name="tidier.xpi"):
         """This folder as an .xpi, without what is not part of the extension."""
-        path = f"{self.dir}/tidier.xpi"
+        path = f"{self.dir}/{name}"
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
             for root, dirs, files in os.walk(EXT_DIR):
                 dirs[:] = [d for d in dirs if root != EXT_DIR or d not in ("tests", "tools", "native", ".git", ".github", ".claude")]
@@ -214,7 +267,10 @@ class TestFirefox:
                     if root == EXT_DIR and f.endswith(".md"):  # as tools/release.py leaves them out
                         continue
                     full = os.path.join(root, f)
-                    z.write(full, os.path.relpath(full, EXT_DIR))
+                    if version and full == os.path.join(EXT_DIR, "manifest.json"):
+                        z.writestr("manifest.json", json.dumps({**json.load(open(full)), "version": version}))
+                    else:
+                        z.write(full, os.path.relpath(full, EXT_DIR))
         return path
 
 

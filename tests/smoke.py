@@ -492,6 +492,27 @@ def tab_sync(m):
     check("pulling a tab in leaves no placeholder in Recently Closed (⌘⇧T reopens what you closed)", r["closedGhosts"] == 0, str(r["closedGhosts"]))
     check("closing a tab closes it everywhere", r["closed"] == [[], []], str(r["closed"]))
     r = m.js(H + """
+      const a = main(), urls = ["https://example.org/?smoke-quick-1", "https://example.org/?smoke-quick-2", "https://example.org/?smoke-quick-3"];
+      const tabs = urls.map(u => a.gBrowser.addTrustedTab(u, {userContextId: 3, inBackground: true}));
+      await wait(4500);
+      const ks = tabs.map(t => key(a, t)), w = other(), ghost = k => w.gBrowser.tabs.find(x => key(w, x) === k);
+      w.focus(); await wait(800);
+      // Two selected right after each other: both come, and the last stays selected.
+      w.gBrowser.selectedTab = ghost(ks[0]); await wait(150); w.gBrowser.selectedTab = ghost(ks[1]);
+      await wait(3000);
+      const both = [find(ks[0]), find(ks[1])], selected = key(w, w.gBrowser.selectedTab) === ks[1] && !!w.gBrowser.selectedTab.linkedPanel && !url(w.gBrowser.selectedTab).includes("ghost.html");
+      // Closed right after it came: closed everywhere, not only here.
+      w.gBrowser.selectedTab = ghost(ks[2]);
+      for (let i = 0; i < 40 && !(key(w, w.gBrowser.selectedTab) === ks[2] && !url(w.gBrowser.selectedTab).includes("ghost.html")); i++) await wait(25);
+      w.gBrowser.removeTab(w.gBrowser.selectedTab);
+      await wait(2500);
+      const closed = find(ks[2]);
+      await removeWhere((x, t) => ks.includes(key(x, t)));
+      return {both, selected, closed};""")
+    check("two ghosts selected right after each other both come, and the last is selected",
+          r["both"] == [[["ghost/unloaded"], ["live/loaded"]]] * 2 and r["selected"], str(r))
+    check("a tab closed right after it was pulled in closes everywhere", r["closed"] == [[], []], str(r))
+    r = m.js(H + """
       const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       const a = await AddonManager.getAddonByID("%s"); await a.disable(); await wait(1500); await a.enable(); await wait(6000);
       const t = main().gBrowser.addTrustedTab("https://example.org/?smoke-restart", {userContextId: 3, inBackground: true});
@@ -757,6 +778,18 @@ def archiving(m):
           f"{late}, {r}")
     check("an archived tab is in Recently Closed as the real page only", r["closedReal"] == 1 and r["closedGhosts"] == 0, str(r))
     check("archiving keeps the folder tab and the selected tab after the limit", r["selectedKept"] == [1, 1] and late.get("kept", {}).get(plain["folder"]) == "folder", f"{late}, {r}")
+    # A page with unsaved input: closing it would make Firefox select it and ask.
+    setup = m.js(H + """const w = main(), selected = w.gBrowser.selectedTab;
+      const t = w.gBrowser.addTrustedTab(args[0] + "/unsaved", {userContextId: 3, inBackground: true});
+      await wait(5000);
+      return {k: key(w, t), selected: selected.linkedPanel};""", m.pages)
+    now = int(time.time() * 1000)
+    late = extension_message(m, {"type": "archiveNow", "now": now + 13 * 3600 * 1000, "keys": [json.loads(setup["k"])], "explain": True})
+    r = m.js(H + """const k = args[0], there = find(k); await removeUnsaved(k); return there;""".replace("removeUnsaved(k)", """(async k => {
+        for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (key(w, t) === k) w.gBrowser.removeTab(t, {skipPermitUnload: true});
+        await wait(2500); })(k)"""), setup["k"])
+    check("archiving keeps a page with unsaved input, without asking", late.get("archived") == [] and late.get("kept", {}).get(json.loads(setup["k"])) == "unsaved"
+          and sum(len(x) for x in r) == 2, f"{late}, {r}")
 
 
 def shortcuts(m):
@@ -960,6 +993,17 @@ def many_tabs(m):
         print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)
     else:
         check("with nothing happening, Tidier does nothing (15 s)", idle["jobs"] == 0 and idle["lookups"] == 0, str(idle))
+    # A page whose title ticks must not rewrite Tidier's record at every tick.
+    r = m.js(H + """const w = main();
+      const t = w.gBrowser.addTrustedTab(args[0] + "/ticking", {userContextId: 3, inBackground: true});
+      await wait(5000);
+      const k = JSON.parse(key(w, t));
+      const db = await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID("%s").extension));
+      const seen = new Set(), read = async () => JSON.stringify((await db.get(["syncedTabs"])).syncedTabs);
+      for (let i = 0; i < 30; i++) { seen.add(await read()); await wait(500); }
+      await removeWhere((x, y) => key(x, y) === key(w, t));
+      return {writes: seen.size};""" % EXT_ID, m.pages)
+    check("a page whose title ticks writes Tidier's record rarely", r["writes"] <= 3, str(r))
     proc = m.js(PROC_INFO)
     print(f"INFO  for 30 tabs and 10 essentials, a new window and closing them all: {after['jobs'] - before['jobs']} jobs, "
           f"queue busy {round((after['queueMs'] - before['queueMs']) / 1000, 1)} s (Sidebery waits included), "
@@ -1003,16 +1047,14 @@ def reopened_window(m):
           and r["pinned"][0] == r["pinned"][1], str(r))
 
 
-def restart(m):
-    # Quitting and starting Firefox again restores both windows with their
-    # tabs' Tidier values: the same essentials and tabs in each, one live tab
-    # each, folders with their tabs, every tab in its space, and tab sync and
-    # new windows work as before.
-    if not m.can_restart:
-        print("SKIP  restart (Tidier is a temporary add-on here, which Firefox removes when it quits; "
-              "runs where unsigned add-ons are allowed, as in Developer Edition, or with --xpi)", flush=True)
-        return
-    snap = H + """
+def no_problems(m, when):
+    """Errors inside Tidier (common.js, noteError): each is a tab that was not handled."""
+    problems = extension_message(m, {"type": "stats"})["problems"]
+    check(f"no errors inside Tidier {when}", not problems, str(problems[-5:]))
+
+
+# Every window's essentials and tabs, to compare a session before and after.
+SNAP = H + """
       const out = [];
       for (const w of wins()) {
         const tabs = w.gBrowser.tabs;
@@ -1027,6 +1069,56 @@ def restart(m):
       out.sort((a, b) => order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0);
       const synced = Object.keys((await storage("%s", ["syncedTabs"])).syncedTabs).length;
       return {windows: out, synced};""" % EXT_ID
+
+
+def update(m):
+    # What every release does in the daily browser: a new version installed over a
+    # running session. Firefox stops Tidier and closes its pages that are loaded,
+    # here a placeholder selected in the window you are not using; the record and
+    # the unloaded tabs carry everything over.
+    if not m.can_restart:
+        print("SKIP  update (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
+        return
+    selected = m.js(H + """const a = other(), g = a.gBrowser.tabs.find(t => role(a, t) === "ghost" && !t.pinned && !t.selected);
+      a.gBrowser.selectedTab = g; main().focus(); await wait(2000);
+      return {key: key(a, g), loaded: !!g.linkedPanel};""")
+    before = m.js(SNAP)
+    m.cmd("Addon:Install", {"path": m.update_xpi(), "temporary": False})
+    m.js(H + "await wait(9000); return 1;")
+    after = m.js(SNAP)
+    r = m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
+      const closed = wins().flatMap(w => w.SessionStore.getClosedTabDataForWindow(w)).map(c => c.state.entries?.[c.state.index - 1]?.url || "");
+      const lastTab = main().gBrowser.addTrustedTab("https://example.org/?smoke-after-update", {userContextId: 1, inBackground: true});
+      await wait(5000);
+      const k = key(main(), lastTab), got = find(k);
+      await removeWhere((w, x) => key(w, x) === k);
+      return {version: (await AddonManager.getAddonByID("%s")).version, closedGhosts: closed.filter(u => u.includes("ghost.html")).length, got};""" % EXT_ID)
+    check("an update is installed over the running session", r["version"] == "1.6.999999", str(r))
+    bw, aw = before["windows"], after["windows"]
+    check("after an update, every window has the same essentials and tabs as before",
+          len(aw) == len(bw) and [w["essentials"] for w in aw] == [w["essentials"] for w in bw] and [w["keys"] for w in aw] == [w["keys"] for w in bw]
+          and after["synced"] == before["synced"],
+          f"selected {selected}; tabs gone {[sorted(set(b['keys']) - set(a['keys'])) for a, b in zip(aw, bw)]}, new {[sorted(set(a['keys']) - set(b['keys'])) for a, b in zip(aw, bw)]}; "
+          f"essentials before {[w['essentials'] for w in bw]}, after {[w['essentials'] for w in aw]}; {before['synced']} -> {after['synced']}")
+    lives = sorted(k for w in aw for k in w["live"])
+    check("after an update, every tab is live in one window only", lives == sorted(k for w in bw for k in w["live"]) and len(lives) == len(set(lives)), f"{lives}")
+    check("after an update, no placeholder is left in Recently Closed", r["closedGhosts"] == 0, str(r))
+    check("after an update, a new tab gets a ghost in the other window", sorted(r["got"]) == [["ghost/unloaded"], ["live/loaded"]], str(r))
+    no_problems(m, "after an update")
+
+
+def restart(m):
+    # Quitting and starting Firefox again restores both windows with their
+    # tabs' Tidier values: the same essentials and tabs in each, one live tab
+    # each, folders with their tabs, every tab in its space, and tab sync and
+    # new windows work as before.
+    if not m.can_restart:
+        check("the restart test can run here", not os.environ.get("TIDIER_MUST_RESTART"), "TIDIER_MUST_RESTART is set")
+        print("SKIP  restart (Tidier is a temporary add-on here, which Firefox removes when it quits; "
+              "runs where unsigned add-ons are allowed, as in Developer Edition, or with --xpi)", flush=True)
+        return
+    no_problems(m, "before a restart")
+    snap = SNAP
     m.js(H + """const w = main().OpenBrowserWindow(); for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100); await wait(9000); return 1;""")
     before = m.js(snap)
     t0 = time.time()
@@ -1078,19 +1170,20 @@ apart_after = []
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
-          pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, trees, handover, reopened_window, restart)
+          pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, trees, handover, reopened_window, update, restart)
 # What a group needs run before it (as setup, reported only if it fails) when
 # it runs without it: the second window new_window opens, and the window
 # handover closes, which reopened_window reopens.
 NEEDS = {g: [new_window] for g in (essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title, pinned_ghost,
                                    archiving, live_folders, many_tabs, handover)}
 NEEDS[reopened_window] = [new_window, handover]
+NEEDS[update] = [new_window]
 # By default the groups run in these parallel runs, each in its own test
 # Firefox, about equally long (the whole test in about a third of the time).
 SHARDS = (  # measured: about 120, 145 and 140 s on a Mac, before saved_tabs (about 60 s)
     (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title, saved_tabs),
     (essentials, folders, tab_sync, folder_pull, tab_moves, trees, pinned_ghost),
-    (archiving, live_folders, many_tabs, handover, reopened_window, restart),
+    (archiving, live_folders, many_tabs, handover, reopened_window, update, restart),
 )
 
 def run_groups(groups, xpi, port):
@@ -1119,6 +1212,8 @@ def run_groups(groups, xpi, port):
             if not setup_only:
                 print(f"TIME  {group.__name__} {round(time.time() - t0)} s", flush=True)
         setup_only = False
+        if restart not in groups:  # which ends with a new background page, and checks before it
+            no_problems(m, "by the end of the run")
     check("every window's essentials stay together by space", not apart_after, str(apart_after[:2]))
 
 

@@ -75,6 +75,9 @@ jobs:
           TIDIER_FIREFOX: ${{ steps.firefox.outputs.firefox-path }}
           TIDIER_SIDEBERY_XPI: ${{ runner.temp }}/sidebery.xpi
           TIDIER_DOTFILES: ${{ github.workspace }}/dotfiles/home/firefox
+          # Only there is Tidier installed for real; if that fails the run must not
+          # stay green without the restart and update checks.
+          TIDIER_MUST_RESTART: ${{ matrix.firefox == 'latest-devedition' && '1' || '' }}
         run: |
           echo "Firefox ${{ steps.firefox.outputs.firefox-version }} at $TIDIER_FIREFOX"
           python3 -I tidier/tests/smoke.py --serial && exit 0
