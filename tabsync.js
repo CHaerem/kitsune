@@ -807,10 +807,12 @@ function unloadWhenIconShown(tabId, url, hasIcon) {
   const waiting = { url, hasIcon };
   awaitingIcon.set(tabId, waiting);
   unloadGhost(tabId);
-  // Firefox never reported this icon: better without it than loaded for good.
-  if (hasIcon) setTimeout(() => {
+  // Firefox never reported this icon, or never said the load had finished (a tab can stay
+  // "loading" for good after being loaded again in quick succession). The page has its title
+  // by now, and is better without its icon than loaded for good.
+  setTimeout(() => {
     if (awaitingIcon.get(tabId) !== waiting) return;
-    waiting.hasIcon = false;
+    waiting.overdue = true;
     unloadGhost(tabId);
   }, ICON_WAIT_MS);
 }
@@ -818,10 +820,9 @@ function unloadGhost(tabId) {
   const waiting = awaitingIcon.get(tabId);
   if (!waiting) return;
   browser.tabs.get(tabId).then(t => {
-    // Not yet: the events below bring it back. Waiting a fixed time is not enough:
-    // with a new window's tabs all loading, a placeholder can take many seconds to
-    // report its load finished, and those given up on stayed loaded for good.
-    if (t.status !== "complete" || (waiting.hasIcon && !t.favIconUrl)) return;
+    // Not yet: the events below bring it back. A placeholder can take many seconds to
+    // report its load finished, with a new window's tabs all loading.
+    if (!waiting.overdue && (t.status !== "complete" || (waiting.hasIcon && !t.favIconUrl))) return;
     if (awaitingIcon.get(tabId) !== waiting) return; // a newer load has asked meanwhile
     awaitingIcon.delete(tabId);
     if (!t.active && isGhostUrl(t.url) && t.url === waiting.url) return browser.tabs.discard(tabId);

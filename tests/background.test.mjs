@@ -960,3 +960,21 @@ test("a window reopened with a page that is open elsewhere does not keep it load
   assert.equal(ff.values.get(twin.id).syncRole, "ghost");
   x.kill();
 });
+
+test("a placeholder that never reports its load finished is unloaded all the same", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), status: "loading", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.send({ type: "ghostReady", icon: false }, { tab: ff.snap(ghost), url: ghost.url });
+  await wait(500);
+  assert.equal(ff.tabs.get(ghost.id).discarded, false, "it waits at first");
+  await wait(11000);
+  assert.equal(ff.tabs.get(ghost.id).discarded, true);
+  assert.equal(x.js("awaitingIcon.size"), 0);
+  x.kill();
+});
