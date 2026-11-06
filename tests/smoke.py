@@ -1534,17 +1534,30 @@ def alone_quiet_undo(m):
       const button = doc.querySelector("#tabs .divider .clear"), box = button.parentElement.getBoundingClientRect();
       out.reach = box.height; out.divider = doc.querySelector("#tabs .divider").getBoundingClientRect().height;
       out.faded = page.getComputedStyle(button).opacity;
+      // The area is the gap and no more: the rows next to it keep all of themselves.
+      const line = doc.querySelector("#tabs .divider").getBoundingClientRect(), at = y => doc.elementFromPoint(line.left + 40, y);
+      out.gap = [line.top - 4, line.bottom + 4].map(y => !!at(y)?.closest(".clear-reach"));
+      out.neighbours = [line.top - 9, line.bottom + 9].map(y => !!at(y)?.closest(".row"));
+      // A button you tabbed to keeps Enter, which the list takes everywhere else (keys.js).
+      const enter = e => e.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+      out.enter = enter(button);
+      const act = doc.querySelector("#note .act");
+      out.undoHidden = page.getComputedStyle(act).visibility;  // so that no key can reach it
       button.click();
       for (let i = 0; i < 100 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(100);
       out.shown = doc.getElementById("note").classList.contains("shown");
       out.line = doc.querySelector("#note .text").textContent;
+      out.undoShown = page.getComputedStyle(act).visibility;
+      out.enterUndo = enter(act);
       out.rows = plainTabs().filter(r => r.querySelector(".title").textContent !== "Unsaved").map(r => Number(r.dataset.tab));
       out.stayed = rows().includes("Unsaved");
       out.asked = !!page.browser.tabs && (await page.browser.tabs.query({active: true, currentWindow: true}))[0].title;
       out.folders = folders();
       out.tiles = tiles().length;
       return out;""", setup["here"])
-    check("Clear shows only near the line, in an area that takes no room", r["reach"] >= 18 and r["divider"] <= 2 and r["faded"] == "0", str(r))
+    check("Clear shows only near the line, in an area that takes no room", r["reach"] >= 16 and r["divider"] <= 2 and r["faded"] == "0", str(r))
+    check("the area Clear listens on covers the gap and no part of a row", r["gap"] == [True, True] and r["neighbours"] == [True, True], str(r))
+    check("Undo cannot be reached by a key while there is no line, and Enter works on it and on Clear", r["undoHidden"] == "hidden" and r["undoShown"] == "visible" and r["enter"] and r["enterUndo"], str(r))
     check("Clear by a real click closes today's tabs, except any selected in a window", setup["here"] in r["rows"] and len(r["rows"]) == stays + strangers, f"{stays} stay, and {strangers} with no record: {r}")
     check("Clear leaves the folders", r["folders"] == setup["folders"], str(r))
     check("the line says how many went, and how many stayed", r["shown"] and r["line"] == f"{goes} tabs closed, 1 stayed", f"{goes} go: {r}")
@@ -1636,6 +1649,32 @@ def alone_quiet_undo(m):
           and all(t in r["rowsThen"] for t in [t for f in r["was"] if f["name"] == "Quiet" for t in f["tabs"]]), str(r))
     check("Undo gives the folder back, with its name, place and tabs", r["folders"] == r["was"], str(r))
 
+    # Undo from another space: the tabs come back there, and this window stays where it is.
+    more_tabs_here(m, "quiet-away")
+    r = sidebar_page(m, """
+      const note = doc.getElementById("note"), n = plainTabs().length;
+      const chosen = plainTabs().filter(r => !r.classList.contains("active")).slice(-2);
+      for (const r of chosen) r.querySelector(".close").click();
+      for (let i = 0; i < 50 && !note.classList.contains("shown"); i++) await wait(100);
+      const home = spaces().find(s => s.active).id, away = spaces().find(s => !s.active).id;
+      doc.querySelector(`#spaces .space[data-space="${away}"]`).click();
+      for (let i = 0; i < 50 && spaces().find(s => s.active).id !== away; i++) await wait(100);
+      await wait(300);
+      const selected = async () => (await page.browser.tabs.query({active: true, currentWindow: true}))[0].id;
+      const was = await selected(), seen = [];
+      const watch = new page.MutationObserver(() => seen.push(doc.documentElement.dataset.space));
+      watch.observe(doc.documentElement, {attributes: true, attributeFilter: ["data-space"]});
+      const shown = note.classList.contains("shown");
+      doc.querySelector("#note .act").click();
+      await wait(2500);
+      watch.disconnect();
+      const still = was === await selected(), stayed = spaces().find(s => s.active).id === away;
+      doc.querySelector(`#spaces .space[data-space="${home}"]`).click();
+      for (let i = 0; i < 50 && plainTabs().length < n; i++) await wait(100);
+      return {shown, away, seen, still, stayed, n, back: plainTabs().length};""")
+    check("Undo from another space brings the tabs back there", r["shown"] and r["back"] == r["n"], str(r))
+    check("and this window stays where it is, with no other space shown for a moment", r["stayed"] and r["still"] and all(x == r["away"] for x in r["seen"]), str(r))
+
     # With no line between folders and tabs, Clear is in the list's menu. Then quiet
     # again, for alone_idle: the line gone, and its timer with it.
     r = sidebar_page(m, """
@@ -1661,6 +1700,25 @@ def alone_quiet_undo(m):
     # tab (reconcileAll), which alone_update would see as a change.
     m.js(H + """await removeWhere((w, t) => args[0].includes(key(w, t))); return 1;""", m.js(NO_PAGE, space))
     no_problems(m, "after Clear and Undo")
+
+
+def quiet_off(m):
+    # The setting off, as in the daily browser on Sidebery: a close only closes, with no
+    # line and nothing remembered, and neither Clear nor a key can find what is not shown.
+    more_tabs_here(m, "off")
+    r = sidebar_page(m, """
+      const note = doc.getElementById("note"), act = doc.querySelector("#note .act");
+      const out = {alone: doc.documentElement.classList.contains("alone"), height: note.getBoundingClientRect().height, undo: page.getComputedStyle(act).visibility, clear: !!doc.querySelector(".clear, .clear-reach")};
+      const n = plainTabs().length;
+      for (const r of plainTabs().slice(-2)) r.querySelector(".close").click();
+      for (let i = 0; i < 50 && plainTabs().length > n - 2; i++) await wait(100);
+      await wait(1000);
+      return {...out, n, left: plainTabs().length, shown: note.classList.contains("shown")};""")
+    check("with the setting off, the sidebar has no line and no Clear", r["alone"] is False and r["height"] == 0 and r["undo"] == "hidden" and not r["clear"], str(r))
+    check("with the setting off, closes in the sidebar only close, and nothing is said", r["left"] == r["n"] - 2 and r["shown"] is False, str(r))
+    sizes = extension_message(m, {"type": "stats"})["sizes"]
+    check("with the setting off, nothing is remembered", sizes["quietNotes"] == 0 and sizes["closeGroups"] == 0, str(sizes))
+    m.js(H + """await removeWhere((w, t) => url(t).includes("/sidebar/sidebar.html") || url(t).includes("smoke-off-")); return 1;""")
 
 
 def alone_idle(m):
@@ -1834,7 +1892,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_settings, alone_copy, alone_quiet_undo, alone_idle, alone_update, alone_end, alone_restart)
 
 
-GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
+GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, quiet_off, ghost_title,
           pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, trees, handover, reopened_window, update, restart, move_over)
 # What a group needs run before it (as setup, reported only if it fails) when
 # it runs without it: the second window new_window opens, and the window
@@ -1847,7 +1905,7 @@ NEEDS[move_over] = [new_window]
 # By default the groups run in these parallel runs, each in its own test
 # Firefox, about equally long (the whole test in about a third of the time).
 SHARDS = (  # measured: about 120, 145 and 140 s on a Mac, before saved_tabs (about 60 s)
-    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title, saved_tabs),
+    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title, saved_tabs, quiet_off),
     (essentials, folders, tab_sync, folder_pull, tab_moves, trees, pinned_ghost),
     (archiving, live_folders, many_tabs, handover, reopened_window, update, restart),
     (move_over,),

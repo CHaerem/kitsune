@@ -9,12 +9,19 @@
   line.append(text, act);
   box.append(line);
 
-  // The text stays while the line fades out; only its being shown changes.
+  // Enter and ⌫ belong to the list (keys.js) only outside these buttons, or Enter on a
+  // button you tabbed to would do nothing.
+  const ownKeys = e => e.stopPropagation();
+  act.onkeydown = ownKeys;
+
+  // The text stays while the line fades out; only its being shown changes. It is set once
+  // per note: a screen reader says it again whenever it is set, and every view brings it.
   let shown = null;
   const drawNote = note => {
+    const same = note?.id === shown?.id;
     shown = note;
     box.classList.toggle("shown", !!note);
-    if (!note) return;
+    if (!note || same) return;
     text.textContent = note.text;
     text.title = note.text;
     act.hidden = !note.undo;
@@ -38,6 +45,7 @@
       const reach = el("div", "clear-reach"), button = el("button", "clear", "Clear");
       button.title = "Close today's tabs, except the one you are on";
       button.onclick = clear;
+      button.onkeydown = ownKeys;
       reach.oncontextmenu = e => openMenu(e, listMenu());
       reach.append(button);
       divider.append(reach);

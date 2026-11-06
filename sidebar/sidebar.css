@@ -122,12 +122,12 @@ body {
 #note .line {
   position: absolute; left: 0; right: 0; bottom: 4px; z-index: 5;
   display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 3px 0 10px;
-  border-radius: var(--radius); font-size: 12px; color: var(--muted);
+  border-radius: var(--radius); font-size: 12px; color: color-mix(in srgb, var(--muted) 70%, var(--text));
   background: color-mix(in srgb, var(--frame) 93%, var(--text));
   box-shadow: 0 1px 4px rgba(0, 0, 0, .1);
-  opacity: 0; pointer-events: none; transition: opacity .2s ease;
+  opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s .2s; /* out of reach of a key once faded */
 }
-#note.shown .line { opacity: 1; pointer-events: auto; }
+#note.shown .line { opacity: 1; visibility: visible; transition: opacity .2s ease; }
 #note .text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #note .act {
   flex: none; border: 0; background: none; color: var(--text); font: inherit; font-weight: 500;
@@ -137,10 +137,11 @@ body {
 #note .act:hover { background: var(--hover); }
 
 /* Clear, which shows only with the pointer near the line between the folders and
- * today's tabs. Its area lies over the gap around that line, so it takes up no room. */
+ * today's tabs. Its area is exactly the gap around that line (.divider's margin), so it
+ * takes up no room and covers no part of a row. */
 .divider { position: relative; }
 .clear-reach {
-  position: absolute; inset: -10px -8px; padding-right: 8px;
+  position: absolute; inset: -8px; padding-right: 8px;
   display: flex; align-items: center; justify-content: flex-end;
 }
 .clear-reach[hidden] { display: none; }
