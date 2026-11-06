@@ -1870,6 +1870,54 @@ def alone_command_bar(m):
     press(m, str(start["space"]), CTRL)
     time.sleep(1)
 
+    # What needs Firefox itself: the clipboard, unloading, the settings page.
+    m.js(H + """Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString("before"); return 1;""")
+    want = m.js(H + "return url(main().gBrowser.selectedTab);")
+    bar_open(m)
+    bar_keys(m, "copy address")
+    bar_rows_until(m, lambda rows: rows and rows[0]["title"] == "Copy address")
+    bar_keys(m, [ENTER])
+    wait_for_bar(m, False)
+    copied = ""
+    for _ in range(30):
+        copied = m.js(H + """const t = Cc["@mozilla.org/widget/transferable;1"].createInstance(Ci.nsITransferable); t.init(null); t.addDataFlavor("text/plain");
+          Services.clipboard.getData(t, Ci.nsIClipboard.kGlobalClipboard, main().browsingContext.currentWindowContext);
+          const o = {}; try { t.getTransferData("text/plain", o); return o.value.QueryInterface(Ci.nsISupportsString).data; } catch (e) { return ""; }""")
+        if copied == want:
+            break
+        time.sleep(0.1)
+    check("Copy address copies the tab you are on", copied == want, f"{copied!r} {want!r}")
+    bar_open(m)
+    bar_keys(m, "unload")
+    bar_rows_until(m, lambda rows: rows and rows[0]["title"] == "Unload this tab")
+    bar_keys(m, [ENTER])
+    wait_for_bar(m, False)
+    r = m.js(H + """const w = main(); let t; for (let i = 0; i < 50; i++) { t = w.gBrowser.tabs.find(x => url(x) === args[0]); if (t && !t.linkedPanel && !t.selected) break; await wait(100); }
+      return {tab: !!t, unloaded: t && !t.linkedPanel, selected: t?.selected, now: w.gBrowser.selectedTab.userContextId};""", want)
+    check("Unload unloads it, and you stay in the space", r["tab"] and r["unloaded"] and not r["selected"] and r["now"] == start["space"], str(r))
+    bar_open(m)
+    bar_keys(m, "settings")
+    bar_rows_until(m, lambda rows: rows and rows[0]["title"] == "Settings")
+    bar_keys(m, [ENTER])
+    wait_for_bar(m, False)
+    r = m.js(H + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("/settings/settings.html"); i++) await wait(100);
+      const u = url(w.gBrowser.selectedTab); w.gBrowser.removeTab(w.gBrowser.selectedTab); await wait(800); return u;""")
+    check("Settings opens Tidier's settings", "/settings/settings.html" in r, str(r))
+
+    # ⌘T: Firefox's own until it lets go of it (customKeys.json), and then the bar's.
+    r = m.js(H + """const w = main(); w.focus(); for (let i = 0; i < 100 && Services.focus.activeWindow !== w; i++) await wait(50);
+      return {freed: !w.document.getElementById("key_newNavigatorTab")?.getAttribute("key"), tabs: w.gBrowser.tabs.length};""")
+    press(m, "t", CMD)
+    if r["freed"]:
+        check("⌘T opens the bar, now that Firefox has let go of it", wait_for_bar(m))
+        bar_keys(m, [ESC])
+        wait_for_bar(m, False)
+    else:
+        time.sleep(1)
+        after = m.js(BAR + """const w = main(); const n = w.gBrowser.tabs.length; return {bar: !!bar(), tabs: n};""")
+        check("until Firefox lets go of ⌘T it stays a new tab", not after["bar"] and after["tabs"] > r["tabs"], f"{r} {after}")
+        m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (!t.pinned && !key(w, t) && /about:(newtab|home|blank)/.test(url(t))) w.gBrowser.removeTab(t); await wait(800); return 1;""")
+
     # History and bookmarks, once allowed: one quiet row, asked in the bar's own window.
     bar_open(m)
     bar_keys(m, "example")

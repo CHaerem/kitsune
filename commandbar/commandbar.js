@@ -159,7 +159,7 @@ async function askForMore() {
 }
 
 // --- Choosing -----------------------------------------------------------------------
-const close = refocus => send({ type: "close", refocus });
+const closeBar = refocus => send({ type: "close", refocus });
 
 function startStep(row, kind) {
   step = { row, kind, text: field.value };
@@ -223,7 +223,7 @@ addEventListener("keydown", e => {
     case "ArrowDown": if (n) select((selected + 1) % n); break;
     case "ArrowUp": if (n) select((selected - 1 + n) % n); break;
     case "Enter": choose(rows[selected], e.metaKey || e.ctrlKey); break;
-    case "Escape": if (step) endStep(); else close(true); break;
+    case "Escape": if (step) endStep(); else closeBar(true); break;
     case "Tab":
       if (rows[selected] && !step) { field.value = completionFor(rows[selected], field.value); lookUpMore(); update(); }
       break;
@@ -252,6 +252,6 @@ addEventListener("blur", e => {
   setTimeout(async () => {
     if (asking || document.hasFocus()) return;
     const win = await browser.windows.getCurrent();
-    if (win.focused) { window.focus(); field.focus(); } else close(false);
+    if (win.focused) { window.focus(); field.focus(); } else closeBar(false);
   }, 50);
 });

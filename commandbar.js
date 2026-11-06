@@ -16,7 +16,10 @@
 // given, and it is short-lived enough that nothing has to keep that up to date.
 
 const BAR_PAGE = "commandbar/commandbar.html";
-const BAR_WIDTH = 640, BAR_HEIGHT = 420; // a field and eight rows; it never changes, so nothing jumps while you type
+// A field and eight rows, under a title bar on a Mac and with userChrome.css's margins. It
+// never changes, so nothing jumps while you type.
+const BAR_WIDTH = 640, BAR_HEIGHT = 432;
+const BAR_OPEN_LIMIT_MS = 10000; // a window that never came must not take the key for good
 // ⌘⇧K on a Mac (Firefox reads Ctrl as ⌘ there). The plain ⌘K and ⌘T would be nicer, but
 // Firefox keeps those for itself; ⌘T goes to the bar as soon as Firefox lets go of it
 // (customKeys.json in the dotfiles), through a second command that does nothing until then.
@@ -39,6 +42,8 @@ async function barSourceWindow(tab) {
 
 // The key: opens the bar, or closes the one that is open.
 async function toggleCommandBar(tab) {
+  if (commandBar?.id === null && Date.now() - commandBar.pressedAt > BAR_OPEN_LIMIT_MS) commandBar = null;
+  if (commandBar?.id === null) { commandBar.closeOnOpen = !commandBar.closeOnOpen; return; } // what the presses add up to is settled once it is there
   if (commandBar) return barClose(commandBar, true);
   const bar = commandBar = { id: null, from: null, pressedAt: Date.now(), snapshot: null, ctx: null, closeOnOpen: false };
   try {
@@ -48,7 +53,7 @@ async function toggleCommandBar(tab) {
     bar.snapshot = barSnapshot(bar).catch(err => { noteError(err); return null; }); // ready by the time the page asks
     const win = await browser.windows.create({ type: "popup", url: BAR_PAGE, allowScriptsToClose: true, width: BAR_WIDTH, height: BAR_HEIGHT, ...barPlaceOver(from) });
     bar.id = win.id;
-    if (bar.closeOnOpen) await browser.windows.remove(win.id).catch(() => {}); // the key again, before it was open
+    if (bar.closeOnOpen) await barClose(bar, true);
   } catch (err) {
     if (commandBar === bar) commandBar = null;
     noteError(err);
@@ -64,7 +69,6 @@ function barPlaceOver(win) {
 
 async function barClose(bar, refocus) {
   if (commandBar === bar) commandBar = null;
-  if (bar.id === null) { bar.closeOnOpen = true; return; }
   await browser.windows.remove(bar.id).catch(() => {});
   // Not after losing the focus: you clicked somewhere else, and that is where you want to be.
   if (refocus) await browser.windows.update(bar.from, { focused: true }).catch(() => {});

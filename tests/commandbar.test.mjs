@@ -310,6 +310,11 @@ test("the key pressed again before the window is there leaves no window behind",
   fire();
   await wait(300);
   assert.equal(barWindows(ff).length, 1);
+  fire();
+  await wait(300);
+  fire(); fire(); fire();
+  await wait(300);
+  assert.equal(barWindows(ff).length, 1, "three presses are the same as one");
   x.kill();
 });
 
