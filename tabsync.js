@@ -1048,6 +1048,13 @@ function requestStart(delayMs) {
   startRequested = true;
   start(delayMs);
 }
+  // A window opened meanwhile is empty for the same reason. (Nothing is added to the others.)
+  serial(async () => {
+    for (const w of await normalWindows()) {
+      await fillIfOpen(w.id);
+      if (tidierAlone) await startSpaceIn(w.id);
+    }
+  });
 browser.runtime.onStartup.addListener(() => { firefoxStarting = true; requestStart(5000); });
 browser.runtime.onInstalled.addListener(() => requestStart(1000));
 // Enabled again after being disabled: neither event fires, so start anyway.

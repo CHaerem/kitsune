@@ -1223,3 +1223,18 @@ test("a copy you unpinned in the moment of an update is unpinned when Tidier is 
   assert.ok(![...ff.tabs.values()].some(y => y.url.includes("kind=essential")));
   x.kill();
 });
+
+test("a window opened while Tidier is starting gets its tabs when it has started", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  // After the look over the windows, before the start is done: a sweep, since it depends on timing.
+  await ff.clock.run(5040);
+  const { window: fresh } = ff.openWindow();
+  await ff.clock.idle(60000);
+  assert.ok(ff.list(fresh.id).some(t => ff.values.get(t.id)?.syncKey === "a"));
+  x.kill();
+});
