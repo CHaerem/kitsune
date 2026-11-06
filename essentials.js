@@ -146,6 +146,10 @@ async function ensureAllWindows() {
 // or a live folder tab never opened) stands for its synced tab's page; tab
 // sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
+  // An essential dragged to another window arrives there as a pinned tab, as
+  // if it was just pinned; it is still the same essential (see onAttached).
+  const known = keyByTab.get(tab.id);
+  if (known && (await getList()).some(e => e.key === known)) { await tagTab(tab.id, known); return; }
   let { url, title, favIconUrl: icon } = tab;
   if (isGhostUrl(url)) {
     const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
