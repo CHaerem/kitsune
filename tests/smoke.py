@@ -1568,34 +1568,44 @@ def alone_isolation(m):
 
     # A space's user agent and proxy.
     third = next(c for c in (1, 2, 3) if c not in (space, other))
-    r = ext_page(m, "/settings/settings.html", """
+    more = """
       const id = args[0], card = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
       await wait(800);
       if (!card().querySelector(".space-more")) { card().querySelector(".more").click(); await wait(400); }
       const set = (el, value) => { el.value = value; el.dispatchEvent(new page.Event("input", {bubbles: true})); };
+      // Saved, or refused: the page says which, in a line that is new each time.
+      const saved = async () => { const old = card().querySelector(".fact"); card().querySelector(".save").click();
+        for (let i = 0; i < 80 && card().querySelector(".fact") === old; i++) await wait(100); await wait(100); return card().querySelector(".fact")?.textContent; };
+    """
+    r = ext_page(m, "/settings/settings.html", more + """
       const out = {saveHidden: card().querySelector(".save").hidden, hostHidden: card().querySelector(".host").hidden};
       set(card().querySelector("select"), "http");
       out.hostShown = !card().querySelector(".host").hidden;
-      card().querySelector(".save").click();
-      await wait(600);
-      out.incomplete = card().querySelector(".fact")?.textContent;
+      set(card().querySelector(".host"), "127.0.0.1");
+      set(card().querySelector(".port"), "3128");
+      out.refused = await saved();
+      return out;""", f"firefox-container-{third}")
+    check("a space's More has a proxy, with Save only once something changed", r.get("saveHidden") is True and r.get("hostHidden") is True and r.get("hostShown") is True, str(r))
+    check("without the permission for a proxy it says so, and nothing changes", "did not give" in (r.get("refused") or ""), str(r))
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["proxy"], ["<all_urls>"])
+    r = ext_page(m, "/settings/settings.html", more + """
+      const out = {};
+      set(card().querySelector("select"), "http");
+      out.incomplete = await saved();
       set(card().querySelector("select"), "");
       set(card().querySelector("input[placeholder*=own]"), "Smoke agent");
-      card().querySelector(".save").click();
-      await wait(600);
-      out.saved = card().querySelector(".fact")?.textContent;
+      out.saved = await saved();
       out.kept = card().querySelector("input[placeholder*=own]").value;
       card().querySelector(".more").click();
       return out;""", f"firefox-container-{third}")
-    check("a space's More has a proxy and a user agent, with Save only once something changed", r.get("saveHidden") is True and r.get("hostHidden") is True and r.get("hostShown") is True and r.get("saved") == "Saved." and r.get("kept") == "Smoke agent", str(r))
     check("a proxy that is not complete is said, and not used", "not complete" in (r.get("incomplete") or ""), str(r))
+    check("a user agent set in a space's More is kept", r.get("saved") == "Saved." and r.get("kept") == "Smoke agent", str(r))
     time.sleep(1)
     visit(m, third, f"{base}/r/agent-own")
     visit(m, space, f"{base}/r/agent-other")
     own, others = seen(m, "agent-own"), seen(m, "agent-other")
     check("a space's user agent reaches the server", [x["agent"] for x in own] == ["Smoke agent"], str(own))
     check("other spaces' requests are untouched", others and "Smoke agent" not in others[0]["agent"] and "Firefox" in others[0]["agent"], str(others))
-    m.js(GIVE_PERMISSIONS, EXT_ID, ["proxy"], ["<all_urls>"])
     server_port = base.rsplit(":", 1)[1]
     r = extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "proxy": {"type": "http", "host": "127.0.0.1", "port": server_port}})
     check("a proxy is taken as given", r and r.get("proxy", {}).get("port") == int(server_port), str(r))
@@ -1642,6 +1652,7 @@ def alone_isolation(m):
     check("clearing a site's cookies in a space takes them there", [x["cookie"] for x in seen(m, "after-clear") if "other" not in x["path"]] == [""], str(seen(m, "after-clear")))
     check("and leaves another space's alone", [x["cookie"] for x in seen(m, "after-clear-other")] == [there], str(seen(m, "after-clear-other")))
     m.js(GIVE_PERMISSIONS, EXT_ID, ["browsingData"], [])
+    visit(m, third, f"{base}/set-cookie?v=third")
     r = ext_page(m, "/settings/settings.html", """
       const id = args[0], card = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
       await wait(800);
@@ -1662,6 +1673,8 @@ def alone_isolation(m):
     check("signing out asks first, and Keep keeps", "for good" in r.get("question", "") and r.get("kept") is True, str(r))
     visit(m, other, f"{base}/r/signed-out")
     check("signing out of a space takes its logins", [x["cookie"] for x in seen(m, "signed-out")] == [""] and "Signed out" in (r.get("fact") or ""), f"{r} {seen(m, 'signed-out')}")
+    visit(m, third, f"{base}/r/not-signed-out")
+    check("and another space's stay", [x["cookie"] for x in seen(m, "not-signed-out")] == ["login=third"], str(seen(m, "not-signed-out")))
     m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
 
     # New, edited and deleted, with clicks on the real settings page.
@@ -1701,6 +1714,8 @@ def alone_isolation(m):
     check("the bar has the new space, in its colour, and its name", r.get("dot") and r.get("color") and r.get("name") == "Smoke space", str(r))
     check("the window's tint in the sidebar follows a new space with no line in tidier.css", r.get("tint0") != r.get("tint1"), str(r))
     time.sleep(1)
+    number = int(new_id.rsplit("-", 1)[1])
+    visit(m, number, f"{base}/set-cookie?v=doomed")
     r = ext_page(m, "/settings/settings.html", """
       const id = args[0], now = () => doc.querySelector(`#spaces .space-card[data-space="${id}"]`);
       now().querySelector(".delete").click();
@@ -1717,6 +1732,8 @@ def alone_isolation(m):
       return {question, kept, left, card: !!now()};""", new_id)
     check("deleting a space asks, naming what goes, and Keep keeps it", "all its logins" in r.get("question", "") and r.get("kept"), str(r))
     check("and then it is gone", r.get("left") is False and r.get("card") is False, str(r))
+    r = m.js(H + """return Services.cookies.cookies.filter(c => c.originAttributes.userContextId === args[0]).length;""", number)
+    check("and its logins with it", r == 0, str(r))
     press(m, "1", CTRL)
     time.sleep(1.5)
     r = m.js(H + """return {selected: main().gBrowser.selectedTab.userContextId, stray: wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId > 4).map(t => t.userContextId))};""")

@@ -114,6 +114,8 @@ async function beforeTopLevelRequest(details) {
     exempt: tab.pinned || takeByHand(here, url),
   });
   if (!space) return {};
+  // A link from another app that a rule sends elsewhere goes to its small window there (littlewindow.js).
+  if (typeof littleTakes === "function" && littleTakes(tabId, url)) return { cancel: true };
   reopening.add(tabId);
   try {
     if (await openElsewhere(tab, url, space, popup)) return { cancel: true };
@@ -248,9 +250,8 @@ const PROXY_TYPES = ["http", "https", "socks", "socks4"];
 
 // What was typed, as Firefox wants it, or null: Firefox rejects a bad one at each
 // request and then goes direct, which is the last thing you would want from a proxy.
-function cleanProxy({ type, host, port } = {}) {
-  host = String(host ?? "").trim();
-  port = Number(port);
+function cleanProxy(proxy) {
+  const { type } = proxy ?? {}, host = String(proxy?.host ?? "").trim(), port = Number(proxy?.port);
   if (!PROXY_TYPES.includes(type) || !host || /[\s/:@]/.test(host) || !Number.isInteger(port) || port < 1 || port > 65535) return null;
   return { type, host, port };
 }
@@ -270,6 +271,12 @@ function agentFor(details) {
   if (header) header.value = agent;
   return { requestHeaders: details.requestHeaders };
 }
+
+// A tab's icon as the sidebar may fetch it. The sidebar is an extension's page, in no
+// container and past every proxy, so a remote icon of a tab in a space with a proxy would
+// show the site your own address at the moment the proxy hides it. Such a tab shows its
+// first letter instead; an icon Firefox has inline costs no request.
+const iconForView = t => (networkNow[t.cookieStoreId]?.proxy && isWeb(t.favIconUrl) ? null : t.favIconUrl || null);
 
 // Adds and removes the listeners to match what is set: added only for as long as a
 // space has one. One a space asks for but cannot have is said, never silently ignored:
@@ -514,8 +521,8 @@ async function forgetSpace(id) {
 // Firefox's containers live in a file of their own: after "Refresh Firefox", or with that
 // file lost, Tidier's essentials and folders point at containers that are not there, and
 // Firefox refuses to open anything in them. So Tidier remembers each space's name, colour
-// and icon, and at a start makes the container again and rewrites what points at it to
-// the new id. The new id may differ, and the logins are gone either way, so it says so.
+// and icon, and at a start makes the container again, rewrites what points at it to the
+// new id, and says so: with a new id the logins are gone.
 // One you removed yourself while Tidier ran stays removed: that is forgotten at once.
 const spaceMemory = storedValue("spaceMemory", () => ({})); // { [container]: { name, color, icon } }
 
@@ -555,12 +562,23 @@ async function bringBackSpaces() {
   const gone = vanishedSpaces({ essentials: list, record: all, rules, have, memory });
   if (!gone.length) return;
   const map = new Map(), names = [];
-  for (const id of gone) {
+  const number = id => Number(id.split("-").pop());
+  for (const id of gone.sort((a, b) => number(a) - number(b))) {
     const look = { name: "Space", color: "blue", icon: "circle", ...memory[id] };
     // A colour or icon this Firefox doesn't know must not stop it coming back.
-    const made = await browser.contextualIdentities.create(look)
+    const make = () => browser.contextualIdentities.create(look)
       .catch(() => browser.contextualIdentities.create({ name: look.name, color: "blue", icon: "circle" })).catch(noteError);
+    let made = await make();
+    // Firefox numbers containers anew when its file is lost, while the cookies stay under
+    // their old numbers. Lowest first gives each its own number back where it can, with its
+    // logins. A number that was another vanished space's would have that space's logins, so
+    // it is removed again (which clears it), and one nobody remembers is cleared.
+    while (made && made.cookieStoreId !== id && gone.includes(made.cookieStoreId)) {
+      await browser.contextualIdentities.remove(made.cookieStoreId).catch(noteError);
+      made = await make();
+    }
     if (!made) continue;
+    if (made.cookieStoreId !== id) await wipeContainer(made.cookieStoreId).catch(noteError);
     map.set(id, made.cookieStoreId);
     names.push(look.name);
     delete memory[id];
@@ -582,7 +600,14 @@ async function bringBackSpaces() {
   if (spaceOrder) await browser.storage.local.set({ spaceOrder: spaceOrder.map(moved) });
   await flushWrites();
   await tabsIntoNewContainers(map);
-  setNotice("spaceBack", `${names.join(", ")} had gone from Firefox and ${names.length === 1 ? "has" : "have"} been made again, with ${names.length === 1 ? "its" : "their"} essentials and folders. Logins there are gone: sign in again.`);
+  setNotice("spaceBack", `${names.join(", ")} had gone from Firefox and ${names.length === 1 ? "has" : "have"} been made again, with ${names.length === 1 ? "its" : "their"} essentials and folders. You may have to sign in there again.`);
+}
+
+async function wipeContainer(id) {
+  if (browser.browsingData) return signOutSpace(id);
+  if (!hostsGiven) return;
+  const cookies = await browser.cookies.getAll({ ...COOKIE_ALL, storeId: id });
+  await Promise.all(cookies.map(c => browser.cookies.remove({ url: cookieUrl(c), name: c.name, storeId: id, firstPartyDomain: c.firstPartyDomain, ...(c.partitionKey ? { partitionKey: c.partitionKey } : {}) })));
 }
 
 // Tabs Firefox still has in a container it no longer knows (a session restored over a

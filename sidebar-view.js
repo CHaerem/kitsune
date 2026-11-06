@@ -17,7 +17,7 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
 // page's (see ghost.js); an essential shows its short name if it has one.
 const tabItem = (t, title) => ({
-  id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
+  id: t.id, title: title || t.title || t.url, icon: iconForView(t), // isolation.js
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
 });
 

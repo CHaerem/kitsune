@@ -381,6 +381,7 @@ test("a proxy has to be complete, and a user agent is only changed for its space
   assert.equal(clean({ type: "http", host: "a", port: 0 }), null);
   assert.equal(clean({ type: "http", host: "a", port: 70000 }), null);
   assert.equal(clean({}), null);
+  assert.equal(clean(null), null, "no proxy, as the settings page says it");
   assert.deepEqual({ ...clean({ type: "socks", host: " a.example ", port: "1080" }) }, { type: "socks", host: "a.example", port: 1080 });
 
   // Nothing runs unless a space has one set.
@@ -422,6 +423,21 @@ test("a proxy set is in use from the first tick of the next start, and one witho
   const v = await run(ff);
   assert.match(v.js("[...notices.values()].join()"), /no longer has the permission/);
   v.kill();
+});
+
+test("in a space with a proxy, the sidebar fetches no icon from the site: it would go past the proxy", async () => {
+  const ff = new FakeFirefox(); ff.granted = new Set([...GUARD, "proxy"]);
+  const { w } = aWindow(ff);
+  ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: A, favIconUrl: "https://a.example/favicon.ico" });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: A, favIconUrl: "data:image/png;base64,AAAA" });
+  ff.addTab(w.id, { url: "https://c.example/", cookieStoreId: B, favIconUrl: "https://c.example/favicon.ico" });
+  const x = await run(ff);
+  const icons = async space => { x.js("activeSpace").set(w.id, space); return (await x.js("viewFor")(w.id)).tabs.map(t => t.icon).filter(Boolean); };
+  assert.deepEqual([...await icons(A)], ["https://a.example/favicon.ico", "data:image/png;base64,AAAA"]);
+  await x.js("setSpaceNetwork")(A, { proxy: { type: "http", host: "p.example", port: 3128 } });
+  assert.deepEqual([...await icons(A)], ["data:image/png;base64,AAAA"]);
+  assert.deepEqual([...await icons(B)], ["https://c.example/favicon.ico"], "other spaces as before");
+  x.kill();
 });
 
 // --- Signing out -----------------------------------------------------------------------
@@ -573,6 +589,33 @@ test("a container that vanished comes back with its name and look, and what poin
   assert.ok(ff.list(w.id).some(t => t.pinned && t.cookieStoreId === id));
   assert.ok(ff.list(w.id).some(t => t.url === GHOST("ghost", "s") && t.cookieStoreId === id));
   assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+test("a space coming back never gets another vanished space's number, and an unknown number is cleared", async () => {
+  // Firefox numbers containers anew when its file is lost, and cookies stay under their numbers.
+  const ff = new FakeFirefox(); ff.granted = new Set(GUARD);
+  const [P, Q] = ["firefox-container-5", "firefox-container-6"];
+  ff.store.spaceMemory = { [P]: { name: "Pink", color: "pink", icon: "tree" }, [Q]: { name: "Red", color: "red", icon: "cart" } };
+  ff.store.essentials = [
+    { key: "q", url: "https://q.example/", cookieStoreId: Q, title: "Q", icon: "x" },
+    { key: "p", url: "https://p.example/", cookieStoreId: P, title: "P", icon: "x" },
+  ];
+  ff.cookies = [
+    { storeId: "firefox-container-4", domain: "old.example", name: "someone-elses", path: "/", firstPartyDomain: "" },
+    { storeId: P, domain: "p.example", name: "pink-login", path: "/", firstPartyDomain: "" },
+    { storeId: Q, domain: "q.example", name: "red-login", path: "/", firstPartyDomain: "" },
+  ];
+  aWindow(ff);
+  const x = await run(ff);
+  const of = key => ff.store.essentials.find(e => e.key === key).cookieStoreId;
+  assert.equal(ff.identities[of("p")].name, "Pink");
+  assert.equal(ff.identities[of("q")].name, "Red");
+  assert.equal(of("q"), Q, "its own number again, once Pink's has been passed over");
+  assert.notEqual(of("p"), Q, "never the other's");
+  assert.ok(!ff.cookies.some(c => c.name === "someone-elses"), "what a number held before is not taken for this space's");
+  assert.ok(ff.cookies.some(c => c.storeId === Q && c.name === "red-login"), "its own number keeps its login");
+  assert.ok(!ff.cookies.some(c => c.storeId === of("p") && c.name === "red-login"));
   x.kill();
 });
 

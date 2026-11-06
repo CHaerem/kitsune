@@ -325,7 +325,8 @@ that). Everything works without them, as it says here:
 
 No required host permissions and no data collection. The only network use is icons: a
 placeholder with no saved icon tries the site's `/favicon.ico`, and Tidier's sidebar
-loads tabs' icons from where the site has them. No IP lookups, nothing else by itself.
+loads tabs' icons from where the site has them (not for a space with a proxy, whose tabs
+show their first letter). No IP lookups, nothing else by itself.
 
 ## Isolation
 
@@ -372,11 +373,12 @@ Not guaranteed:
 - **Signing out takes** cookies, IndexedDB and local storage, for one space. Firefox
   cannot clear a cache or service workers for one container, so those stay; they hold
   no login, but pages already open show it only when they next load.
-- **A container that vanishes comes back without its logins** (`Refresh Firefox`, a lost
-  `containers.json`): Tidier remembers each space's name, colour and icon, makes it again
-  at a start and says so. It cannot tell that from one removed while Tidier wasn't
-  running. One removed while it runs stays removed, and its essentials, folders and rules
-  are gone with it.
+- **A container that vanishes comes back, usually without its logins** (`Refresh Firefox`,
+  a lost `containers.json`): Tidier remembers each space's name, colour and icon, makes it
+  again at a start and says so. A login only comes along if Firefox gives it its old number
+  back; another space's number is never used. It cannot tell that from a container removed
+  while Tidier wasn't running. One removed while it runs stays removed, and its essentials,
+  folders and rules are gone with it.
 - A placeholder fetching a site's icon does so in its own container, as a page would.
 
 ## Files
