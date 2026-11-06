@@ -502,7 +502,7 @@ test("copy for Claude joins the command bar's table, where that is here", async 
   const w = alone(ff);
   const x = await start(ff);
   if (x.js("typeof BAR_COMMANDS") !== "undefined") {
-    const commands = x.js("BAR_COMMANDS").filter(c => c.name.startsWith("claude-"));
+    const commands = Array.from(x.js("BAR_COMMANDS")).filter(c => c.name.startsWith("claude-"));
     assert.deepEqual(commands.map(c => c.name), ["claude-copy-page", "claude-copy-tabs", "claude-ask"]);
     const ctx = { windowId: w.id, picked: [tabIn(ff, WORK)], tab: tabIn(ff, WORK) };
     assert.ok(commands.every(c => !c.when(ctx)), "off: left out");
