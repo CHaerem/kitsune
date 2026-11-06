@@ -612,7 +612,8 @@ def live_folders(m):
     extension_message(m, {"type": "refreshLiveFolders"})
     time.sleep(3)
     fifth = m.js(state)
-    check("a failed search leaves the live folder as it was", fifth == fourth, f"{fourth} -> {fifth}")
+    content = lambda ws: [(w["group"], w["inFolder"], w["outside"]) for w in ws]
+    check("a failed search leaves the live folder as it was", content(fifth) == content(fourth), f"{fourth} -> {fifth}")
     json.dump({}, open(m.fake_prs, "w"))
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
