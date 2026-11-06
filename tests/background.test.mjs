@@ -1340,3 +1340,20 @@ test("a tab pinned the moment its window comes back is not also a synced tab", a
   assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://a.example/"]);
   x.kill();
 });
+
+test("an unloaded essential dragged to a window arrives once, also if it looks unpinned at first", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  // Firefox shows it unpinned for a moment: the arrival is looked at in that moment or after.
+  for (const [windowFrom, windowTo] of [[b, a], [a, b], [b, a], [a, b]]) {
+    const copy = ff.list(windowFrom.id).find(y => y.pinned && y.discarded);
+    if (!copy) continue;
+    ff.moveTabs([copy.id], { windowId: windowTo.id, index: ff.pinnedCount(ff.wins.get(windowTo.id)) });
+    await ff.clock.idle(60000);
+    for (const w of [a, b]) assert.equal(ff.list(w.id).filter(y => y.pinned).length, 1, `one in window ${w.id}`);
+  }
+  x.kill();
+});

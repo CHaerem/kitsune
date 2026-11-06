@@ -360,6 +360,7 @@ async function reconcileAll({ firefoxStart = false } = {}) {
         if (t.id === keep.id || !page(t)) continue;
         await setRole(t.id, key, "ghost");
         await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(ifGone);
+        if (t.active) await pull(t.id); // you are looking at it: the page you had comes here
       }
     }
     for (const w of wins) {

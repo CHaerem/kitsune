@@ -199,7 +199,11 @@ async function onPinned(tab) {
   // An essential dragged to another window arrives there as a pinned tab, as
   // if it was just pinned; it is still the same essential (see onAttached).
   const known = keyByTab.get(tab.id);
-  if (known && (await getList()).some(e => e.key === known)) { await tagTab(tab.id, known); return; }
+  if (known && (await getList()).some(e => e.key === known)) {
+    await tagTab(tab.id, known);
+    await dropDoubleCopies(tab.id, tab.windowId); // its arrival may have come in the moment it was unpinned
+    return;
+  }
   let { url, title, favIconUrl: icon } = tab;
   if (isGhostUrl(url)) {
     const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
