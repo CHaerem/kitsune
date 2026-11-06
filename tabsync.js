@@ -976,6 +976,9 @@ async function adoptRestored(windowId) {
   let found = false;
   const removed = [];
   for (const t of await browser.tabs.query({ windowId })) {
+    // An essential's copy, closed with its window before it was pinned (with Sidebery that
+    // comes a moment after it is created): it is pinned here, and is then only that.
+    if (!tidierAlone && !t.pinned && placeholderOf(t.url).kind === "essential") await browser.tabs.update(t.id, { pinned: true }).catch(ifGone);
     if (syncKeyByTab.has(t.id)) continue;
     // Refused for a tab closed since the query: it is simply gone, and the rest still counts.
     const [key, role] = await Promise.all([

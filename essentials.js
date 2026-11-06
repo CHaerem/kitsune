@@ -215,6 +215,9 @@ async function onPinned(tab) {
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
   setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
+  // A tab reopened and pinned at once says it is a synced tab, and tab sync does not know yet.
+  const wasSynced = syncKeyByTab.get(tab.id) ?? await browser.sessions.getTabValue(tab.id, SYNC_KEY).catch(() => undefined);
+  if (wasSynced) await leaveSync(tab.id, wasSynced);
   // The pinned placeholder becomes this essential's copy, still unloaded.
   if (isGhostUrl(tab.url)) {
     busy.add(tab.id);

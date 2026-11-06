@@ -133,6 +133,7 @@ export class ChaosFirefox extends FakeFirefox {
     this.uuid = 0;
     this.crypto = { randomUUID: () => `key-${++this.uuid}` };
     this.tracer = null;
+    this.b = this.silent();
   }
 
   trace(...a) { this.tracer?.(`${String(this.clock.now % 10000000).padStart(7)} ${a.join(" ")}`); }
