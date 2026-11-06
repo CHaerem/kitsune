@@ -309,7 +309,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
 // Make sure every synced tab has exactly one live tab and every window exactly
 // one representation of it, then fill in what is missing. Safe to run repeatedly.
-async function reconcileAll({ keepMissing = false } = {}) {
+async function reconcileAll({ firefoxStart = false } = {}) {
   const all = await getSynced();
   const wins = await normalWindows();
   const winIds = new Set(wins.map(w => w.id));
@@ -335,11 +335,13 @@ async function reconcileAll({ keepMissing = false } = {}) {
     if (isOwnFolder(all[key])) continue;
     const reps = repsOf(key, tabs);
     if (!reps.length) {
-      // Nothing left anywhere: the tab is gone. A saved tab stays. And nothing goes at an
-      // update (`keepMissing`): Firefox closes a placeholder that is loaded then, also a
-      // selected one in the last window, and it may have been the tab's last copy.
-      // fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved && !keepMissing) delete all[key];
+      // When Firefox has started, nothing left anywhere means the tab is gone: closed in a
+      // moment before it quit. A saved tab stays. At any other time nothing goes here: what
+      // you close while Tidier runs is taken out when you close it. At an update Firefox
+      // closes a placeholder that is loaded, also a selected one in the last window, which
+      // may have been the tab's last copy; and a tab's only copy can close with its window
+      // while this was waiting in the queue. fillWindow gives it a new placeholder.
+      if (firefoxStart && sessionHere && !all[key].saved) delete all[key];
       continue;
     }
     if (!all[key].group) {
@@ -1013,7 +1015,7 @@ async function start(delayMs) {
     // Without the roles every tab looks unsynced, and reconcileAll would act on that.
     if (await step(loadRoles)) {
       await step(initSynced);
-      await step(() => reconcileAll({ keepMissing: !firefoxStarting })); // also adds missing essentials, via fillWindow
+      await step(() => reconcileAll({ firefoxStart: firefoxStarting })); // also adds missing essentials, via fillWindow
     }
     await step(foldersFirstAll); // folders.js
     await step(oneLoadedEach); // essentials.js: Firefox may have restored a page in several windows

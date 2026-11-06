@@ -1147,3 +1147,16 @@ test("a ghost selected before the roles are read, with the live tab loaded, ends
   assert.ok(live);
   x.kill();
 });
+
+test("a tab dragged to a window that then closes at once is not lost", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart({ closeWindowWithLastTab: false });
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  ff.moveTabs([t.id], { windowId: b.id, index: -1 });
+  ff.closeWindow(b.id);
+  await ff.clock.idle(60000);
+  assert.ok(ff.synced[key], "it is in the record");
+  assert.ok(ff.list(a.id).some(y => ff.values.get(y.id)?.syncKey === key), "and in the window left");
+  x.kill();
+});
