@@ -978,3 +978,36 @@ test("a placeholder that never reports its load finished is unloaded all the sam
   assert.equal(x.js("awaitingIcon.size"), 0);
   x.kill();
 });
+
+test("an essential reopened with ⌘⇧T unloads the other window's loaded copy", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  ff.addTab(here.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const open = ff.addTab(there.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  const back = ff.addTab(here.id, { url: "https://e.example/", pinned: true, active: false, cookieStoreId: C1 }, { essentialKey: "e" });
+  x.b.tabs.onCreated.fire(ff.snap(back));
+  await wait(1000);
+  assert.ok(ff.tabs.get(open.id).url.startsWith(GHOST("essential", "e")), "the other copy is a placeholder again");
+  assert.equal(ff.tabs.get(back.id).url, "https://e.example/");
+  x.kill();
+});
+
+test("a copy of an essential unpinned just after it was made is an ordinary tab", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.js(`busy.add(${t.id})`); // as createEssentials does for a second and a half
+  await x.b.tabs.update(t.id, { pinned: false });
+  await wait(3000);
+  assert.deepEqual(ff.store.essentials, [], "the essential is gone");
+  assert.ok(ff.synced[ff.values.get(t.id).syncKey], "and the tab is synced");
+  x.kill();
+});

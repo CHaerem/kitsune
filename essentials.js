@@ -49,7 +49,8 @@ function tagTab(tabId, key) {
 
 async function keyOf(tab) {
   if (keyByTab.has(tab.id)) return keyByTab.get(tab.id);
-  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY);
+  // Refused for a tab closed since it was looked up: it is no copy of anything any more.
+  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
   if (key) keyByTab.set(tab.id, key);
   return key;
 }
@@ -258,11 +259,12 @@ async function onClosed(tabId, windowId) {
 // counts only if the tab is still unpinned UNPIN_SETTLE_MS later.
 const UNPIN_SETTLE_MS = 500;
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (busy.has(tabId) || !("pinned" in change)) return;
-  if (change.pinned) { serial(() => onPinned(tab)); return; }
+  if (!("pinned" in change)) return;
+  if (change.pinned) { if (!busy.has(tabId)) serial(() => onPinned(tab)); return; } // Tidier pins its copies itself
+  // Tidier never unpins a copy of its own: a copy it has just made (busy) is yours to unpin.
   setTimeout(() => serial(async () => {
     const now = await browser.tabs.get(tabId).catch(() => null);
-    if (now && !now.pinned && !busy.has(tabId)) await onUnpinned(now);
+    if (now && !now.pinned) await onUnpinned(now);
   }), UNPIN_SETTLE_MS);
 }, { properties: ["pinned"] });
 
@@ -380,6 +382,8 @@ async function reopenedEssential(tab) {
   if (!(await getList()).some(e => e.key === key)) { await browser.tabs.update(tab.id, { pinned: false }).catch(() => {}); return; }
   keyByTab.set(tab.id, key);
   await dropDoubleCopies(tab.id, tab.windowId);
+  // Its load began before Tidier knew what it was: another window's loaded copy goes now.
+  await oneLoaded(key);
 }
 
 // A container removed: its essentials go with it. Firefox refuses to create tabs
