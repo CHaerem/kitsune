@@ -874,3 +874,17 @@ test("the space you switched to with the bar is the one you are in after a resta
   assert.equal(ff.list(win.id).find(t => t.active).cookieStoreId, C1);
   x.kill();
 });
+
+test("an essential's copy closed just after it was created comes back", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  // Its copy in the other window has just appeared.
+  while (!ff.list(b.id).some(y => y.pinned)) await ff.clock.step();
+  await ff.clock.run(100);
+  ff.closeTab(ff.list(b.id).find(y => y.pinned).id);
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1);
+  x.kill();
+});

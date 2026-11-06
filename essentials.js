@@ -305,8 +305,11 @@ async function fillMissingIcons(tab) {
   }
 }
 
+// (A copy marked busy may be one you closed: it is marked for a moment after it is created.
+// Copies Tidier closes itself have one left in the window, or are off the list, so that
+// bringing back what is missing does nothing for them.)
 browser.tabs.onRemoved.addListener((tabId, info) => {
-  if (busy.has(tabId)) { busy.delete(tabId); keyByTab.delete(tabId); return; }
+  busy.delete(tabId);
   if (info.isWindowClosing) { keyByTab.delete(tabId); return; }
   serial(() => onClosed(tabId, info.windowId));
 });
