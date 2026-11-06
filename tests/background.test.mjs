@@ -769,3 +769,21 @@ test("a window reopened after the last one closed has an active space, and hides
   assert.ok(shownSpaces.size <= 1, `tabs of ${[...shownSpaces]} are shown`);
   x.kill();
 });
+
+test("an unloaded essential you closed is not left in Recently Closed", async () => {
+  const { ff, x, windows: [w] } = await chaosStart({ windows: 1 });
+  ff.store.essentials = [];
+  const t = ff.openTab(w.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.run(3000);
+  const other = ff.openWindow().window;
+  await ff.clock.idle(60000);
+  const copy = ff.list(other.id).find(y => y.pinned);
+  assert.ok(copy.url.includes("ghost.html"), "the other window has a placeholder");
+  ff.closeTab(copy.id);
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.closedItems.filter(c => c.kind === "tab" && c.state.url.includes("ghost.html")), []);
+  assert.equal(ff.list(other.id).filter(y => y.pinned).length, 1, "and the copy is back");
+  x.kill();
+});

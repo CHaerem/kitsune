@@ -250,6 +250,9 @@ async function onClosed(tabId, windowId) {
   if (!key) return;
   if (!(await getList()).some(e => e.key === key)) return;
   await ensureWindow(windowId);
+  // An unloaded copy you closed is back already: in Recently Closed it would be reopened
+  // by ⌘⇧T instead of the tab you closed before it.
+  await forgetClosedPlaceholders("essential", [key]);
 }
 
 // An unloaded essential dragged to another window is unpinned there for a
