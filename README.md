@@ -8,17 +8,19 @@ uses that name. The add-on's ID is the same, so it updates as before.)
 
 ## The goal
 
-**Firefox that feels calm, ordered and clean, with nothing but Firefox
-underneath.** Zen and Arc showed how a browser can feel; Zen is a fork of
-Firefox that trails its security updates, and Arc is being wound down. Tidier
-gives the same way of working to ordinary Firefox, which updates itself and
-fits company policy, as one extension.
+**Firefox that feels calm, ordered and clean: just Firefox and Tidier.**
+Zen and Arc showed how a browser can feel; Zen is a fork of Firefox that
+trails its security updates, and Arc is being wound down. Tidier gives the
+same way of working to ordinary Firefox, which updates itself and fits
+company policy, as one extension.
 
 What that means:
 
-- **Only native Firefox.** No other extension is needed. Firefox's own
-  settings, `about:keyboard` and `userChrome.css` are used where they do the
-  job (set up in the dotfiles); Tidier does only what Firefox cannot.
+- **Firefox and Tidier, nothing else.** No other extension is needed.
+- **As much as possible in Tidier.** What Tidier does itself, it controls:
+  it can be tested, fixed and made to work together smoothly. Only what an
+  extension cannot do is set up outside it, in the dotfiles: the window's
+  look (`userChrome.css`) and Firefox settings no extension can change.
 - **Your tabs, not the window's.** Every tab is in every window and loaded
   only once; a window is a view onto the same tabs.
 - **Spaces.** One space per container (work, clients, private), each with its
@@ -49,9 +51,8 @@ below, the spaces at the bottom. In order:
 6. Removing what exists only because of Sidebery (folders first, its tree
    rules, waiting for its sidebar), and Sidebery itself.
 
-Until then the rule is: only what Firefox and Sidebery cannot do. Anything a
-setting, `about:keyboard` or Sidebery can do is set up there instead (in the
-dotfiles).
+Until then, what Sidebery does (the tab list, folders, the space bar, its
+container rules) is left to it and set up in the dotfiles.
 
 1. **Essentials in every window.** Pinned tabs are mirrored as unloaded copies
    in every window, in the same container (and therefore the same Sidebery
