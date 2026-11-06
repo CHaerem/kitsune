@@ -80,6 +80,69 @@ test("a muted tab shows as muted even while its page plays, and a placeholder's 
   x.kill();
 });
 
+test("a placeholder's own sound says nothing, also on a space", async () => {
+  const ff = new FakeFirefox();
+  const { w2, copy } = twoWindows(ff);
+  copy.audible = true; // a page that has just become a placeholder is audible for a moment
+  const x = await start(ff);
+  const here = sidebar(x, w2.id);
+  await settle();
+  assert.equal(row(here.view, copy.id).sound, null);
+  assert.equal(here.view.spaces.find(s => s.id === C1).soundTabId, undefined);
+  x.kill();
+});
+
+test("a page that becomes a placeholder takes its mark with it, in every window", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e1", url: "https://e.example/", cookieStoreId: C1, title: "E" }];
+  const w1 = ff.addWindow({ focused: true }), w2 = ff.addWindow();
+  const real = ff.addTab(w1.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1, title: "E", mutedInfo: { muted: true } }, { essentialKey: "e1" });
+  ff.addTab(w1.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const copy = ff.addTab(w2.id, { url: GHOST("essential", "e1"), pinned: true, cookieStoreId: C1, title: "E", discarded: true }, { essentialKey: "e1" });
+  ff.addTab(w2.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const x = await start(ff);
+  const here = sidebar(x, w2.id);
+  await settle();
+  assert.equal(here.view.essentials.find(e => e.id === copy.id).sound, "muted");
+  // A second loaded copy of an essential goes back to its placeholder (oneLoaded): only
+  // its address changes, in its own window. It keeps its mute, which now says nothing.
+  // Only what Firefox would call for that (the fake's fire calls every listener).
+  const change = { url: GHOST("essential", "e1") };
+  Object.assign(real, change);
+  for (const { f, filter } of x.b.tabs.onUpdated.ls) if (!filter?.properties || filter.properties.includes("url")) f(real.id, change, ff.snap(real));
+  await settle();
+  assert.equal(here.view.essentials.find(e => e.id === copy.id).sound, null);
+  x.kill();
+});
+
+test("a tab without a container that plays in another window shows on the space you are in", async () => {
+  const ff = new FakeFirefox();
+  const { w1, w2 } = twoWindows(ff);
+  const file = ff.addTab(w1.id, { url: "file:///music.ogg", cookieStoreId: "firefox-default" });
+  const x = await start(ff);
+  const here = sidebar(x, w2.id);
+  await settle();
+  play(ff, x, file.id);
+  await settle();
+  assert.equal(here.view.spaces.find(s => s.id === here.view.space).soundTabId, file.id);
+  x.kill();
+});
+
+test("going to the tab that plays does not wait for what the queue is doing", async () => {
+  const ff = new FakeFirefox();
+  const { w2, real, copy } = twoWindows(ff, C2);
+  const x = await start(ff);
+  const here = sidebar(x, w2.id);
+  await settle();
+  play(ff, x, real.id);
+  await settle();
+  x.js("serial(() => new Promise(() => {}))"); // a job that has not finished
+  here.send({ type: "goToSound", tabId: here.view.spaces.find(s => s.id === C2).soundTabId });
+  await wait(500);
+  assert.equal(ff.tabs.get(copy.id).active, true);
+  x.kill();
+});
+
 test("another space's dot leads to this window's copy, or to the page itself if there is none", async () => {
   const ff = new FakeFirefox();
   const { w1, w2, real, copy } = twoWindows(ff, C2);

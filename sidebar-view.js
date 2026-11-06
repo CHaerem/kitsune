@@ -52,7 +52,7 @@ async function viewFor(windowId) {
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
     (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
   }
-  if (tidierAlone) await addSounds({ essentials, folders, tabs: loose, spaces }, tabs);
+  if (tidierAlone) await addSounds({ essentials, folders, tabs: loose, spaces, space }, windowId);
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
 }
 
@@ -89,6 +89,8 @@ browser.runtime.onConnect.addListener(port => {
       await browser.tabs.create({ windowId, cookieStoreId: msg.space });
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
+    } else if (msg.type === "goToSound") {
+      await goToSound(windowId, msg.tabId); // sounds.js; like select, not behind what the queue is doing
     } else if (tidierAlone) {
       await serial(() => sidebarAction(windowId, msg)).catch(() => {}); // logged by serial()
     }
@@ -112,7 +114,6 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
-  else if (msg.type === "goToSound") await goToSound(windowId, msg.tabId);
   viewSoon(windowId);
 }
 

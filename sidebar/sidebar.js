@@ -7,7 +7,8 @@
 // is under way.
 
 const port = browser.runtime.connect({ name: "sidebar" });
-browser.windows.getCurrent().then(w => port.postMessage({ type: "hello", windowId: w.id }));
+const hello = () => browser.windows.getCurrent().then(w => port.postMessage({ type: "hello", windowId: w.id })); // answered with a view
+hello();
 port.onMessage.addListener(render);
 
 // Your own look, from managed storage (dotfiles' tidier.css, given to Firefox
@@ -45,18 +46,29 @@ function place(parent, nodes) {
 }
 
 // The kept element for `id`, its content drawn again only if `state` changed.
+// Not while it is being pressed: drawing replaces what is under the pointer, and
+// Firefox then sends no click at all, so a page whose title ticks could not be muted
+// or closed. It is drawn once it is let go, from a new view, so that everything
+// reacting to a view sees it too.
 const kept = new Map();
 let drawn = new Set();
+let heldBack = false;
 function keep(id, make, state, draw) {
   drawn.add(id);
   let e = kept.get(id);
   if (!e) { e = make(); kept.set(id, e); }
   const text = JSON.stringify(state);
   if (e.dataset.state !== text && !e.classList.contains("renaming")) {
-    e.dataset.state = text;
-    draw(e);
+    if (e.matches(":active")) heldBack = true;
+    else {
+      e.dataset.state = text;
+      draw(e);
+    }
   }
   return e;
+}
+for (const type of ["pointerup", "pointercancel", "dragend"]) {
+  addEventListener(type, () => { if (heldBack) { heldBack = false; setTimeout(hello); } }, true);
 }
 
 function icon(item) {

@@ -24,12 +24,13 @@ const soundKey = t => (t.pinned ? keyByTab.get(t.id) : syncKeyByTab.get(t.id)) ?
 const knowEssentials = tabs => Promise.all(tabs.filter(t => t.pinned).map(t => keyOf(t).catch(() => null)));
 
 // What has sound now, in all windows: key -> { sound, tabId, space }. tabId is always
-// a real page. A placeholder is left out, as a mute there says nothing about the page
-// and does nothing until the placeholder loads it (Firefox's own tab menu can do that).
+// a real page. A placeholder is left out, as what it says says nothing about the page:
+// a mute there does nothing until it loads the page (Firefox's own tab menu can do
+// that), and a page that has just become a placeholder is still audible for a moment.
 // Playing wins over muted: what you can hear is what you are looking for.
 async function soundsFor() {
   const [playing, muted] = await Promise.all([browser.tabs.query({ audible: true }), browser.tabs.query({ muted: true })]);
-  const tabs = [...muted.filter(t => !isGhostUrl(t.url)), ...playing.filter(t => ownSound(t) === "playing")];
+  const tabs = [...muted, ...playing.filter(t => ownSound(t) === "playing")].filter(t => !isGhostUrl(t.url));
   await knowEssentials(tabs);
   return new Map(tabs.map(t => [soundKey(t), { sound: ownSound(t), tabId: t.id, space: t.cookieStoreId }]));
 }
@@ -38,12 +39,15 @@ async function soundsFor() {
 // rows, f.sound and f.soundTabId on a closed folder (an open one shows it on its row),
 // and s.soundTabId on a space with something playing. soundTabId on a tile, a row or a
 // folder is the tab to mute, so never a placeholder. On a space it is the tab to go
-// to: this window's copy, as selecting that pulls the page in.
-async function addSounds({ essentials, folders, tabs: loose, spaces }, windowTabs) {
+// to: this window's copy, as selecting that pulls the page in. That copy is usually in
+// another space, so all of this window's tabs are looked at here, not only what the
+// view shows, and only while something has sound.
+async function addSounds({ essentials, folders, tabs: loose, spaces, space: active }, windowId) {
   const sounds = await soundsFor();
   soundTabs = new Set([...sounds.values()].map(s => s.tabId));
   const keyOfTab = new Map(), copyHere = new Map();
   if (sounds.size) {
+    const windowTabs = await browser.tabs.query({ windowId });
     await knowEssentials(windowTabs);
     for (const t of windowTabs) { keyOfTab.set(t.id, soundKey(t)); copyHere.set(soundKey(t), t.id); }
   }
@@ -57,7 +61,9 @@ async function addSounds({ essentials, folders, tabs: loose, spaces }, windowTab
     if (loudest) { f.sound = loudest.sound; f.soundTabId = loudest.soundTabId; }
   }
   for (const [key, { sound, tabId, space }] of sounds) {
-    const s = sound === "playing" && spaces.find(x => x.id === space);
+    // A tab without a container (a local file, an extension's page) belongs to the
+    // space you are in; in another window it has no row here, so its noise needs this.
+    const s = sound === "playing" && spaces.find(x => x.id === (space === NO_CONTAINER ? active : space));
     if (s) s.soundTabId ??= copyHere.get(key) ?? tabId;
   }
 }
@@ -69,7 +75,10 @@ async function goToSound(windowId, tabId) {
   if (tab && tab.windowId !== windowId) await browser.windows.update(tab.windowId, { focused: true }).catch(() => {});
 }
 
-// A sound shows in every window, so every window's view follows it; a closing tab
-// sends no such change, and a tile elsewhere would go on showing its sound.
+// A sound shows in every window, so every window's view follows it. Two things end a
+// sound with no such change, and a tile elsewhere would go on showing it: the tab
+// closes, or it becomes a placeholder (a second loaded copy of an essential does, and
+// keeps its mute).
 browser.tabs.onUpdated.addListener(() => { if (tidierAlone) viewAllSoon(); }, { properties: ["audible", "mutedInfo"] });
+browser.tabs.onUpdated.addListener(tabId => { if (soundTabs.has(tabId)) viewAllSoon(); }, { properties: ["url"] });
 browser.tabs.onRemoved.addListener(tabId => { if (soundTabs.delete(tabId)) viewAllSoon(); });
