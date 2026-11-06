@@ -34,7 +34,6 @@ not doing nothing when nothing happens.
 """
 import argparse
 import http.server
-import json
 import os
 import random
 import statistics
@@ -322,7 +321,10 @@ ACTIONS = r"""
   const syncedTabs = w => plainTabs(w).filter(t => keyOf(w, t) && !isGroup(t));
   const pins = w => [...w.gBrowser.tabs].filter(t => usable(t) && t.pinned);
   const space = w => w.gBrowser.selectedTab.userContextId || 1;
-  const short = t => (t.pinned ? "essential " : "") + (url(t).split(/[/?]/).pop() || url(t)).slice(-30) + " in window " + normal().indexOf(t.ownerDocument.defaultView);
+  const short = t => {
+    const w = t.ownerDocument.defaultView, name = (url(t).split(/[/?]/).pop() || url(t)).slice(-20);
+    return (t.pinned ? "essential " + (essentialOf(w, t) || "-").slice(0, 6) + " " : "") + (isGhost(t) && !t.pinned ? (keyOf(w, t) || "-").slice(0, 6) + " placeholder" : name) + " in window " + normal().indexOf(w);
+  };
   const principal = () => Services.scriptSecurityManager.getSystemPrincipal();
   const go = (t, to) => t.linkedBrowser.fixupAndLoadURIString(to, {triggeringPrincipal: principal()});
   const closing = (w, t) => { const k = keyOf(w, t); if (k) note.closed.push(k); };
@@ -694,7 +696,7 @@ INVARIANTS = LIB + r"""
     const pinned = tabs.filter(x => x.wi === wi && x.pinned);
     for (const e of list) {
       const n = pinned.filter(x => x.ek === e.key).length;
-      if (n === 0 && /^https?:/.test(e.url)) bad("an essential is missing from a window", e.title || e.url, `window ${wi} has ${pinned.length}, the list ${list.length}`);
+      if (n === 0 && /^https?:/.test(e.url)) bad("an essential is missing from a window", e.key.slice(0, 6), `${e.title}, window ${wi} has ${pinned.length}, the list ${list.length}`);
       if (n > 1) bad("an essential is twice in a window", e.title || e.url, `window ${wi}: ${n}`);
     }
     for (const x of pinned) {
@@ -816,7 +818,17 @@ PROC_INFO = LIB + r"""
   await wait(500);
   const info = await ChromeUtils.requestProcInfo();
   const ext = info.children.filter(c => c.type === "extension");
-  return {mb: Math.round(ext.reduce((s, c) => s + (c.memory || 0), 0) / 1048576), cpuS: ext.reduce((s, c) => s + (c.cpuTime || 0), 0) / 1e9};
+  // Firefox's own accounts of that process: what is allocated (the process as a whole goes up and
+  // down with how the system lends it memory), and pages it has closed but cannot free.
+  let explicit = 0, ghostWindows = 0;
+  const manager = Cc["@mozilla.org/memory-reporter-manager;1"].getService(Ci.nsIMemoryReporterManager);
+  await new Promise(done => manager.getReports((process, path, kind, units, amount) => {
+    if (!/^(webExtensions|extension)/i.test(process)) return;
+    if (path.startsWith("explicit/")) explicit += amount;
+    else if (path === "ghost-windows") ghostWindows = amount;
+  }, null, done, null, false));
+  return {mb: Math.round(ext.reduce((s, c) => s + (c.memory || 0), 0) / 1048576), cpuS: ext.reduce((s, c) => s + (c.cpuTime || 0), 0) / 1e9,
+          heap: Math.round(explicit / 1048576), ghostWindows};
 """
 
 CLOSE_TICKING = LIB + r"""
@@ -1027,22 +1039,22 @@ class Soak:
         self.problems_seen = len(stats["problems"])
         prev = self.samples[-1] if self.samples else None
         row = {
-            "t": time.time() - self.t0, "settle": settle_s, **r["counts"], "mb": proc["mb"], "cpu": proc["cpuS"],
+            "t": time.time() - self.t0, "settle": settle_s, **r["counts"], "mb": proc["mb"], "heap": proc["heap"], "ghosts": proc["ghostWindows"], "cpu": proc["cpuS"],
             "jobs": stats["jobs"], "queue": stats["queueMs"] / 1000, "lookups": stats["lookups"], "views": stats["views"], "errors": stats["errors"],
             "actions": sum(self.count.values()), "biggest": max(sizes.items(), key=lambda kv: kv[1]),
         }
         self.samples.append(row)
         step = (lambda k: row[k] - prev[k]) if prev else (lambda k: row[k])
         print(f"{row['t'] / 60:5.1f} min  {row['windows']} windows, {row['tabs']} tabs, {row['synced']} synced, {row['essentials']} essentials, "
-              f"{row['mb']} MB, {step('jobs')} jobs, {step('actions')} actions, quiet in {settle_s:.0f} s, {len(self.violations)} violations", flush=True)
+              f"{row['mb']} MB ({row['heap']} allocated), {step('jobs')} jobs, {step('actions')} actions, quiet in {settle_s:.0f} s, {len(self.violations)} violations", flush=True)
 
     def table(self):
-        print("\n  min  win tabs sync ess fold loaded   MB  cpu%   jobs  queue%  views lookups actions settle  biggest list", flush=True)
+        print("\n  min  win tabs sync ess fold loaded   MB heap ghost  cpu%   jobs  queue%  views lookups actions settle  biggest list", flush=True)
         prev = None
         for row in self.samples:
             span = row["t"] - prev["t"] if prev else row["t"]
             d = lambda k: row[k] - prev[k] if prev else row[k]
-            print(f"{row['t'] / 60:5.1f} {row['windows']:4} {row['tabs']:4} {row['synced']:4} {row['essentials']:3} {row['folders']:4} {row['loaded']:6} {row['mb']:4} "
+            print(f"{row['t'] / 60:5.1f} {row['windows']:4} {row['tabs']:4} {row['synced']:4} {row['essentials']:3} {row['folders']:4} {row['loaded']:6} {row['mb']:4} {row['heap']:4} {row['ghosts']:5} "
                   f"{100 * d('cpu') / span:5.1f} {d('jobs'):6} {100 * d('queue') / span:7.1f} {d('views'):6} {d('lookups'):7} {d('actions'):7} {row['settle']:6.0f}  {row['biggest'][0]} {row['biggest'][1]}", flush=True)
             prev = row
 
@@ -1134,10 +1146,14 @@ class Soak:
             print("The test's own actions that failed (not counted against Tidier):", flush=True)
             for what, n in sorted(self.action_failures.items(), key=lambda kv: -kv[1])[:15]:
                 print(f"  {n} x {what}", flush=True)
-        memory = [s["mb"] for s in self.samples[self.segment:]]
+        # What Firefox has allocated decides: a process's total also holds what the system has not
+        # taken back yet. (Where that number cannot be had, the total.)
+        rows = self.samples[self.segment:]
+        memory = [s["heap"] or s["mb"] for s in rows]
         steady = grows_steadily(memory)
         if memory:
-            print(f"Memory of the extension process: {memory[0]} MB at the start, {memory[-1]} MB at the end, highest {max(memory)} MB: "
+            print(f"Memory of the extension process: {memory[0]} MB allocated at the start, {memory[-1]} MB at the end, highest {max(memory)} MB "
+                  f"(the process: {rows[0]['mb']}, {rows[-1]['mb']}, highest {max(s['mb'] for s in rows)} MB): "
                   + ("grows steadily" if steady else "no steady growth"), flush=True)
         if self.samples:
             s = self.samples[-1]

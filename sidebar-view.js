@@ -108,9 +108,16 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
-  else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
+  else if (msg.type === "pin") await pinFromSidebar(msg.tabId, msg.pinned);
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
   viewSoon(windowId);
+}
+
+// A new tab has no page to keep as an essential: pinned, it would only be a stray tile in
+// one window, and an essential is in every window. (A placeholder stands for its page.)
+async function pinFromSidebar(tabId, pinned) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (tab && (!pinned || isWeb(tab.url) || isGhostUrl(tab.url))) await browser.tabs.update(tabId, { pinned });
 }
 
 // An essential's tile moved: moving its tab is what the rest of Tidier listens to.

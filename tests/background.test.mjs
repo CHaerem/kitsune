@@ -1027,3 +1027,17 @@ test("a pinned tab that is no essential, unpinned, is synced", async () => {
   assert.ok(ff.synced[ff.values.get(t.id)?.syncKey], "it has a record");
   x.kill();
 });
+
+test("a new tab dragged to the essentials stays a tab", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const fresh = ff.addTab(w.id, { url: "about:newtab", active: true, cookieStoreId: C1 });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const page = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  await x.js(`sidebarAction(${w.id}, { type: "pin", tabId: ${fresh.id}, pinned: true })`);
+  assert.equal(ff.tabs.get(fresh.id).pinned, false);
+  await x.js(`sidebarAction(${w.id}, { type: "pin", tabId: ${page.id}, pinned: true })`);
+  assert.equal(ff.tabs.get(page.id).pinned, true, "a page does become one");
+  x.kill();
+});
