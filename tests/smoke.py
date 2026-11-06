@@ -1664,6 +1664,13 @@ def sidebar_mouse(m, target, button=0):
     m.cmd("WebDriver:ReleaseActions")
 
 
+def sidebar_key(m, key):
+    """A key for the sidebar. Firefox's own panel about hidden tabs can open at any moment
+    after Tidier hides a tab, and while it is open a key closes it and goes no further."""
+    m.js(H + """main().document.getElementById("extension-notification-panel")?.hidePopup?.(); return 1;""")
+    press(m, key)
+
+
 def menu_on(m, target, offers=None):
     """Right click on `target`: what its menu offers, once what is expected is there."""
     sidebar_mouse(m, target, 2)
@@ -1700,8 +1707,11 @@ def alone_space_menu(m):
     place = in_sidebar(m, """(id) => ({menuBottom: doc.getElementById("menu").getBoundingClientRect().bottom, bar: doc.getElementById("spaces").getBoundingClientRect().top, marked: dot(id).classList.contains("menu-for"), active: doc.querySelector("#spaces .space.active").dataset.space})""", there)
     check("a right click on another space's dot opens its menu", r == ELSEWHERE, str(r))
     check("the menu opens above the bar, and its dot is marked", place["menuBottom"] <= place["bar"] and place["marked"] and place["active"] == here, str(place))
-    press(m, ESC)
+    sidebar_key(m, ESC)
     closed = sidebar_until(m, """(id) => !labels().length && !dot(id).classList.contains("menu-for")""", there)
+    if closed is not True:  # says where the key went
+        closed = {"sidebar": in_sidebar(m, """(id) => ({labels: labels(), marked: dot(id).classList.contains("menu-for"), has: doc.hasFocus()})""", there),
+                  "focus": m.js(H + """const b = Services.focus.focusedContentBrowsingContext; return b?.currentURI?.spec?.slice(0, 70) ?? null;""")}
     check("Esc closes it, and the mark goes", closed is True, str(closed))
     r = menu_on(m, f"dot({json.dumps(here)})", IN_SPACE)
     check("the space you are in also has Clear", r == IN_SPACE, str(r))
@@ -1710,7 +1720,7 @@ def alone_space_menu(m):
     check("the empty part of the list has its own short menu", r == ["New folder", "Clear today's tabs", "Settings"], str(r))
     r = menu_on(m, 'doc.getElementById("space-name")', IN_SPACE)
     check("the name above the list has the space's menu", r == IN_SPACE, str(r))
-    press(m, ESC)
+    sidebar_key(m, ESC)
     sidebar_until(m, "() => !labels().length")
 
     # Unloading another space: you stay where you are.
@@ -1794,8 +1804,8 @@ def alone_space_menu(m):
     check("Rename turns the name line into a box, with the name selected", r.get("value") == name_here and r["selected"] == [0, len(name_here)] and r["focus"] and r["lineHidden"], str(r))
     check("and the list does not move", r.get("actions") == line, f"{line} -> {r.get('actions')}")
     for ch in "Smoked":
-        press(m, ch)
-    press(m, ENTER)
+        sidebar_key(m, ch)
+    sidebar_key(m, ENTER)
     r = sidebar_until(m, """() => !box() && doc.querySelector("#spaces .space.active").title === "Smoked" ? {name: doc.getElementById("space-name").textContent, hidden: doc.getElementById("space-name").hidden} : {wait: 1}""")
     check("typing and Enter rename the space: the line, the dot and the container", r.get("name") == "Smoked" and r.get("hidden") is False and m.js(NAME, here) == "Smoked", f"{r}, {m.js(NAME, here)}")
     # The list stays put whatever the name is called and whatever the font: a long name
@@ -1809,7 +1819,7 @@ def alone_space_menu(m):
     choose(m, "Rename")
     r = sidebar_until(m, """() => box() ? {actions: top("actions")} : {wait: 1}""")
     check("with another font too", r.get("actions") == line, f"{line} -> {r}")
-    press(m, ESC)
+    sidebar_key(m, ESC)
     sidebar_until(m, "() => !box()")
     in_sidebar(m, """() => { doc.getElementById("space-name").style.fontSize = ""; return 1; }""")
     # A space without a name has no line, so the box is simply put there, over nothing.
@@ -1818,7 +1828,7 @@ def alone_space_menu(m):
     choose(m, "Rename")
     r = sidebar_until(m, """() => { if (!box()) return {wait: 1}; const b = box().getBoundingClientRect(); return {bottom: b.bottom, actions: top("actions")}; }""")
     check("a space with no name opens a box that covers nothing", r.get("bottom", 1e9) <= r.get("actions", 0), str(r))
-    press(m, ESC)
+    sidebar_key(m, ESC)
     sidebar_until(m, "() => !box()")
     in_sidebar(m, """() => { const line = doc.getElementById("space-name"); line.textContent = line.dataset.was; delete line.dataset.was; return 1; }""")
     # Esc leaves it as it was; leaving the box saves.
@@ -1826,8 +1836,8 @@ def alone_space_menu(m):
     choose(m, "Rename")
     sidebar_until(m, "() => !!box()")
     for ch in "xy":
-        press(m, ch)
-    press(m, ESC)
+        sidebar_key(m, ch)
+    sidebar_key(m, ESC)
     r = sidebar_until(m, """() => box() ? {wait: 1} : {name: doc.getElementById("space-name").textContent}""")
     check("Esc leaves the name as it was", r.get("name") == "Smoked" and m.js(NAME, here) == "Smoked", str(r))
     # Another space: in its place on the bar and in the box, and you stay.
@@ -1836,7 +1846,7 @@ def alone_space_menu(m):
     r = sidebar_until(m, """(id, here) => box() ? {value: box().value, focus: doc.activeElement === box() && doc.hasFocus(), marked: dot(id).classList.contains("menu-for"), active: dot(here).classList.contains("active")} : {wait: 1}""", there, here)
     check("another space's name opens in the box, its dot marked, and you stay in your space", r.get("value") == name_there and r["focus"] and r["marked"] and r["active"], str(r))
     for ch in "Other":
-        press(m, ch)
+        sidebar_key(m, ch)
     sidebar_mouse(m, EMPTY_LIST)
     r = sidebar_until(m, """(id) => box() || dot(id).title !== "Other" ? {wait: 1} : {line: doc.getElementById("space-name").textContent, marked: dot(id).classList.contains("menu-for")}""", there)
     check("leaving the box saves it, and this space's name stays on the line", r.get("line") == "Smoked" and r.get("marked") is False and m.js(NAME, there) == "Other", f"{r}, {m.js(NAME, there)}")
