@@ -75,10 +75,24 @@ function drawMenu(items, back = null, byKey = false) {
 
 const closeMenu = () => {
   document.getElementById("menu").hidden = true;
+  menuFor = [];
   for (const e of document.querySelectorAll(".menu-for")) e.classList.remove("menu-for");
 };
 addEventListener("blur", closeMenu);
 addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
+addEventListener("dragstart", closeMenu, true);
+
+// Which tabs an open menu is about, marked on their rows. A row's draw resets its classes
+// (a title that ticks, say), so the mark goes back after each view. A menu about tabs that
+// are no longer drawn (closed in another window, another space) is about nothing, and goes.
+let menuFor = [];
+function markMenuFor() {
+  if (!menuFor.length) return;
+  const rows = menuFor.map(id => document.querySelector(`[data-tab="${id}"]`)).filter(Boolean);
+  if (!rows.length) closeMenu();
+  for (const r of rows) r.classList.add("menu-for");
+}
+port.onMessage.addListener(markMenuFor);
 
 // A click outside only closes the menu, as with a menu of Firefox's own: the × or the row
 // under the pointer must not act on the way. (The right button's release is no such click:
@@ -109,6 +123,7 @@ addEventListener("wheel", e => { if (outsideMenu(e)) closeMenu(); }, { passive: 
     else if (e.key === "ArrowUp") items[(at < 1 ? items.length : at) - 1]?.focus();
     else if (e.key === "ArrowRight") { if (items[at]?.classList.contains("more")) items[at].click(); }
     else if (e.key === "ArrowLeft") menu.querySelector(".back")?.click();
+    else if (e.key === "Tab") closeMenu(); // as with a menu of Firefox's own, not on to what is behind it
     else return;
     e.preventDefault();
   });

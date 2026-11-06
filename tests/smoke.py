@@ -1583,6 +1583,27 @@ def alone_tab_menu(m):
         check("a click outside the menu only closes it", r["outside"] == {"closed": True, "selected": True}, str(r["outside"]))
         tile_rest = ["Duplicate", "Copy address", "|", "Remove from essentials"]
         check("a right click on a tile offers no folder, space or rule", r["tileLabels"] in (tile_rest, ["Reload", "Mute", "Unload", "|", *tile_rest, "|", "Close"]), str(r))
+        r = sidebar_page(m, MENU_PAGE + """const row = rowOf(args[0]), opts = o => page.JSON.parse(JSON.stringify(o));
+          // A redraw of its row (here: the sound mark) resets the row's classes.
+          await rightClick(row);
+          await page.browser.tabs.update(args[0], opts({muted: true}));
+          await until(() => row.querySelector(".sound"));
+          const redrawn = {open: !menu.hidden, mark: row.classList.contains("menu-for")};
+          await page.browser.tabs.update(args[0], opts({muted: false}));
+          await until(() => !row.querySelector(".sound"));
+          const data = new page.DataTransfer(), at = {bubbles: true, cancelable: true, dataTransfer: data};
+          row.dispatchEvent(new page.DragEvent("dragstart", at));
+          const dragged = menu.hidden;
+          row.dispatchEvent(new page.DragEvent("dragend", at));
+          await rightClick(row);
+          doc.activeElement.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Tab", bubbles: true, cancelable: true}));
+          return {redrawn, dragged, tabbed: menu.hidden, left: !!doc.querySelector(".menu-for")};""", a)
+        check("the mark stays while its row is drawn anew", r["redrawn"] == {"open": True, "mark": True}, str(r))
+        check("a drag or the Tab key closes the menu", r["dragged"] and r["tabbed"] and not r["left"], str(r))
+        g = open_tab("gone")
+        r = sidebar_page(m, MENU_PAGE + """await until(() => rowOf(args[0])); await rightClick(rowOf(args[0])); const open = !menu.hidden;
+          await page.browser.tabs.remove(args[0]); await until(() => menu.hidden, 3000); return {open, closed: menu.hidden};""", g)
+        check("a menu about a tab that has gone closes", r == {"open": True, "closed": True}, str(r))
 
         # Reload and mute.
         before = page_loads(a)
@@ -1682,8 +1703,84 @@ def alone_tab_menu(m):
         act(ghost, "Close")
         r = m.js(MENU_TABS + """await until(() => !byId(args[0]) && !byId(args[1])); return [!!byId(args[0]), !!byId(args[1])];""", far, ghost)
         check("a placeholder's Close closes the page in every window", r == [False, False], str(r))
+
+        def placeholder_of(tab):
+            return m.js(MENU_TABS + """const k = key(other(), byId(args[0]));
+              await until(() => main().gBrowser.tabs.some(t => key(main(), t) === k)); return idOf(main().gBrowser.tabs.find(t => key(main(), t) === k));""", tab)
+        far, far2, far3 = open_tab("far", where="other()"), open_tab("far2", where="other()"), open_tab("far3", where="other()")
+        ghost, ghost3 = placeholder_of(far), placeholder_of(far3)
+
+        # Duplicate: Firefox would put the copy over there, and its row at the end of this list.
+        act(ghost, "Duplicate")
+        r = m.js(MENU_TABS + """const w = main(), page = "https://example.org/?smoke-menu-far", has = () => w.gBrowser.tabs.find(t => url(t) === page);
+          await until(() => has() && role(w, has()) === "live");
+          const copy = has(), list = [...w.gBrowser.tabs], there = other().gBrowser.tabs.filter(t => url(t) === page && idOf(t) !== args[0]).length;
+          return {found: !!copy, next: list.indexOf(copy) === list.indexOf(byId(args[1])) + 1, container: copy?.userContextId, there, id: copy && idOf(copy), selected: copy?.selected};""", far, ghost)
+        check("Duplicate of a placeholder opens the page here, next to its row, and you stay", r["found"] and r["next"] and r["container"] == ctx and r["there"] == 0 and not r["selected"], str(r))
+        act(r["id"], "Close")
+
+        # Unload: the page in the other window goes, and the placeholder here stays.
+        act(ghost, "Unload")
+        r = m.js(MENU_TABS + """await until(() => !byId(args[0]).linkedPanel); return {page: !!byId(args[0]).linkedPanel, url: url(byId(args[0])), here: !!byId(args[1])};""", far, ghost)
+        check("a placeholder's Unload unloads the page in the other window", r == {"page": False, "url": "https://example.org/?smoke-menu-far", "here": True}, str(r))
+        r = sidebar_page(m, MENU_PAGE + "const l = await rightClick(rowOf(args[0])); menu.hidden = true; return l;", ghost)
+        check("after which its menu has nothing to reload, mute or unload", r == ROW_MENU[4:], str(r))
+
+        # Make essential: the page itself is pinned where it is, and stays loaded.
+        ghost2 = placeholder_of(far2)
+        act(ghost2, "Make essential")
+        r = m.js(MENU_TABS + """const t = byId(args[0]); await until(() => t.pinned && ek(other(), t) && !byId(args[1]));
+          const k = ek(other(), t); await until(() => main().gBrowser.tabs.some(x => ek(main(), x) === k));
+          const here = main().gBrowser.tabs.find(x => ek(main(), x) === k);
+          return {pinned: t.pinned, loaded: !!t.linkedPanel, placeholder: !!byId(args[1]), tile: here && idOf(here), record: entriesOf(await record(), "smoke-menu-far2").length};""", far2, ghost2)
+        check("a placeholder's Make essential pins the page where it is, loaded, with a tile here", r["pinned"] and r["loaded"] and not r["placeholder"] and r["tile"] and r["record"] == 0, str(r))
+        act(r["tile"], "Remove from essentials")
+        r = m.js(MENU_TABS + """const t = byId(args[0]); await until(() => !t.pinned && role(other(), t) === "live" && !byId(args[1]));
+          return {pinned: t.pinned, loaded: !!t.linkedPanel, tile: !!byId(args[1]), record: entriesOf(await record(), "smoke-menu-far2").length};""", far2, r["tile"])
+        check("Remove from essentials on its tile leaves the page there as an ordinary tab", r == {"pinned": False, "loaded": True, "tile": False, "record": 1}, str(r))
+
+        # Move to space: the page, wherever it is, and you stay.
+        selected = m.js(MENU_TABS + "return idOf(main().gBrowser.selectedTab);")
+        act(ghost3, "Move to space", "Space 2")
+        r = m.js(MENU_TABS + """await until(() => !byId(args[0]) && !byId(args[1]) && tabs().some(x => url(x.t).includes("smoke-menu-far3")));
+          return {gone: [!!byId(args[0]), !!byId(args[1])], there: tabs().filter(x => url(x.t).includes("smoke-menu-far3")).map(x => x.t.userContextId !== args[2]), selected: idOf(main().gBrowser.selectedTab)};""", far3, ghost3, ctx)
+        check("a placeholder's Move to space moves the page, and you stay", r["gone"] == [False, False] and r["there"] and all(r["there"]) and r["selected"] == selected, str(r))
+
+        # Close, on a saved tab: closing the placeholder here would remove it for good.
+        far4 = open_tab("far4", where="other()")
+        ghost4 = placeholder_of(far4)
+        sidebar_page(m, MENU_PAGE + """const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Menu kept");
+          send({type: "moveTab", tabId: args[0], folder: head.dataset.folderHead, before: null}); await wait(500); return 1;""", ghost4)
+        act(ghost4, "Close")
+        r = m.js(MENU_TABS + """await until(() => !byId(args[0])); const list = entriesOf(await record(), "smoke-menu-far4");
+          return {page: !!byId(args[0]), here: !!byId(args[1]), kept: list.length, saved: !!list[0]?.[1].saved};""", far4, ghost4)
+        check("a placeholder's Close on a saved tab only unloads it", r == {"page": False, "here": True, "kept": 1, "saved": True}, str(r))
         if opened:
             m.js(H + """await close(other()); return 1;""")
+
+        # A tile's own: a copy is an ordinary tab, and its Unload and Close leave the essential.
+        tile = sidebar_page(m, "return Number(doc.querySelector('#essentials .tile').dataset.tab);")
+        n = sidebar_page(m, "return tiles().length;")
+        act(tile, "Duplicate")
+        r = m.js(MENU_TABS + """const w = main(), has = () => w.gBrowser.tabs.find(t => !t.pinned && url(t).includes("fixture-essential"));
+          await until(() => has() && role(w, has()) === "live");
+          const copy = has(), s = await storage(%r, ["essentials"]);
+          return {found: !!copy, pinned: copy?.pinned, essential: copy && ek(w, copy), id: copy && idOf(copy), container: copy?.userContextId, list: s.essentials.length};""" % EXT_ID)
+        count = sidebar_page(m, "await wait(300); return tiles().length;")
+        check("Duplicate of a tile is an ordinary tab of its own, and the essential stays one", r["found"] and not r["pinned"] and not r["essential"] and r["container"] == ctx and count == n, str(r))
+        act(r["id"], "Close")
+        sidebar_page(m, MENU_PAGE + "rowOf(args[0]).click(); return 1;", tile)
+        m.js(MENU_TABS + "await until(() => idOf(main().gBrowser.selectedTab) === args[0]); await wait(800); return 1;", tile)
+        act(tile, "Unload")
+        r = m.js(MENU_TABS + """const t = byId(args[0]); await until(() => !t.linkedPanel); const s = main().gBrowser.selectedTab;
+          return {unloaded: !t.linkedPanel, pinned: t.pinned, selected: idOf(s) !== args[0], container: s.userContextId};""", tile)
+        check("Unload on the selected tile goes to another tab of the space, and unloads it", r == {"unloaded": True, "pinned": True, "selected": True, "container": ctx}, str(r))
+        sidebar_page(m, MENU_PAGE + "rowOf(args[0]).click(); return 1;", tile)
+        m.js(MENU_TABS + "await until(() => idOf(main().gBrowser.selectedTab) === args[0]); await wait(800); return 1;", tile)
+        act(tile, "Close")
+        r = sidebar_page(m, """for (let i = 0; i < 100 && !(tiles().length === args[1] && !doc.querySelector(`[data-tab="${args[0]}"]`)); i++) await wait(100); await wait(500);
+          return {tiles: tiles().length, active: !!doc.querySelector("#essentials .tile.active")};""", tile, n)
+        check("Close on the selected tile brings it back unloaded, and selects something else", r == {"tiles": n, "active": False}, str(r))
 
         # Make essential, and back.
         r = sidebar_page(m, MENU_PAGE + """const n = tiles().length; await rightClick(rowOf(args[0])); choose("Make essential");
@@ -1726,6 +1823,40 @@ def alone_tab_menu(m):
         moved = m.js(MENU_TABS + """await until(() => tabs().some(x => url(x.t).includes("smoke-menu-a") && x.t.userContextId !== args[0]));
           return {there: tabs().filter(x => url(x.t).includes("smoke-menu-a") && x.t.userContextId !== args[0]).length, selected: idOf(main().gBrowser.selectedTab)};""", ctx)
         check("Move to space moves the tab, and you stay where you are", r["gone"] and r["active"] == space and moved["there"] >= 1 and moved["selected"] == selected, f"{r}, {moved}")
+
+        # Several tabs, as window.selectedTabs says (a function of the page's own: this is how
+        # to make one where no script can be added). What the selection itself does has its own checks.
+        s1, s2, s3 = open_tab("s1"), open_tab("s2"), open_tab("s3")
+
+        def several(script):
+            return sidebar_page(m, MENU_PAGE + """const before = page.selectedTabs, picked = args.slice(0, 3);
+              page.selectedTabs = page.Array.prototype.slice.bind(page.JSON.parse(JSON.stringify(picked)), 0, 3);
+              try { """ + script + """ } finally { page.selectedTabs = before; }""", s1, s2, s3)
+
+        sidebar_page(m, MENU_PAGE + "await until(() => rowOf(args[0])); rowOf(args[0]).click(); return 1;", s2)
+        m.js(MENU_TABS + "await until(() => idOf(main().gBrowser.selectedTab) === args[0]); await wait(500); return 1;", s2)
+        many = ["Reload 3 tabs", "Mute 3 tabs", "Unload 3 tabs", "|", "Copy 3 addresses", "|", "Make 3 tabs essential", "Move 3 tabs to folder", "Move 3 tabs to space", "|", "Close 3 tabs"]
+        m.js(clipboard + 'Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString("before"); return 1;')
+        r = several("""const labels = await rightClick(rowOf(picked[0])), marks = picked.filter(id => rowOf(id).classList.contains("menu-for")).length;
+          choose("Copy 3 addresses"); return {labels, marks};""")
+        copied = m.js(clipboard + 'await until(() => read() !== "before", 3000); return read();')
+        check("with several tabs the menu counts them, marks them all, and leaves out what takes one", r == {"labels": many, "marks": 3}, str(r))
+        check("Copy takes one address per line", copied == "https://example.org/?smoke-menu-s1\nhttps://example.org/?smoke-menu-s2\nhttps://example.org/?smoke-menu-s3", repr(copied))
+        several("""await rightClick(rowOf(picked[0])); choose("Unload 3 tabs"); return 1;""")
+        r = m.js(MENU_TABS + """const ids = [...args], list = ids.map(byId); await until(() => list.every(t => !t.linkedPanel)); const s = main().gBrowser.selectedTab;
+          return {unloaded: list.filter(t => !t.linkedPanel).length, stays: !ids.includes(idOf(s)), container: s.userContextId, kept: entriesOf(await record(), "smoke-menu-s").length};""", s1, s2, s3)
+        check("Unload takes them all, the selected one too, and the selection goes to another tab", r == {"unloaded": 3, "stays": True, "container": ctx, "kept": 3}, str(r))
+        r = several("""const labels = await rightClick(rowOf(picked[0])); choose("Move 3 tabs to folder"); choose("New folder");
+          const input = await until(() => doc.querySelector("#tabs .folder .rename"));
+          await until(() => picked.every(id => input?.closest(".folder").contains(rowOf(id))));
+          const folder = input?.closest(".folder"), value = input?.value;
+          input?.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+          await until(() => !doc.querySelector("#tabs .folder .rename"));
+          return {labels, value, order: [...folder.querySelectorAll(".tab")].map(e => Number(e.dataset.tab))};""")
+        check("unloaded, they offer what is left, and go to a new folder in the order shown", r == {"labels": many[4:], "value": "Example", "order": [s1, s2, s3]}, str(r))
+        r = several("""await rightClick(rowOf(picked[0])); choose("Close 3 tabs"); await until(() => picked.every(id => !rowOf(id))); return picked.filter(id => rowOf(id)).length;""")
+        left = m.js(MENU_TABS + """const ids = [...args]; await until(() => ids.every(id => !byId(id))); return {tabs: ids.filter(id => byId(id)).length, kept: entriesOf(await record(), "smoke-menu-s").length};""", s1, s2, s3)
+        check("Close takes them all, and saved tabs that are not loaded are gone for good", r == 0 and left == {"tabs": 0, "kept": 0}, f"{r}, {left}")
 
         # Always open this site here: a rule anchored to the start of the address, for this space.
         e = open_tab("rule")

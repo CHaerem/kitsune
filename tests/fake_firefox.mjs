@@ -133,6 +133,7 @@ export class FakeFirefox {
         const o = need(id), t = ff.addTab(o.windowId, { url: "about:blank", cookieStoreId: o.cookieStoreId, active: false, index });
         ff.log.push(["duplicate", id, t.id]);
         b.tabs.onCreated.fire(ff.snap(t));
+        if (active !== false) ff.select(t.id); // Firefox selects a copy unless told not to
         if (ff.values.has(id)) ff.values.set(t.id, { ...ff.values.get(id) });
         setTimeout(() => { if (ff.tabs.has(t.id)) ff.navigate(t.id, o.url, o.title); });
         return { ...ff.snap(t), url: o.url };

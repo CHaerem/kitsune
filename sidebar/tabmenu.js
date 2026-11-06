@@ -86,6 +86,7 @@ function openTabMenu(e, id) {
     if (asked !== tabMenuAsked || !tabs?.length) return; // a newer click, or the tab is gone
     showMenu(tabMenuItems(tabs), x, y);
     // Which tabs it is about, while the pointer is away from them: a tile has no text.
-    for (const t of tabs) document.querySelector(`[data-tab="${t.id}"]`)?.classList.add("menu-for");
+    menuFor = tabs.map(t => t.id);
+    markMenuFor();
   }, err => console.error("Tidier: tab menu", err));
 }

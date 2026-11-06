@@ -159,6 +159,11 @@ test("a new folder's name: the site, what the titles share, the shared site, the
   assert.equal(name([t("A cat", "https://a.example/"), t("A dog", "https://b.example/")]), "A cat", "nothing shared: the first title");
   assert.equal(name([t("", "about:blank")]), "New folder");
   assert.equal(name([t("x".repeat(90), "about:blank")]).length, 40);
+  // A page decides its title: a word shared by two tabs can be any length.
+  const word = "W" + "x".repeat(5000);
+  assert.equal(name([t(word, "https://a.example/"), t(word, "https://b.example/")]).length, 40);
+  // A host with nothing in it is no reason to lose the folder.
+  assert.equal(name([t("Odd", "http://..a/")]), "..a");
 });
 
 test("a site's rule is anchored, so a sign-in passing through does not match it", () => {
@@ -233,6 +238,24 @@ test("realOf: an essential's copy, with the loaded copy elsewhere and with none 
   x.kill();
 });
 
+test("realOf: a tile with its own page acts on it, also while another copy is loaded", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E" }];
+  const there = ff.addWindow(), here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  ff.addTab(there.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  // In the window asked first, so that "the first loaded copy" would be the other one.
+  const other = ff.addTab(there.id, { url: "https://e.example/there", pinned: true, cookieStoreId: C1, index: 0 }, { essentialKey: "e" });
+  const copy = ff.addTab(here.id, { url: "https://e.example/here", pinned: true, cookieStoreId: C1, index: 0 }, { essentialKey: "e" });
+  const x = await alone(ff);
+  // (Tidier's own start leaves one of them loaded; here both are, as for a moment they can be.)
+  Object.assign(ff.tabs.get(copy.id), { url: "https://e.example/here", discarded: false });
+  Object.assign(ff.tabs.get(other.id), { url: "https://e.example/there", discarded: false });
+  assert.equal((await x.js("realOf")(copy.id)).tab.id, copy.id);
+  assert.equal((await x.js("realOf")(other.id)).tab.id, other.id);
+  x.kill();
+});
+
 test("realOf: a new tab is no page, and a closed tab is nothing", async () => {
   const ff = new FakeFirefox();
   const w = ff.addWindow({ focused: true });
@@ -268,6 +291,22 @@ test("what the menu is told is about the real tab", async () => {
   const [facts] = await x.send({ type: "tabMenu", tabIds: [ghost.id] });
   assert.deepEqual(JSON.parse(JSON.stringify(facts)), { id: ghost.id, tile: false, kept: false, loaded: true, muted: true, address: "https://a.example/page", folder: null, liveFolder: false, space: C1, ruled: false });
   assert.equal((await x.send({ type: "tabMenu", tabIds: [ghost.id, 9999] })).length, 1, "a tab closed meanwhile is left out");
+  x.kill();
+});
+
+test("what the menu is told about a tile and a saved tab", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E" }];
+  ff.store.syncedTabs = { F: FOLDER, a: entry("https://a.example/", { parentKey: "F", saved: { url: "https://a.example/", title: "A" } }), b: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true });
+  const tile = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1, index: 0 }, { essentialKey: "e" });
+  const saved = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const plain = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const x = await alone(ff);
+  const facts = async id => (await x.send({ type: "tabMenu", tabIds: [id] }))[0];
+  assert.deepEqual([(await facts(tile.id)).kept, (await facts(tile.id)).tile, (await facts(tile.id)).folder], [true, true, null], "a tile can be renamed, and is in no folder");
+  assert.deepEqual([(await facts(saved.id)).kept, (await facts(saved.id)).folder], [true, "F"], "a saved tab can be renamed, and its folder is known");
+  assert.deepEqual([(await facts(plain.id)).kept, (await facts(plain.id)).folder], [false, null]);
   x.kill();
 });
 
@@ -348,12 +387,30 @@ test("unloading several never selects one about to go, and the last of a space l
   x2.kill();
 });
 
+test("unloading several, the page that refuses takes the selection, rather than a new tab", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const x = await alone(ff);
+  ff.refuseDiscard = new Set([b.id]);
+  await act(x, w.id, "unload", [a.id, b.id]);
+  assert.equal(ff.tabs.get(a.id).discarded, true);
+  assert.equal(ff.tabs.get(b.id).discarded, false);
+  assert.equal(ff.list(w.id).find(t => t.active).id, b.id);
+  assert.equal(ff.list(w.id).length, 2, "no new tab");
+  assert.deepEqual(x.said.map(s => s.text), ["This page holds unsaved input and stayed loaded"]);
+  x.kill();
+});
+
 test("Duplicate of a loaded saved tab is an ordinary tab, and takes over nothing", async () => {
   const ff = new FakeFirefox();
   ff.store.syncedTabs = { F: FOLDER, a: entry("https://a.example/", { parentKey: "F", saved: { url: "https://a.example/", title: "A" } }) };
   const w = ff.addWindow({ focused: true });
   ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
   const a = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1 }); // so that "next to it" is not simply the end
   const x = await alone(ff);
   await act(x, w.id, "duplicate", [a.id]);
   const copyId = ff.log.find(l => l[0] === "duplicate")[2];
@@ -390,6 +447,22 @@ test("Duplicate of a placeholder opens the record's address in the same containe
   x.ctx.openUnruled = props => { opened.push(props.url); return Promise.resolve({ id: 1 }); };
   await act(x, w.id, "duplicate", [ghost.id]);
   assert.deepEqual(opened, ["https://a.example/page"]);
+  x.kill();
+});
+
+test("Duplicate of a placeholder of a page in another window opens here, next to the row", async () => {
+  const ff = new FakeFirefox();
+  const { x, here, there, ghost, live } = await twoWindows(ff);
+  ff.addTab(here.id, { url: "about:blank", cookieStoreId: C1 }); // after the placeholder
+  const before = ff.list(there.id).length;
+  await act(x, here.id, "duplicate", [ghost.id]);
+  assert.ok(!ff.log.some(l => l[0] === "duplicate"), "Firefox would put it in the other window");
+  assert.equal(ff.list(there.id).length, before, "nothing there yet");
+  const copy = ff.list(here.id).find(t => t.url === ff.tabs.get(live.id).url);
+  assert.ok(copy, "it is here");
+  assert.equal(copy.index, ff.index(ff.tabs.get(ghost.id)) + 1, "next to the row you clicked");
+  assert.equal(copy.cookieStoreId, C1);
+  assert.equal(copy.active, false);
   x.kill();
 });
 
@@ -452,6 +525,55 @@ test("Make essential pins the real tab, and Remove the loaded copy", async () =>
   await wait(2500);
   assert.equal(ff.store.essentials.length, 0);
   assert.ok(ff.list(there.id).some(t => t.url === "https://a.example/page"));
+  x.kill();
+});
+
+test("a tab moved a moment ago can be made essential: tab sync must not miss it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const here = ff.addWindow({ focused: true }), there = ff.addWindow();
+  const a = ff.addTab(here.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(here.id, { url: "about:blank", cookieStoreId: C1 }); // so that going last is a move
+  ff.addTab(there.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  ff.addTab(there.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await alone(ff);
+  // In one go, within the moment a moved tab stays marked as being moved.
+  await x.js("serial")(async () => {
+    await x.js("tabAction")(here.id, { action: "folder", tabIds: [a.id], folder: null });
+    assert.ok(x.js("syncBusy").has(a.id), "marked, or this does not test it");
+    await x.js("tabAction")(here.id, { action: "essential", tabIds: [a.id] });
+  });
+  await wait(2000);
+  assert.equal(ff.synced.a, undefined, "it has left the tab record");
+  assert.equal(ff.store.essentials.length, 1);
+  assert.ok(!ff.list(there.id).some(t => t.url === GHOST("ghost", "a")), "and its placeholder there");
+  x.kill();
+});
+
+test("a tile made a moment ago can be taken out again: the essentials must not miss it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const tile = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1, index: 0 }, { essentialKey: "e" });
+  const x = await alone(ff);
+  x.js("busy").add(tile.id); // as for a copy just created, or a placeholder just pinned
+  await act(x, w.id, "removeEssential", [tile.id]);
+  await wait(2500);
+  assert.deepEqual(ff.store.essentials, [], "out of the list");
+  assert.ok(ff.tabs.has(tile.id) && !ff.tabs.get(tile.id).pinned, "and an ordinary tab");
+  x.kill();
+});
+
+test("a folder deleted while the menu was open: the tab stays where it is, and stays saved", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: FOLDER, a: entry("https://a.example/", { parentKey: "F", saved: { url: "https://a.example/", title: "A" } }) };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  await act(x, w.id, "folder", [a.id], { folder: "deleted-in-the-other-window" });
+  assert.equal(ff.synced.a.parentKey, "F");
+  assert.ok(ff.synced.a.saved);
   x.kill();
 });
 
@@ -541,6 +663,26 @@ test("Close acts on the page: a saved tab loaded elsewhere is unloaded, not remo
   assert.ok(ff.tabs.has(ghost.id), "its placeholder stays");
   // Now nothing is loaded: closing it removes it for good, as README says.
   assert.equal(await x.js("closeTargetOf")(ghost.id), ghost.id);
+  x.kill();
+});
+
+test("with the setting off, the sidebar's messages for the menu do nothing", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire({ reason: "update" });
+  await wait(1200);
+  for (let i = 0; i < 300 && !x.started(); i++) await wait(1000);
+  const port = { name: "sidebar", sender: { id: "tidier" }, onMessage: { ls: [], addListener(f) { this.ls.push(f); } }, onDisconnect: { addListener() {} }, postMessage() {} };
+  x.b.runtime.onConnect.fire(port);
+  await port.onMessage.ls[0]({ type: "hello", windowId: w.id });
+  ff.log.length = 0;
+  for (const action of ["reload", "duplicate", "essential", "unload"]) await port.onMessage.ls[0]({ type: "tabAction", action, tabIds: [a.id] });
+  await wait(500);
+  assert.deepEqual(ff.log, []);
+  assert.equal(ff.tabs.get(a.id).pinned, false);
   x.kill();
 });
 

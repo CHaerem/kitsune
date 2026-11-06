@@ -22,7 +22,9 @@ async function realOf(tabId) {
     // (Firefox refuses to read the values of a tab closed a moment ago.)
     key = await keyOf(own).catch(() => undefined);
     entry = (await getList()).find(e => e.key === key) ?? null;
-    if (entry) tab = (await copiesOf(key).catch(() => [])).find(isLoadedCopy) ?? own;
+    // Its own page if it has one: for a moment two copies can be loaded (oneLoaded), and
+    // an action on this tile must not land on the other.
+    if (entry && !isLoadedCopy(own)) tab = (await copiesOf(key).catch(() => [])).find(isLoadedCopy) ?? own;
   } else {
     key = syncKeyByTab.get(tabId);
     entry = key ? (await getSynced())[key] ?? null : null;
@@ -85,14 +87,29 @@ const TAB_ACTIONS = {
   unmute: (windowId, reals) => setRealsMuted(reals, false),
   unload: unloadReals,
   duplicate: async (windowId, reals) => { for (const r of reals) await duplicateReal(r); },
+  // The listeners that make a pinned tab an essential ignore a tab Tidier is busy with, and
+  // a tab just moved or made stays marked so for a moment (syncBusy, busy). This change is
+  // yours: missed, the tab would be an essential and an ordinary tab at once, for good.
   essential: async (windowId, reals) => {
     // The real tab, so a page loaded in another window stays loaded as the essential.
-    for (const r of reals) if (r.address && !r.own.pinned) await browser.tabs.update(r.tab.id, { pinned: true }).catch(() => {});
+    for (const r of reals) {
+      if (!r.address || r.own.pinned) continue;
+      syncBusy.delete(r.tab.id);
+      await browser.tabs.update(r.tab.id, { pinned: true }).catch(() => {});
+    }
   },
   removeEssential: async (windowId, reals) => {
-    for (const r of reals) if (r.own.pinned) await browser.tabs.update(r.tab.id, { pinned: false }).catch(() => {});
+    for (const r of reals) {
+      if (!r.own.pinned) continue;
+      busy.delete(r.tab.id);
+      await browser.tabs.update(r.tab.id, { pinned: false }).catch(() => {});
+    }
   },
-  folder: (windowId, reals, { folder }) => moveRealsTo(windowId, reals, folder ?? null),
+  // A folder deleted in another window while this menu was open: a tab whose folder is not
+  // there is drawn as an ordinary tab and stops being saved, so nothing moves.
+  folder: async (windowId, reals, { folder }) => {
+    if (!folder || isOwnFolder((await getSynced())[folder])) await moveRealsTo(windowId, reals, folder ?? null);
+  },
   newFolder: async (windowId, reals, { space }) => {
     await moveRealsTo(windowId, reals, await createFolder(folderNameFor(reals), space));
   },
@@ -115,8 +132,9 @@ async function moveRealsTo(windowId, reals, folderKey) {
 // Unloading keeps a tab's place, address and title; only its page goes. Firefox refuses
 // to unload the selected tab, so the selection goes first to the tab used last in the
 // space, and comes back if the page refuses after all (unsaved input): it would otherwise
-// be out of sight, still asking for your attention. Those not selected go first, so the
-// selection moves only when it has to, and never onto a tab about to be unloaded.
+// be out of sight, still asking for your attention. Those not selected go first, so that
+// the selection goes neither onto a tab about to be unloaded nor, with one that refused
+// there to take it, to a new tab.
 async function unloadReals(windowId, reals) {
   const pages = reals.filter(r => r.loaded).sort((a, b) => a.tab.active - b.tab.active);
   const leaving = new Set(pages.map(r => r.tab.id));
@@ -127,6 +145,7 @@ async function unloadReals(windowId, reals) {
     const now = await browser.tabs.get(tab.id).catch(() => null);
     if (!now || now.discarded) continue;
     refused++;
+    leaving.delete(tab.id);
     if (tab.active) await browser.tabs.update(tab.id, { active: true }).catch(() => {});
   }
   if (refused) globalThis.say?.(windowId, refused > 1 ? `${refused} pages hold unsaved input and stayed loaded` : "This page holds unsaved input and stayed loaded");
@@ -143,17 +162,21 @@ async function stepAwayFrom(tab, leaving) {
 }
 
 // A copy is always an ordinary tab, next to the original and not selected. A loaded page
-// is duplicated with its history. SessionStore copies Tidier's values along, and with
-// them the copy would count as the same tab: it would take over a saved tab's record once
-// the original is closed, and be an essential's copy after a restart. Nor is the copy a
-// tab's first page: a rule must not send it to another space.
+// in this window is duplicated with its history. SessionStore copies Tidier's values along,
+// and with them the copy would count as the same tab: it would take over a saved tab's
+// record once the original is closed, and be an essential's copy after a restart. Nor is
+// the copy a tab's first page: a rule must not send it to another space.
+//
+// A page loaded in another window is opened again here. Firefox duplicates a tab only in
+// its own window, so the copy would be over there, and its row here at the end of the list
+// instead of next to the one you clicked.
 //
 // The queue does not wait for this: Firefox answers when the copy starts to restore, and
 // never if the copy is closed first, which would stop everything for minutes. The answer
 // still comes before the copy's address is reported, and long before it is registered.
 async function duplicateReal(r) {
   if (!r.address) return;
-  if (r.loaded) {
+  if (r.loaded && r.tab.windowId === r.own.windowId) {
     browser.tabs.duplicate(r.tab.id, { active: false, index: r.tab.index + 1 }).then(copy => {
       firstPage.delete(copy.id);
       return Promise.all([SYNC_KEY, SYNC_ROLE, TAB_KEY].map(name => browser.sessions.removeTabValue(copy.id, name).catch(() => {})));
@@ -192,7 +215,7 @@ function siteNameOf(address) {
   if (labels.length > 1) labels.pop();
   if (labels.length > 1 && labels.at(-1).length <= 3) labels.pop();
   const name = labels.at(-1);
-  return name[0].toUpperCase() + name.slice(1);
+  return name ? name[0].toUpperCase() + name.slice(1) : host;
 }
 
 // A name for a new folder from the tabs going into it ({ title, address }), so that
@@ -202,11 +225,9 @@ function siteNameOf(address) {
 function folderNameFor(tabs) {
   const titles = tabs.map(t => (t.title || "").trim());
   const words = title => title.match(/\p{Lu}\p{L}{3,}/gu) ?? [];
-  if (tabs.length > 1) {
-    const shared = words(titles[0]).find(word => titles.every(title => words(title).includes(word)));
-    if (shared) return shared;
-  }
+  const shared = tabs.length > 1 && words(titles[0]).find(word => titles.every(title => words(title).includes(word)));
   const sites = tabs.map(t => siteNameOf(t.address));
-  if (sites[0] && sites.every(site => site === sites[0])) return sites[0];
-  return titles.find(Boolean)?.slice(0, 40) ?? "New folder";
+  const site = sites.every(s => s === sites[0]) && sites[0];
+  // Short: a page decides its title, and this goes in the record and on the row.
+  return (shared || site || titles.find(Boolean) || "New folder").slice(0, 40);
 }
