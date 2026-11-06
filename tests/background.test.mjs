@@ -1371,3 +1371,24 @@ test("a tab closed in the moment it is registered gets no ghosts", async () => {
     x.kill();
   }
 });
+
+test("a window reopened while Tidier is starting is taken back, not doubled", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const other = ff.addWindow();
+  const gone = ff.addTab(other.id, { url: GHOST("ghost", "a"), active: true, discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  ff.addTab(other.id, { url: GHOST("ghost", "b"), discarded: true, cookieStoreId: C1 }, { syncKey: "b", syncRole: "ghost" });
+  assert.ok(gone);
+  ff.closeWindow(other.id); // it is in Recently Closed
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.run(5100); // past the look over the windows, not done yet
+  const back = ff.reopenLast();
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(back.id).filter(t => ff.values.get(t.id)?.syncKey === "a").length, 1);
+  assert.equal(ff.list(back.id).filter(t => ff.values.get(t.id)?.syncKey === "b").length, 1);
+  x.kill();
+});

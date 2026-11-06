@@ -416,7 +416,7 @@ async function register(tabId) {
   for (const w of await normalWindows()) {
     if (w.id === tab.windowId) continue;
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
-    await createRep(w.id, key, entry, parentId);
+    await createRep(w.id, key, entry, parentId).catch(ifGone); // that window closed meanwhile
   }
   // Dragged to another window meanwhile: that arrival looked like nothing of ours, and the
   // ghosts just went by the window it was in.
@@ -1046,22 +1046,23 @@ async function start(delayMs) {
 
 // A tab opened while Tidier was starting went unseen (a link that started Firefox, say,
 // or one opened in the moment after an update), and no event will tell about it again:
-// it would stay in one window, unknown, until it goes to another address.
-// The same goes for a tab pinned meanwhile: it would stay both an essential and a synced tab.
+// it would stay in one window, unknown, until it goes to another address. The same goes for
+// a window opened or reopened meanwhile, and for a tab pinned meanwhile, which would stay
+// both an essential and a synced tab.
 async function seeUnseenTabs() {
+  await serial(async () => {
+    for (const w of await normalWindows()) {
+      if (await adoptRestored(w.id)) await reconcileAll();
+      else await fillIfOpen(w.id);
+      if (tidierAlone) await startSpaceIn(w.id);
+    }
+  });
   for (const t of await browser.tabs.query({})) {
     const key = syncKeyByTab.get(t.id);
     if (key) {
       if (t.pinned) serial(async () => { await onPinned(t); await leaveSync(t.id, key); });
     } else if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
   }
-  // A window opened meanwhile is empty for the same reason. (Nothing is added to the others.)
-  serial(async () => {
-    for (const w of await normalWindows()) {
-      await fillIfOpen(w.id);
-      if (tidierAlone) await startSpaceIn(w.id);
-    }
-  });
 }
 let startRequested = false, firefoxStarting = false;
 function requestStart(delayMs) {
