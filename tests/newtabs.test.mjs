@@ -41,6 +41,10 @@ function sidebar(x, windowId) {
   return send({ type: "hello", windowId }).then(() => send);
 }
 
+// Waits for a state. A chain of timers (the wait, then the job, then the view) has no end
+// one can wait past: on a busy machine a fixed wait can run out in the middle of it.
+const until = async (test, ms = 100000) => { for (let t = 0; !test() && t < ms; t += 100) await wait(100); };
+
 // What viewFor draws first among today's tabs: topOfToday must agree with it.
 const firstDrawn = async (x, windowId) => (await x.js("viewFor")(windowId)).tabs[0]?.id;
 
@@ -284,7 +288,7 @@ test("a tab about to be opened again is not drawn, so it does not jump; a page t
   await wait(50);
   assert.ok(!(await drawn()).includes(blank.id));
   send.views.length = 0;
-  await wait(3200);
+  await until(() => send.views.at(-1)?.tabs.some(t => t.id === blank.id));
   assert.equal(send.views.at(-1)?.tabs[0].id, blank.id, "in the one place");
   x.kill();
 });
@@ -299,7 +303,7 @@ test("a link that takes longer than the wait shows in the one place meanwhile, a
   const send = await sidebar(x, w.id);
   const slow = ff.addTab(w.id, { url: "about:blank", active: true });
   x.b.tabs.onCreated.fire(ff.snap(slow));
-  await wait(3200);
+  await until(() => !x.js("newTabs").has(slow.id));
   assert.equal(ff.tabs.get(slow.id).url, "about:blank", "still waiting for the site");
   assert.equal(await firstDrawn(x, w.id), slow.id);
   assert.equal(ff.index(slow), 1, "under the folder's tab");
@@ -326,7 +330,8 @@ test("a blank tab already in the one place is drawn after the wait too, with not
   x.b.tabs.onCreated.fire(ff.snap(blank));
   await wait(50);
   send.views.length = 0;
-  await wait(3200);
+  await until(() => !x.js("newTabs").has(blank.id));
+  await wait(200); // the view that says so comes right after (VIEW_DEBOUNCE_MS); later ones come from elsewhere
   assert.equal(send.views.at(-1)?.tabs[0]?.id, blank.id);
   assert.ok(!ff.log.some(([what]) => what === "move"));
   x.kill();
@@ -340,7 +345,7 @@ test("a page that stays as it is keeps its place: nothing moves it after the wai
   const x = await start(ff);
   const addons = ff.addTab(w.id, { url: "about:addons" });
   x.b.tabs.onCreated.fire(ff.snap(addons));
-  await wait(3200);
+  await until(() => !x.js("newTabs").has(addons.id));
   assert.equal(ff.index(addons), 2);
   assert.ok(!ff.log.some(([what, id]) => what === "move" && id === addons.id));
   assert.equal(x.js("newTabs").size, 0, "nothing is kept");
