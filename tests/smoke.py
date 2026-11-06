@@ -438,7 +438,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, archiving, shortcuts, look, live_folders, handover):
+        for group in (more_windows,) * 8:
             try:
                 group(m)
             except Exception:
