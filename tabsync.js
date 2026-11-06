@@ -283,7 +283,13 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
   };
-  return Promise.resolve({ ...work, sizes: Object.fromEntries(Object.entries(lists).map(([name, list]) => [name, list.size])) });
+  // Counted once Kitsune is done with what it was doing (the helper page
+  // asking this causes a little work), so a list only shows what it keeps.
+  return (async () => {
+    for (let i = 0; i < 20 && (orderQueries.size || pending.size); i++) await sleep(100);
+    await serial(() => {});
+    return { ...work, sizes: Object.fromEntries(Object.entries(lists).map(([name, list]) => [name, list.size])) };
+  })();
 });
 
 // Make sure every synced tab has exactly one live tab and every window exactly
