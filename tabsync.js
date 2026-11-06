@@ -481,7 +481,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   saveSynced(all);
   const reps = repsOf(key, await browser.tabs.query({}));
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-  if (reps.length) await browser.tabs.remove(reps.map(t => t.id));
+  await removeTabs(reps.map(t => t.id));
   await forgetClosedPlaceholders("ghost", [key]);
 }
 
@@ -704,7 +704,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       await clearRole(tabId);
       const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-      if (others.length) await browser.tabs.remove(others.map(t => t.id));
+      await removeTabs(others.map(t => t.id));
       await forgetClosedPlaceholders("ghost", [key]);
     });
     return;

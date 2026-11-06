@@ -788,3 +788,23 @@ test("a tab closed in the middle of its pull does not leave its ghost behind", a
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("closing a tab everywhere closes the others, also when one of them is gone by then", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const windows = [ff.addWindow({ focused: true }), ff.addWindow(), ff.addWindow()];
+  for (const w of windows) ff.addTab(w.id, { url: "about:blank", active: true });
+  const live = ff.addTab(windows[0].id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const gone = ff.addTab(windows[1].id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const stays = ff.addTab(windows[2].id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // The window with the other ghost is closing at this very moment: Firefox no longer has it.
+  const query = x.b.tabs.query;
+  x.b.tabs.query = async q => { const tabs = await query(q); if (ff.tabs.has(gone.id) && q.windowId === undefined) ff.rm(gone.id, { closing: true }); return tabs; };
+  ff.rm(live.id);
+  await wait(1000);
+  x.b.tabs.query = query;
+  assert.ok(!ff.tabs.has(stays.id), "the other ghost is closed");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});

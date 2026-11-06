@@ -71,6 +71,9 @@ function setNotice(kind, text) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Firefox refuses a whole list if one tab in it is gone by now, and closes none of them:
+// the others would stay open, already forgotten by Tidier. So one at a time.
+const removeTabs = ids => Promise.all(ids.map(id => browser.tabs.remove(id).catch(() => {})));
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
 const sameSite = (a, b) => {

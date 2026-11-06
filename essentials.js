@@ -165,7 +165,7 @@ async function ensureWindow(windowId, settle) {
   });
   if (extra.length) {
     extra.forEach(id => busy.add(id));
-    await browser.tabs.remove(extra).catch(() => {});
+    await removeTabs(extra);
     await forgetClosedPlaceholders("essential", [...copies.keys()].filter(k => copies.get(k).length > 1));
   }
   let index = 0;
@@ -239,7 +239,7 @@ async function onUnpinned(tab) {
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
   copies.forEach(id => busy.add(id));
-  await browser.tabs.remove(copies);
+  await removeTabs(copies);
   await forgetClosedPlaceholders("essential", [key]);
 }
 
@@ -400,7 +400,7 @@ async function dropDoubleCopies(tabId, windowId) {
   const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
   if (!doubles.length) return;
   doubles.forEach(id => busy.add(id));
-  await browser.tabs.remove(doubles).catch(() => {});
+  await removeTabs(doubles);
   await forgetClosedPlaceholders("essential", [key]);
   await sortEssentials(windowId, await getList());
 }
