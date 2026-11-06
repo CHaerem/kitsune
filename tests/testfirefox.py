@@ -110,12 +110,21 @@ class TestFirefox:
             "settings": json.load(open(f"{DOTFILES}/sidebery-settings.json")),
             "sidebarCSS": open(f"{DOTFILES}/sidebery.css").read(),
         }}, open(f"{self.dir}/managed/ManagedStorage/{SIDEBERY_ID}.json", "w"))
+        # The live folders' native host is a stand-in that answers from a file
+        # the test writes (fake_github_host.py), never your gh login.
+        os.makedirs(f"{self.dir}/managed/NativeMessagingHosts")
+        json.dump({"name": "kitsune_github", "description": "test", "type": "stdio",
+                   "path": os.path.join(HERE, "fake_github_host.py"), "allowed_extensions": [EXT_ID]},
+                  open(f"{self.dir}/managed/NativeMessagingHosts/kitsune_github.json", "w"))
+        self.fake_prs = f"{self.dir}/fake-prs.json"
+        json.dump({}, open(self.fake_prs, "w"))
 
     def _start(self):
-        env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1"}
+        env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "KITSUNE_FAKE_PRS": self.fake_prs}
         self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self.m = Marionette(port=PORT, wait=60)
+        self.m.fake_prs = self.fake_prs
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
     def _setup(self):
@@ -137,16 +146,17 @@ class TestFirefox:
         time.sleep(8)  # Kitsune starts: essentials, tab sync, live folders
 
 
-# Firefox reads managed storage files only from your own ~/Library (it ignores
-# HOME), so the test Firefox is pointed at the profile's copy instead; other
-# lookups (the live folders' native host) are left alone.
+# Firefox reads managed storage files and native hosts only from your own
+# ~/Library (it ignores HOME), so the test Firefox is pointed at the profile's
+# copies instead: Sidebery's managed storage and the live folders' stand-in
+# host. Other lookups are left alone.
 USE_TEST_MANAGED_STORAGE = """
   const [dir] = args;
   const {NativeManifests} = ChromeUtils.importESModule("resource://gre/modules/NativeManifests.sys.mjs");
   await NativeManifests.init();
   const lookup = NativeManifests._lookup;
   NativeManifests._lookup = (type, name, context) =>
-    type === "storage" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
+    type === "storage" || name === "kitsune_github" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
 """
 
 # Sidebery: permissions, shortcuts, and the fixture written to its storage
