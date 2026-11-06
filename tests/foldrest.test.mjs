@@ -106,7 +106,7 @@ test("what keeps working stays loaded, and hidden, and one refusal does not stop
   ff.store.syncedTabs = {
     F: folder(), L: folder({ live: "prs", rank: 2 }),
     selected: inFolder("https://selected.example/"), loud: inFolder("https://loud.example/"),
-    typed: inFolder("https://typed.example/"), call: inFolder("https://call.example/"), screen: inFolder("https://screen.example/"),
+    typed: inFolder("https://typed.example/"), call: inFolder("https://call.example/"), voice: inFolder("https://voice.example/"), screen: inFolder("https://screen.example/"),
     plain: inFolder("https://plain.example/"),
     pr: entry("https://pr.example/1", { parentKey: "L", liveFolder: "prs", liveUrl: "https://pr.example/1" }),
     unopened: entry("https://pr.example/2", { parentKey: "L", liveFolder: "prs", liveUrl: "https://pr.example/2" }),
@@ -117,6 +117,7 @@ test("what keeps working stays loaded, and hidden, and one refusal does not stop
   const loud = live(ff, w, "loud", { audible: true });
   const typed = live(ff, w, "typed");
   const call = live(ff, w, "call", { sharingState: { camera: true, microphone: false, screen: undefined } });
+  const voice = live(ff, w, "voice", { sharingState: { camera: false, microphone: true, screen: undefined } });
   const screen = live(ff, w, "screen", { sharingState: { camera: false, microphone: false, screen: "Window" } });
   const plain = live(ff, w, "plain");
   const pr = live(ff, w, "pr");
@@ -130,9 +131,9 @@ test("what keeps working stays loaded, and hidden, and one refusal does not stop
   await fold(x, w.id, true, "L");
   assert.deepEqual(discards(ff), [typed.id, plain.id], "asked of the page that refuses, and of the one after it");
   assert.equal(plain.discarded, true);
-  for (const t of [selected, loud, typed, call, screen, pr, handed, unopened]) assert.equal(t.discarded, false);
+  for (const t of [selected, loud, typed, call, voice, screen, pr, handed, unopened]) assert.equal(t.discarded, false);
   assert.equal(selected.hidden, false, "Firefox cannot hide the selected tab");
-  for (const t of [loud, typed, call, screen, plain, pr, handed, unopened]) assert.equal(t.hidden, true);
+  for (const t of [loud, typed, call, voice, screen, plain, pr, handed, unopened]) assert.equal(t.hidden, true);
   x.kill();
 });
 
@@ -173,6 +174,139 @@ test("leaving a tab in an open folder, or an ordinary tab, unloads nothing", asy
   await wait(300);
   assert.deepEqual(discards(ff), []);
   for (const t of [s.a, s.b, s.here]) assert.equal(t.hidden, false);
+  x.kill();
+});
+
+test("leaving a tab for one without a container hides and unloads it too", async () => {
+  // spaces.js shows nothing for a selection like that (⌘T, about:addons), so this is all that does.
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff);
+  const blank = ff.addTab(s.w1.id, { url: "about:addons" });
+  const x = await alone(ff);
+  ff.select(s.a.id);
+  await wait(500);
+  await fold(x, s.w1.id, true);
+  ff.select(blank.id);
+  await wait(500);
+  assert.equal(s.a.hidden, true);
+  assert.equal(s.a.discarded, true);
+  x.kill();
+});
+
+test("a folder opened just after you left its tab keeps that tab loaded", async () => {
+  // The leaving is looked at in the queue, and the opening got there first.
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff);
+  const x = await alone(ff);
+  ff.select(s.a.id);
+  await wait(500);
+  await fold(x, s.w1.id, true);
+  ff.log.length = 0;
+  ff.select(s.here.id);
+  await fold(x, s.w1.id, false);
+  await wait(500);
+  assert.deepEqual(discards(ff), []);
+  assert.equal(s.a.discarded, false);
+  assert.equal(s.a.hidden, false);
+  x.kill();
+});
+
+test("closing the selected tab of a closed folder leaves a hidden placeholder", async () => {
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff);
+  const x = await alone(ff);
+  ff.select(s.a.id);
+  await wait(500);
+  await fold(x, s.w1.id, true);
+  await x.b.tabs.remove(s.a.id);
+  await wait(1500);
+  const reps = ff.list(s.w1.id).filter(t => ff.values.get(t.id)?.syncKey === "a");
+  assert.equal(reps.length, 1, "kept, since it is saved");
+  assert.equal(reps[0].hidden, true);
+  assert.equal(s.aGhost.hidden, true);
+  x.kill();
+});
+
+test("a window closed with resting tabs hands them over, and the placeholder loads when selected", async () => {
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff);
+  const x = await alone(ff);
+  await fold(x, s.w1.id, true);
+  const w1 = ff.wins.get(s.w1.id);
+  for (const id of [...w1.order]) ff.rm(id, { closing: true });
+  ff.wins.delete(s.w1.id);
+  x.b.windows.onRemoved.fire(s.w1.id);
+  await wait(500);
+  assert.equal(ff.values.get(s.aGhost.id).syncRole, "live");
+  assert.equal(s.aGhost.hidden, true);
+  x.kill();
+});
+
+test("a reopened window's tabs in a closed folder are hidden again", async () => {
+  // Firefox makes its tabs before Tidier knows them, and they get shown as strangers.
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff, folder({ collapsed: true }));
+  const x = await alone(ff);
+  const w3 = ff.addWindow();
+  const reopened = ["a", "b", "here", "there"].map(key => ff.addTab(w3.id, { url: GHOST("ghost", key), discarded: true, cookieStoreId: C1, hidden: key === "a" || key === "b", active: key === "here" }, { syncKey: key, syncRole: "ghost" }));
+  x.b.windows.onCreated.fire({ id: w3.id, type: "normal", incognito: false });
+  for (const t of reopened) x.b.tabs.onCreated.fire(ff.snap(t));
+  await wait(1500);
+  assert.deepEqual(reopened.map(t => t.hidden), [true, true, false, false]);
+  assert.deepEqual(discards(ff), [], "and nothing is unloaded: you did not close anything");
+  for (const t of [s.a, s.b, s.aGhost, s.bGhost]) assert.equal(t.hidden, true);
+  x.kill();
+});
+
+test("a new pull request in a closed live folder is hidden", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { L: folder({ live: "prs", collapsed: true }), here: entry("https://here.example/") };
+  ff.store.liveFolders = { prs: { groupKey: "L", dismissed: [] } };
+  const w = ff.addWindow({ focused: true });
+  live(ff, w, "here", { active: true });
+  const x = await alone(ff);
+  const job = x.js("serial")(() => x.js("refreshLiveFolder")({ id: "prs", name: "Folder", cookieStoreId: C1 }, { items: [{ url: "https://pr.example/1", repo: "r", number: 1, title: "t" }] }));
+  await job;
+  await wait(500);
+  const pr = ff.list(w.id).find(t => t.url.includes("kind=lazy"));
+  assert.ok(pr, "it has its tab");
+  assert.equal(pr.hidden, true);
+  x.kill();
+});
+
+test("a window closing while its folder closes stops nothing else", async () => {
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff);
+  const x = await alone(ff);
+  let once = true;
+  ff.hooks.query = async q => {
+    if (!once || q.windowId !== s.w1.id) return;
+    once = false;
+    for (const id of [...ff.wins.get(s.w2.id).order]) ff.rm(id, { closing: true });
+    ff.wins.delete(s.w2.id);
+    x.b.windows.onRemoved.fire(s.w2.id);
+  };
+  await fold(x, s.w1.id, true);
+  ff.hooks.query = null;
+  await wait(500);
+  assert.equal(s.a.hidden, true);
+  assert.equal(s.a.discarded, true);
+  assert.equal(s.b.discarded, true);
+  assert.equal(x.js("problems").length, 0, "no errors inside Tidier");
+  x.kill();
+});
+
+test("a tab closed while its folder closes stops nothing else", async () => {
+  const ff = new FakeFirefox();
+  const s = twoWindows(ff);
+  const x = await alone(ff);
+  const discard = x.b.tabs.discard;
+  x.b.tabs.discard = async id => { if (id === s.a.id) ff.rm(s.a.id); return discard(id); };
+  await fold(x, s.w1.id, true);
+  await wait(500);
+  assert.equal(s.b.discarded, true);
+  assert.equal(s.b.hidden, true);
+  assert.equal(x.js("problems").length, 0, "no errors inside Tidier");
   x.kill();
 });
 
@@ -250,6 +384,31 @@ test("a start hides a closed folder's tabs and unloads nothing", async () => {
   for (const t of [s.a, s.b, s.aGhost, s.bGhost]) assert.equal(t.hidden, true);
   assert.equal(s.a.discarded, false);
   assert.deepEqual(discards(ff), []);
+  x.kill();
+});
+
+test("leaving a tab while Tidier starts unloads nothing", async () => {
+  // Firefox has only just brought the session back, and nothing you did closed a folder.
+  const ff = new FakeFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = { F: folder({ collapsed: true }), a: inFolder("https://a.example/"), here: entry("https://here.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = live(ff, w, "a", { active: true }), here = live(ff, w, "here");
+  const x = ff.boot();
+  let left = false;
+  // Once it knows the tabs and has not finished starting: then the leaving could be seen.
+  ff.hooks.query = async () => {
+    if (!left && x.js("syncKeyByTab").size && !x.started()) { left = true; ff.select(here.id); }
+  };
+  x.b.runtime.onStartup.fire();
+  await wait(1200);
+  for (let i = 0; i < 300 && !x.started(); i++) await wait(100);
+  await wait(1000);
+  ff.hooks.query = null;
+  assert.ok(left, "the tab was left during the start");
+  assert.deepEqual(discards(ff), []);
+  assert.equal(a.discarded, false);
+  assert.equal(a.hidden, true, "it is hidden all the same");
   x.kill();
 });
 

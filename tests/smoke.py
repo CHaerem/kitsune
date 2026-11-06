@@ -1635,6 +1635,19 @@ REST = H + """
 """
 
 
+def real_clicks(m, x, y, clicks):
+    """Clicks with the mouse, from Firefox itself: unlike .click() in a page they count as a
+    double click when they come quickly, and the page must be in the selected tab."""
+    press_release = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
+    acts = [{"type": "pointerMove", "x": x, "y": y, "duration": 0, "origin": "viewport"}] + press_release
+    for _ in range(clicks - 1):
+        acts += [{"type": "pause", "duration": 60}] + press_release
+    into_page(m, "/sidebar/sidebar.html")
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": acts}]})
+    m.cmd("WebDriver:ReleaseActions")
+    m.chrome()
+
+
 def alone_folds_rest(m):
     # A closed folder rests, with real clicks and drags on the real sidebar, and read from
     # Firefox itself rather than from what Tidier thinks. In two windows, since a fold is
@@ -1664,23 +1677,47 @@ def alone_folds_rest(m):
       [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === args[0]).click();
       await wait(50); return 1;""", name)
     first, second, selected = keys
-
-    # Closed: hidden in both windows, and the real tabs unloaded, on the address they had.
     before = m.js(REST + """await until(() => resting(args[0], ["shown/loaded", "shown/unloaded"])); return each(args[0]);""", keys)
-    click_head()
+
+    # Renaming by a double click must not cost the pages: its first click closes the folder.
+    # With the mouse, so with the page in front, which is put back afterwards.
+    m.js(H + """const w = main(); w.__beforeRename = w.gBrowser.selectedTab; w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
+    head_at = sidebar_page(m, """const b = doc.querySelector(`[data-folder-head="${args[0]}"]`).getBoundingClientRect(); return {x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2)};""", s["key"])
+    real_clicks(m, head_at["x"], head_at["y"], 2)
+    r = sidebar_page(m, """await wait(1200);  // longer than a click waits for a second one
+      const box = doc.querySelector(`[data-folder-head="${args[0]}"]`).parentElement, input = box.querySelector("input.rename");
+      const was = {renaming: !!input, closed: box.classList.contains("collapsed")};
+      input?.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      await wait(100);
+      return {...was, name: box.querySelector(".head .title").textContent};""", s["key"])
+    t = m.js(REST + """return {tabs: each(args[0]), still: resting(args[0], ["shown/loaded", "shown/unloaded"])};""", keys)
+    check("a double click on a folder renames it, and leaves it open", r["renaming"] and not r["closed"] and r["name"] == "Resting", str(r))
+    check("a double click on a folder unloads and hides nothing", t["still"], str(t))
+    # Closed, by one click with the mouse: the head shows it at once, and once no second click
+    # has come the tabs are hidden in both windows, and the real ones unloaded, on the address
+    # they had. Then the page's tab gives way to the tab that was selected.
+    real_clicks(m, head_at["x"], head_at["y"], 1)
+    fold_seen = sidebar_page(m, """const box = doc.querySelector(`[data-folder-head="${args[0]}"]`).parentElement;
+      return {closed: box.classList.contains("collapsed"), count: box.querySelector(".count").textContent};""", s["key"])
+    m.js(H + "const w = main(); w.gBrowser.selectedTab = w.__beforeRename; delete w.__beforeRename; return 1;")
+    check("one click with the mouse closes a folder at once, with its count", fold_seen == {"closed": True, "count": "3"}, str(fold_seen))
     r = m.js(REST + """const ok = await until(() => resting(args[0]));
-      return {ok, tabs: each(args[0]), urls: args[0].map(k => url(rep(main(), k))), selected: url(main().gBrowser.selectedTab)};""", keys)
+      return {ok, tabs: each(args[0]), urls: args[0].map(k => url(rep(main(), k))), selected: url(main().gBrowser.selectedTab),
+              ctrlTab: args[0].filter(k => main().ctrlTab.tabList.includes(rep(main(), k))).length};""", keys)
     check("a folder's tabs are loaded and shown before it closes", all(v[0] == "shown/loaded" and v[1] == "shown/unloaded" for v in before.values()), str(before))
     check("closing a folder hides its tabs in both windows and unloads them", r["ok"], str(r))
     check("a tab that rests keeps the address it was on", all("smoke-rest-" in u for u in r["urls"]), str(r))
+    check("a closed folder's tabs are out of Firefox's own ⌃Tab list", r["ctrlTab"] == 0, str(r))
     r = sidebar_page(m, """const f = folders().find(f => f.name === "Resting"), head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Resting");
       return {collapsed: f.collapsed, count: head.querySelector(".count").textContent, height: head.parentElement.querySelector(".children").offsetHeight};""")
     check("the closed folder shows how many tabs it holds, and no rows", r["collapsed"] and r["count"] == "3" and r["height"] == 0, str(r))
 
     # Opened: shown again, and nothing loads by itself.
     click_head()
-    r = m.js(REST + """const ok = await until(() => resting(args[0], ["shown/unloaded", "shown/unloaded"])); await wait(1500); return {ok, tabs: each(args[0]), still: resting(args[0], ["shown/unloaded", "shown/unloaded"])};""", keys)
+    r = m.js(REST + """const ok = await until(() => resting(args[0], ["shown/unloaded", "shown/unloaded"])); await wait(1500);
+      return {ok, tabs: each(args[0]), still: resting(args[0], ["shown/unloaded", "shown/unloaded"]), ctrlTab: args[0].filter(k => main().ctrlTab.tabList.includes(rep(main(), k))).length};""", keys)
     check("opening a folder shows its tabs and loads nothing", r["ok"] and r["still"], str(r))
+    check("an open folder's tabs are back in ⌃Tab's list", r["ctrlTab"] == 3, str(r))
 
     # The selected tab stays until you leave it, then rests too.
     r = m.js(REST + """const w = main(), t = rep(w, args[0]); w.__beforeRest = w.gBrowser.selectedTab;
@@ -1790,8 +1827,19 @@ def alone_folds_rest(m):
       return {key};""", s["space"])
     click_head("Resting still")
     r = m.js(REST + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs, k = Object.keys(all).find(k => all[k].parentKey === args[0]);
-      return {ok: await until(() => resting([k])), tabs: state(k)};""" % EXT_ID, s["key"])
+      return {k, ok: await until(() => resting([k])), tabs: state(k)};""" % EXT_ID, s["key"])
     check("another folder closes the same way, to stay closed", r["ok"], str(r))
+    # A window you close and reopen comes back with its tabs hidden as they were. Reopened,
+    # it knows them only once Tidier has taken them back, which is after it showed them.
+    k = r["k"]
+    r = m.js(REST + """await close(rest()); main().focus(); await wait(500);
+      const w = main().SessionStore.undoCloseWindow(0); w.__rest = w.__extra = true;
+      for (let i = 0; i < 200 && !w.gBrowser; i++) await wait(50);
+      // Past the moment it is taken back, or a tab that was shown later would not be seen.
+      for (let i = 0; i < 200 && !tabsOf(w, args[0]).length; i++) await wait(50);
+      await wait(3000);
+      return {ok: await until(() => resting([args[0]])), tabs: state(args[0])};""", k)
+    check("a closed folder's tabs stay hidden in a window you reopen", r["ok"], str(r))
     m.js(REST + "await close(rest()); main().focus(); await wait(500); return 1;")
     no_problems(m, "with closed folders")
 
