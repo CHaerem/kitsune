@@ -306,6 +306,7 @@ async function dropDoubleCopies(tabId, windowId) {
   const key = keyByTab.get(tabId);
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!key || !tab?.pinned) return;
+  await tagTab(tabId, key); // a tab dragged from the tab bar may arrive without its sessions values
   const pinned = await browser.tabs.query({ windowId, pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);

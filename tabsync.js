@@ -120,14 +120,32 @@ function referenceWindow(tabs, exceptWindowId) {
 }
 
 // Keys in the order they appear in the reference window (parents come before
-// their children there), followed by any keys it does not have.
+// their children there), followed by any keys it does not have, with each
+// space's tabs together (see bySpace).
 function keysInReferenceOrder(all, tabs, exceptWindowId) {
   const ref = referenceWindow(tabs, exceptWindowId);
   const order = tabs.filter(t => t.windowId === ref && syncKeyByTab.has(t.id))
     .sort((a, b) => a.index - b.index).map(t => syncKeyByTab.get(t.id)).filter(k => all[k]);
   const seen = new Set(order);
   for (const k of Object.keys(all)) if (!seen.has(k)) order.push(k);
-  return order;
+  return bySpace(order, k => all[k].cookieStoreId);
+}
+
+// The same items with each container's (so each space's) together, in the
+// order the spaces first appear, keeping the order within a space. The
+// reference window's own order is not always that: Sidebery shows a tab
+// added at the end of the window (a link from another app, a tab opened by
+// another extension) in its space without moving it there, but a new
+// window's sidebar assigns spaces by walking the tabs in order, and would
+// put such interleaved tabs in the wrong space.
+function bySpace(items, spaceOf) {
+  const groups = new Map();
+  for (const item of items) {
+    const space = spaceOf(item);
+    if (!groups.has(space)) groups.set(space, []);
+    groups.get(space).push(item);
+  }
+  return [...groups.values()].flat();
 }
 
 // Sidebery assigns tabs to panels by walking the window's tab strip in panel
@@ -138,8 +156,9 @@ async function sortLikeReference(windowId) {
   const tabs = await browser.tabs.query({});
   const ref = referenceWindow(tabs, windowId);
   if (ref === undefined) return;
-  const refOrder = tabs.filter(t => t.windowId === ref && syncKeyByTab.has(t.id))
-    .sort((a, b) => a.index - b.index).map(t => syncKeyByTab.get(t.id));
+  const refTabs = bySpace(tabs.filter(t => t.windowId === ref && !t.pinned && syncKeyByTab.has(t.id))
+    .sort((a, b) => a.index - b.index), t => t.cookieStoreId);
+  const refOrder = refTabs.map(t => syncKeyByTab.get(t.id));
   const here = tabs.filter(t => t.windowId === windowId && !t.pinned && syncKeyByTab.has(t.id));
   const byKey = new Map(here.map(t => [syncKeyByTab.get(t.id), t]));
   const ordered = refOrder.map(k => byKey.get(k)).filter(Boolean);

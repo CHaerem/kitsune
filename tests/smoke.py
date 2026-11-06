@@ -261,7 +261,7 @@ def essentials(m):
       const before = count(), w = main(), t = w.gBrowser.tabs.find(x => x.pinned && ek(w, x) && x.userContextId === 2), k = ek(w, t);
       const log = [], t0 = Date.now(), evs = ["TabOpen", "TabClose", "TabPinned", "TabUnpinned", "TabAttrModified"];
       const listen = e => { const x = e.target, g = x.ownerGlobal; if (e.type === "TabAttrModified" && !e.detail.changed.includes("pinned")) return;
-        log.push([Date.now() - t0, wins().indexOf(g), e.type, x.pinned, (ek(g, x) || "").slice(0, 4), url(x).slice(-30)]); };
+        log.push([Date.now() - t0, g.__smoke ? "other" : "main", e.type, x.pinned, (ek(g, x) || "").slice(0, 4), url(x).slice(-30)]); };
       for (const x of wins()) for (const ev of evs) x.gBrowser.tabContainer.addEventListener(ev, listen);
       other().gBrowser.adoptTab(t, {tabIndex: 0}); await wait(5000);
       for (const x of wins()) for (const ev of evs) x.gBrowser.tabContainer.removeEventListener(ev, listen);
@@ -269,7 +269,7 @@ def essentials(m):
       return {k, before: before.map(b => b[k]), after: after.map(a => a[k]), same: JSON.stringify(before.map(b => Object.keys(b).sort())) === JSON.stringify(after.map(a => Object.keys(a).sort())),
               doubled: after.flatMap(a => Object.entries(a).filter(([, n]) => n > 1)), misplaced: [...await misplaced(w), ...await misplaced(other())],
               log,
-              pinnedThere: wins().map(x => x.gBrowser.tabs.filter(y => y.pinned && (ek(x, y) === k || !ek(x, y))).map(y => [y.label, ek(x, y), url(y).slice(-40)]))};""")
+              pinnedThere: [main(), other()].map(x => x.gBrowser.tabs.filter(y => y.pinned).map(y => [(ek(x, y) || "").slice(0, 4), url(y).slice(-24)]))};""")
     check("an essential dragged to the other window is there once, and comes back in the window it left",
           r["after"] == [1, 1] and r["same"] and not r["doubled"] and not r["misplaced"], str(r))
     r = m.js(H + """
