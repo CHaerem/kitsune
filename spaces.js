@@ -41,7 +41,8 @@ async function spaceOf(windowId, tabs, spaces) {
     const selected = tabs.find(t => t.active);
     space = spaces.some(s => s.id === selected?.cookieStoreId) ? selected.cookieStoreId : spaces[0]?.id;
   }
-  activeSpace.set(windowId, space);
+  // No tabs: the window has closed meanwhile, and nothing would remove it from here again.
+  if (tabs.length) activeSpace.set(windowId, space);
   return space;
 }
 
@@ -114,7 +115,8 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   closedIn.delete(windowId);
   serial(async () => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
+    // (A tab that has moved to another window since does not decide this window's space.)
+    if (!tab || tab.windowId !== windowId || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
       if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
@@ -261,12 +263,21 @@ async function startSpaces() {
   if (!tidierAlone) return;
   await setSpaceKeys();
   startMenus(); // ownfolders.js
-  for (const w of await normalWindows()) {
-    const tabs = await browser.tabs.query({ windowId: w.id });
-    const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
-    const space = await spaceOf(w.id, tabs, await spaceList(used));
-    await showSpace(w.id);
-    const active = tabs.find(t => t.active);
-    if (active && active.cookieStoreId === space) await setSuccessor(active);
-  }
+  for (const w of await normalWindows()) await startSpaceIn(w.id);
 }
+async function startSpaceIn(windowId) {
+  const tabs = await browser.tabs.query({ windowId });
+  const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
+  const space = await spaceOf(windowId, tabs, await spaceList(used));
+  await showSpace(windowId);
+  const active = tabs.find(t => t.active);
+  if (active && active.cookieStoreId === space) await setSuccessor(active);
+}
+// A window that opens with no other window to take its space from (reopened after the
+// last one closed), or whose first tab has no container, still has one: without it the
+// tabs of every space stay shown, and a new tab opens in no space, until a sidebar asks.
+// After the tabs it gets (tabsync.js adds its job first).
+browser.windows.onCreated.addListener(win => {
+  if (!tidierAlone || !started || win.type !== "normal" || win.incognito) return;
+  setTimeout(() => serial(() => startSpaceIn(win.id)), NEW_WINDOW_DELAY_MS);
+});

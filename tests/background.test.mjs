@@ -745,3 +745,27 @@ test("a link that started Firefox goes to the active space (Tidier alone)", asyn
   assert.ok(ff.values.get(opened[0].id)?.syncKey, "and it is synced");
   ff.ext.kill();
 });
+
+test("a window reopened after the last one closed has an active space, and hides the others", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = {
+    a: entry("https://a.example/", { cookieStoreId: "firefox-container-1" }),
+    b: entry("https://b.example/", { cookieStoreId: "firefox-container-2" }),
+  };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: "firefox-container-1" }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", discarded: true, hidden: true, cookieStoreId: "firefox-container-2" }, { syncKey: "b", syncRole: "live" });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.run(8000);
+  ff.closeWindow(w.id);
+  await ff.clock.run(1000);
+  assert.equal(x.js("activeSpace").size, 0);
+  const { window: fresh } = ff.openWindow();
+  await ff.clock.idle(60000);
+  assert.ok(x.js("activeSpace").get(fresh.id), "it has a space");
+  const shownSpaces = new Set(ff.list(fresh.id).filter(t => !t.hidden && t.url.includes("ghost")).map(t => t.cookieStoreId));
+  assert.ok(shownSpaces.size <= 1, `tabs of ${[...shownSpaces]} are shown`);
+  x.kill();
+});
