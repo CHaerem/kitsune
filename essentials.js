@@ -42,9 +42,11 @@ function setList(list, options) {
   essentialsList.set(grouped, options);
 }
 
+// Whether it took: Firefox refuses a tab closed since. That is no error, and must not stop
+// the work on the other tabs. The same goes for setRole (tabsync.js).
 function tagTab(tabId, key) {
   keyByTab.set(tabId, key);
-  return browser.sessions.setTabValue(tabId, TAB_KEY, key);
+  return browser.sessions.setTabValue(tabId, TAB_KEY, key).then(() => true, () => { keyByTab.delete(tabId); return false; });
 }
 
 async function keyOf(tab) {
@@ -200,8 +202,7 @@ async function onPinned(tab) {
   if (!isWeb(url)) return;
   const list = await getList();
   const key = crypto.randomUUID();
-  // Refused if you have closed it again since: then there is nothing to keep.
-  if (await tagTab(tab.id, key).then(() => false, () => true)) { keyByTab.delete(tab.id); return; }
+  if (!(await tagTab(tab.id, key))) return; // closed again since: nothing to keep
   setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
   // The pinned placeholder becomes this essential's copy, still unloaded.
   if (isGhostUrl(tab.url)) {

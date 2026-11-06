@@ -51,13 +51,15 @@ const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon
 // (Ghost placeholder URLs come from ghostUrl() in common.js.)
 const groupBaseUrl = url => url.replace(/~!.*!~$/, "");
 
+// Whether it took: Firefox refuses a tab closed since it was looked up. That is no error, and
+// must not stop the work on the other tabs and windows (a whole start, say).
 function setRole(tabId, key, role) {
   syncKeyByTab.set(tabId, key);
   syncRoleByTab.set(tabId, role);
   return Promise.all([
     browser.sessions.setTabValue(tabId, SYNC_KEY, key),
     browser.sessions.setTabValue(tabId, SYNC_ROLE, role),
-  ]);
+  ]).then(() => true, () => { forget(tabId); return false; });
 }
 
 function forget(tabId) {
@@ -114,9 +116,9 @@ async function createRep(windowId, key, entry, parentId, index) {
   const tab = await createTab({ ...props, url: entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key) });
   if (!tab) return null;
   syncBusy.add(tab.id);
-  await setRole(tab.id, key, entry.group ? "copy" : "ghost");
+  const placed = await setRole(tab.id, key, entry.group ? "copy" : "ghost");
   setTimeout(() => syncBusy.delete(tab.id), SETTLE_MS);
-  return tab;
+  return placed ? tab : null;
 }
 
 // The window with the most synced tabs, other than `exceptWindowId`. Its order
@@ -386,7 +388,8 @@ async function register(tabId) {
   all[key] = entry;
   noteSaved(all);
   saveSynced(all);
-  await setRole(tab.id, key, entry.group ? "copy" : "live");
+  // Closed in this very moment: without a record gone with it, it would come back as a ghost.
+  if (!(await setRole(tab.id, key, entry.group ? "copy" : "live"))) { delete all[key]; saveSynced(all); return; }
   const tabs = await browser.tabs.query({});
   for (const w of await normalWindows()) {
     if (w.id === tab.windowId) continue;
@@ -571,12 +574,8 @@ async function pull(ghostId) {
     // would otherwise be left behind, unknown to Tidier, as a tab you closed coming back.
     const moved = await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index })
       .then(() => browser.tabs.update(live.id, { active: true }))
-      .then(() => setRole(live.id, key, "live"))
-      .then(() => true, () => false);
-    if (!moved) {
-      if (!(await browser.tabs.get(live.id).catch(() => null))) forget(live.id); // setRole notes it first
-      return;
-    }
+      .then(() => setRole(live.id, key, "live"), () => false);
+    if (!moved) return;
     forget(ghostId);
     const all = await getSynced();
     const entry = all[key];

@@ -1076,3 +1076,23 @@ test("the space you switched to is kept, and an update shows the selected tab's 
   assert.equal(ff.tabs.get(inTwo.id).hidden, false);
   y.kill();
 });
+
+test("a tab closed just as it is synced leaves no record, and stops nothing", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const t = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, "https://a.example/");
+  ff.hooks.setRole = true;
+  const set = x.b.sessions.setTabValue;
+  x.b.sessions.setTabValue = async (id, k, v) => { if (id === t.id && k === "syncKey") ff.rm(id); return set(id, k, v); };
+  await wait(2500);
+  assert.deepEqual(ff.synced ?? {}, {}, "no record");
+  assert.equal(ff.urls(other.id).filter(u => u.startsWith("ghost.html")).length, 0, "and no ghost of it");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
