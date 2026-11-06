@@ -1662,6 +1662,30 @@ def alone_safe_moves(m):
       w.gBrowser.selectedTab = w.gBrowser.tabs.find(x => !x.pinned && x !== t && x.userContextId === t.userContextId && !x.hidden);
       w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(800); return 1;""")
 
+    # The last tab of a space, selected: it can only step aside onto a new tab there, which goes
+    # again if the page refuses, and stays if it does not, so that you stay in that space.
+    alone_there = sidebar_page(m, """return (await page.browser.contextualIdentities.create(page.JSON.parse(JSON.stringify({name: "smoke-last", color: "orange", icon: "circle"})))).cookieStoreId;""")
+    open_in(m.pages + "/unsaved?smoke-last-input", alone_there)
+    registered_where("smoke-last-input")
+    sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", alone_there)
+    select_tab("smoke-last-input")
+    last_state = """const windowId = (await page.browser.windows.getCurrent()).id, [on] = await page.browser.tabs.query({active: true, windowId});
+      return {on: on.url, space: on.cookieStoreId, active: spaces().find(s => s.active)?.id, inSpace: (await page.browser.tabs.query({cookieStoreId: args[0], windowId})).length};"""
+    # (The list is drawn for the page's own window, whose rows are now this space's.)
+    sidebar_page(m, drop_on_space + """return await dropOnSpace(await tabWith("smoke-last-input"), args[1]);""", alone_there, here)
+    r = sidebar_page(m, last_state, alone_there)
+    check("the last tab of a space with unsaved input stays selected, and nothing is left beside it", "smoke-last-input" in r["on"] and r["space"] == alone_there and r["active"] == alone_there and r["inSpace"] == 1, str(r))
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("smoke-last-input")); w.gBrowser.addTrustedTab(args[0] + "/plain?smoke-last-plain", {userContextId: t.userContextId, inBackground: true}); await wait(600);
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(x => url(x).includes("smoke-last-plain")); w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(800); return 1;""", m.pages)
+    registered_where("smoke-last-plain")
+    select_tab("smoke-last-plain")
+    sidebar_page(m, drop_on_space + """return await dropOnSpace(await tabWith("smoke-last-plain"), args[1]);""", alone_there, here)
+    where = registered_where("smoke-last-plain")
+    r = sidebar_page(m, last_state, alone_there)
+    check("the last tab of a space moves, and you stay in that space, on a new tab", where["at"] == [here] and r["space"] == alone_there and r["active"] == alone_there and r["inSpace"] == 1 and "smoke-last" not in r["on"], f"{where} {r}")
+    sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100);
+      await page.browser.contextualIdentities.remove(args[1]); await wait(600); return 1;""", here, alone_there)
+
     # A rule pointing at a space that does not exist: the link stays, and you see which rule.
     set_rules([{"url": "smoke-safe-dead", "space": "firefox-container-99"}])
     open_in("https://example.org/?smoke-safe-dead", here)
