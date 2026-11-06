@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import zipfile
 
 from marionette import FIREFOX, Marionette
 
@@ -56,6 +57,10 @@ TEST_PREFS = {
     "app.update.disabledForTesting": True,
     "datareporting.policy.dataSubmissionEnabled": False,
     "extensions.update.enabled": False,
+    # Lets Kitsune be installed for real (not as a temporary add-on, which
+    # Firefox removes when it quits) where Firefox allows unsigned add-ons:
+    # Developer Edition and Nightly. Release Firefox ignores it.
+    "xpinstall.signatures.required": False,
 }
 
 
@@ -96,8 +101,25 @@ def downloaded_sidebery():
 
 class TestFirefox:
     def __init__(self, xpi=None):
-        self.xpi = xpi  # a signed Kitsune .xpi; default: this folder, as a temporary add-on
+        self.xpi = xpi  # a signed Kitsune .xpi; default: this folder (installed for real where Firefox allows it)
         self.dir = self.proc = self.m = None
+
+    def restart(self):
+        """Quit the test Firefox and start it again with the same profile, so
+        the session is restored. Only when Kitsune is installed for real
+        (m.can_restart): a temporary add-on is gone after a restart. The same
+        Marionette object is kept, connected to the new Firefox."""
+        self.m.quit()
+        try:
+            self.proc.wait(30)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait(10)
+        m = self.m
+        self._start()
+        m.__dict__.update(self.m.__dict__)
+        self.m = m
+        self.m.js(USE_TEST_MANAGED_STORAGE, f"{self.dir}/managed")
 
     def __enter__(self):
         try:
@@ -135,12 +157,21 @@ class TestFirefox:
             "settings": json.load(open(f"{DOTFILES}/sidebery-settings.json")),
             "sidebarCSS": open(f"{DOTFILES}/sidebery.css").read(),
         }}, open(f"{self.dir}/managed/ManagedStorage/{SIDEBERY_ID}.json", "w"))
+        # The live folders' native host is a stand-in that answers from a file
+        # the test writes (fake_github_host.py), never your gh login.
+        os.makedirs(f"{self.dir}/managed/NativeMessagingHosts")
+        json.dump({"name": "kitsune_github", "description": "test", "type": "stdio",
+                   "path": os.path.join(HERE, "fake_github_host.py"), "allowed_extensions": [EXT_ID]},
+                  open(f"{self.dir}/managed/NativeMessagingHosts/kitsune_github.json", "w"))
+        self.fake_prs = f"{self.dir}/fake-prs.json"
+        json.dump({}, open(self.fake_prs, "w"))
 
     def _start(self):
-        env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1"}
+        env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "KITSUNE_FAKE_PRS": self.fake_prs}
         self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
                                      env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self.m = Marionette(port=PORT, wait=60)
+        self.m.fake_prs = self.fake_prs
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
     def _setup(self):
@@ -151,24 +182,45 @@ class TestFirefox:
         time.sleep(4)
         fixture = json.load(open(f"{FIXTURES}/sidebery.json"))
         m.js(SETUP_SIDEBERY, SIDEBERY_ID, fixture, SIDEBERY_PERMISSIONS, SIDEBERY_SHORTCUTS)
-        m.js(SEED_TABS, SIDEBERY_ID)
+        seed = m.js(SEED_TABS, SIDEBERY_ID)
+        if seed["restarts"] or seed["misplaced"]:
+            # Shown so a setup that often needs it is noticed; the checks run either way.
+            print(f"(setup: Sidebery started again {seed['restarts']}x for tabs in the wrong space; {seed['misplaced']} still are)", flush=True)
+        m.can_restart = True
         if self.xpi:
             m.cmd("Addon:Install", {"path": os.path.abspath(self.xpi), "temporary": False})
         else:
-            m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
+            try:
+                m.cmd("Addon:Install", {"path": self._unsigned_xpi(), "temporary": False})
+            except RuntimeError:  # release Firefox: signed add-ons only
+                m.can_restart = False
+                m.cmd("Addon:Install", {"path": EXT_DIR, "temporary": True})
+        m.restart = self.restart
         time.sleep(8)  # Kitsune starts: essentials, tab sync, live folders
 
+    def _unsigned_xpi(self):
+        """This folder as an .xpi, without what is not part of the extension."""
+        path = f"{self.dir}/kitsune.xpi"
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for root, dirs, files in os.walk(EXT_DIR):
+                dirs[:] = [d for d in dirs if root != EXT_DIR or d not in ("tests", "tools", "native", ".git", ".github")]
+                for f in files:
+                    full = os.path.join(root, f)
+                    z.write(full, os.path.relpath(full, EXT_DIR))
+        return path
 
-# Firefox reads managed storage files only from your own ~/Library (it ignores
-# HOME), so the test Firefox is pointed at the profile's copy instead; other
-# lookups (the live folders' native host) are left alone.
+
+# Firefox reads managed storage files and native hosts only from your own
+# ~/Library (it ignores HOME), so the test Firefox is pointed at the profile's
+# copies instead: Sidebery's managed storage and the live folders' stand-in
+# host. Other lookups are left alone.
 USE_TEST_MANAGED_STORAGE = """
   const [dir] = args;
   const {NativeManifests} = ChromeUtils.importESModule("resource://gre/modules/NativeManifests.sys.mjs");
   await NativeManifests.init();
   const lookup = NativeManifests._lookup;
   NativeManifests._lookup = (type, name, context) =>
-    type === "storage" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
+    type === "storage" || name === "kitsune_github" ? NativeManifests._tryPaths(type, name, [dir], context) : lookup(type, name, context);
 """
 
 # Sidebery: permissions, shortcuts, and the fixture written to its storage
@@ -236,10 +288,26 @@ SEED_TABS = """
       c.openerTab = group;
     }
   }
+  // Sidebery reads the tree when it starts. Now and then (seen on GitHub) it
+  // starts with a whole space's tabs in the space before it; that is the
+  // test's own setup going wrong, not Kitsune, so it is started again.
+  const {ExtensionStorageIDB} = ChromeUtils.importESModule("resource://gre/modules/ExtensionStorageIDB.sys.mjs");
+  const misplaced = async () => {
+    const db = await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID(SB).extension));
+    const panelFor = {};
+    for (const p of Object.values((await db.get(["sidebar"])).sidebar.panels)) if (p.type === 2 && p.newTabCtx && p.newTabCtx !== "none") panelFor[p.newTabCtx] = p.id;
+    return gB.tabs.filter(t => {
+      const want = panelFor[t.userContextId ? "firefox-container-" + t.userContextId : "firefox-default"];
+      const got = JSON.parse(w.SessionStore.getCustomTabValue(t, key) || "{}").panelId;
+      return want && got && got !== want;
+    }).length;
+  };
   await sidebery.enable(); await wait(4000);
+  let restarts = 0;
+  for (; restarts < 3 && await misplaced(); restarts++) { await sidebery.disable(); await wait(1000); await sidebery.enable(); await wait(4000); }
   await w.SidebarController.show("_3c078156-979c-498b-8990-85f7987dd929_-sidebar-action");
   // Close the start tab, so every tab is one of the test tabs.
   for (const t of [...gB.tabs]) if (!t.pinned && !/example\\.org|group\\.html/.test(t.linkedBrowser.currentURI.spec)) gB.removeTab(t);
   await wait(1500);
-  return gB.tabs.length;
+  return {restarts, misplaced: await misplaced()};
 """

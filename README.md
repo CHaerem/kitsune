@@ -13,16 +13,20 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
 1. **Essentials in every window.** Pinned tabs are mirrored as unloaded copies
    in every window, in the same container (and therefore the same Sidebery
    space). Pinning or unpinning in one window does the same in the others.
-   Closing an essential brings it back unloaded, like Zen. Moving one keeps
-   the new order, in every window and in new windows. An essential's
+   Closing an essential brings it back unloaded, like Zen. A new one goes
+   after the others of its space (Sidebery shows them by space, and would
+   sort them so when Firefox starts). Moving one keeps
+   the new order, in every window and in new windows. Dragging one to another
+   window takes it there (in its place, not twice) and leaves a copy behind. An essential's
    title and icon follow its page, but only from the essential's own site,
    so a redirect to a sign-in page does not rename it.
 2. **Tabs in every window.** Every other tab is *live* in one window and an
    unloaded *ghost* in the others (same URL, title, container and place in the
    Sidebery tree). Selecting a ghost moves the live tab into your window and
    leaves a ghost behind, so each page is only ever loaded once. Opening a tab
-   adds it everywhere; closing it closes it everywhere; closing a window hands
-   its tabs over to another window.
+   adds it everywhere; closing it closes it everywhere; moving it into or out
+   of a folder does the same in the other windows; closing a window hands its
+   tabs over to another window.
 3. **Folders first** (`folders.js`): in each space, Sidebery's folders, with
    the tabs in them, come before the ordinary tabs, like the pinned part of a
    space in Zen and Arc. Sidebery has no setting for it, and reordering with
@@ -32,8 +36,10 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    pull request search, such as open pull requests in your company's
    organisation or your own repositories where you are author, assignee or
    asked for review. Refreshed every 15 minutes and at startup: new pull
-   requests get an unloaded tab, merged or closed ones are removed. A pull
-   request tab you close stays closed until it leaves the search.
+   requests get an unloaded tab, merged or closed ones are removed (the one
+   you are looking at once you leave it), and a
+   renamed one's unloaded tabs take the new title. A pull request tab you
+   close stays closed until it leaves the search.
 5. **⌘⇧C copies the address** of the current tab, as in Arc and Zen
    (`shortcuts.js`). Firefox gives ⌘⇧C to the developer tools' element
    picker, which wins over extensions; free it in `about:keyboard` (the
@@ -171,25 +177,44 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   extensions fold them).
 - Sidebery requires each panel's tabs to be one contiguous run in panel order;
   after filling a window the extension copies the tab order from the window
-  with the most synced tabs. That sort waits ~1.5 s for Sidebery to finish
+  with the most synced tabs, with each space's tabs together (that window can
+  have them mixed: Sidebery shows a tab added at the end of a window in its
+  space without moving it there). That sort waits ~1.5 s for Sidebery to finish
   placing the new tabs; sorting sooner puts tabs in the wrong panel.
+- A tab in a folder that you pull into another window (by selecting its ghost)
+  takes its ghost's place there, but outside the folder; the
+  ghost it leaves behind stays in the folder. Sidebery decides a moved-in tab's
+  place in its tree itself, from the tab that opened it, and Firefox does not
+  report an opener in another window, so no extension can put it in the folder.
+- Moving a tab into or out of a folder is copied to the other windows, but
+  not moving it elsewhere: Sidebery gives a tab another extension moves the
+  space of the tab it lands next to, so moving ghosts around could change
+  their space. Where the tab is live or selected, in a window you are not
+  using, it stays where it was there. A new window takes the order of the window with the
+  most tabs.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
-- A tab pinned before Sidebery has placed it in its container's space gets the
-  active space instead (seen on a slower machine). So a new window's essentials
-  are created unpinned, placed by Sidebery, and pinned together 0.8 s later
-  (`PIN_SETTLE_MS` in `common.js`); the smoke test opens three windows to check.
-  On GitHub's machines it still happens now and then, so up to Sidebery 5.6.1
-  that check is reported as `KNOWN` and does not block a release
-  (`KNOWN_SIDEBERY_BUGS` in `tests/smoke.py`). The fix is
+- A tab that exists before a new window's sidebar has started gets the last
+  active space, whatever its container, and a pinned tab keeps its space. So a
+  new window's essentials are created unpinned, and pinned only once Sidebery's
+  sidebar there has started: their placeholders are loaded again every 0.5 s,
+  so Sidebery moves them to their spaces once it runs, until Sidebery shows
+  that it has (it hides the tabs of the other spaces, or sets which tab to
+  select after closing the current one; at most 4 s; `PROBE_MS` and
+  `SIDEBAR_WAIT_MS` in `common.js`). Just
+  before pinning, each loads its placeholder once more and gets 0.6 s for
+  Sidebery's container rule. The smoke test opens three windows to check. Up
+  to Sidebery 5.6.1 a failure of that check is reported as `KNOWN` and does
+  not block a release (`KNOWN_SIDEBERY_BUGS` in `tests/smoke.py`). The fix is
   [mbnuqw/sidebery#2497](https://github.com/mbnuqw/sidebery/pull/2497); with a
   newer Sidebery the check is strict again.
 
 ## Performance (Firefox 159, Sidebery 5.6, 33 essentials + 53 tabs)
 
 - New window: essentials after ~1.6 s, all tabs after ~1.6 s, sorted after
-  ~3 s. Placeholders load briefly and unload themselves; only folder copies
-  stay loaded.
+  ~3 s (measured before essentials waited for Sidebery's sidebar; pinning
+  now comes ~0.7 s later). Placeholders load briefly and unload themselves;
+  only folder copies stay loaded.
 - Selecting a ghost: the live tab is in place after ~50 ms.
 
 Timing constants live in `common.js`; re-measure if Sidebery or Firefox
@@ -279,6 +304,9 @@ time, from:
   with its permissions and ⌃1/⌃2/⌃3;
 - Kitsune (this folder, or a signed `.xpi`);
 - test tabs in each space: essentials, a folder with tabs, ordinary tabs.
+- a stand-in for the live folders' native host (`tests/fake_github_host.py`),
+  which answers from a file the test writes, so live folders are tested
+  everywhere without your `gh` login or GitHub.
 
 The list of what it checks is at the top of `tests/smoke.py`. Each group of
 checks runs on its own; a check that crashes counts as failed. Run it after
@@ -294,14 +322,16 @@ container).
 ### On GitHub
 
 `.github/workflows/smoke.yml` runs the same smoke test on GitHub, in a
-headless Firefox on a macOS runner with the newest Sidebery and the newest
-Firefox, and on the weekly run also Firefox Beta (about four weeks ahead, so a
-Firefox change that would break the setup shows up before it reaches you). It
+headless Firefox on a macOS runner with the newest Sidebery, both in the newest
+Firefox and in Firefox Developer Edition (the Beta, about four weeks ahead, so a
+Firefox change that would break the setup shows up before it reaches you).
+Developer Edition allows unsigned add-ons, so there Kitsune is installed for
+real and the test also quits and restarts Firefox to check the restored
+session; on your Mac that part runs with `--installed` or `--xpi`. It
 runs on pushes and pull requests here and every Monday, so a Firefox or
 Sidebery update that breaks something shows up without any change here; after
 changing the Firefox files in dotfiles, start it by hand (Actions → Smoke test
-→ Run workflow). GitHub e-mails you when a run fails. The live folder check is
-skipped there (no native host).
+→ Run workflow). GitHub e-mails you when a run fails.
 
 The Firefox files come from your private dotfiles, read with a read-only
 deploy key (deploy keys do not expire). Set it up once, in your own terminal:

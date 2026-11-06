@@ -22,6 +22,29 @@ const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/
 const ghostUrl = (kind, key) => browser.runtime.getURL(`ghost.html?kind=${kind}&key=${encodeURIComponent(key)}`);
 const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.html"));
 
+// Placeholders we close ourselves would show up in Recently Closed Tabs, and
+// ⌘⇧T would bring one back instead of the tab you closed. Only real pages
+// should be there, so they are forgotten. A loaded tab reaches Recently Closed
+// a moment after it is closed (Firefox saves its state first), so each is
+// looked for again whenever that list changes, for FORGET_MS. (An essential
+// copy's address may end in "&placed=N", see essentials.js.)
+const FORGET_MS = 10000;
+const toForget = new Map(); // placeholder URL -> until when to look for it
+async function forgetClosedPlaceholders(kind, keys) {
+  for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
+  await forgetClosedNow();
+}
+async function forgetClosedNow() {
+  for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
+  if (!toForget.size) return;
+  const ours = url => [...toForget.keys()].some(p => url === p || url?.startsWith(p + "&"));
+  const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
+  for (const t of closed.map(item => item.tab).filter(Boolean)) {
+    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+  }
+}
+browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
+
 async function normalWindows() {
   return (await browser.windows.getAll({ windowTypes: ["normal"] })).filter(w => !w.incognito);
 }
@@ -32,14 +55,34 @@ async function normalWindows() {
 // - Sidebery needs ~1.5 s to finish placing them before the window is given
 //   the reference window's tab order (see sortLikeReference). Sorting sooner
 //   puts tabs in the wrong panel.
-// - Essentials are created unpinned and pinned PIN_SETTLE_MS later (see
-//   createEssentials): Sidebery puts a new tab in its container's panel, and a
-//   pinned tab keeps its panel; pinned too soon, Sidebery gives it the active
-//   panel instead. Seen on a slower machine (GitHub's), not on a fast Mac.
+// - Essentials added to an existing window are created unpinned and pinned
+//   PIN_SETTLE_MS later (see createEssentials): Sidebery puts a new tab in its
+//   container's panel, and a pinned tab keeps its panel; pinned too soon,
+//   Sidebery gives it the active panel instead. Seen on a slower machine
+//   (GitHub's), not on a fast Mac.
 const NEW_WINDOW_DELAY_MS = 200;
 const CREATE_GAP_MS = 0;
 const SORT_SETTLE_MS = 1500;
 const PIN_SETTLE_MS = 800;
+// In a new window, essentials are pinned only after Sidebery's sidebar there
+// has started (see fillWindow and pinEssentialCopies): it waits at most
+// SIDEBAR_WAIT_MS for that, probing every PROBE_MS (see sidebarStarted), and
+// RULE_SETTLE_MS for Sidebery to move each copy to its own space before
+// pinning it.
+const SIDEBAR_WAIT_MS = 4000;
+const RULE_SETTLE_MS = 600;
+const PROBE_MS = 500;
+// A tab moved into or out of a folder is moved the same way in the other
+// windows MOVE_SETTLE_MS later, once Sidebery has set its new parent (see
+// applyMoves); the new ghost there gets NEW_TAB_SETTLE_MS for Sidebery to
+// place it before it is put in its place. Moves of a tab in its first
+// NEW_TAB_QUIET_MS are Sidebery placing it.
+const MOVE_SETTLE_MS = 800;
+const NEW_TAB_SETTLE_MS = 500;
+const NEW_TAB_QUIET_MS = 5000;
+// Folders are moved first in their space FOLDERS_SETTLE_MS after a change
+// (see folders.js), before the move is copied to the other windows.
+const FOLDERS_SETTLE_MS = 400;
 
 // The focused window, tracked here so tab events need no round trip to ask.
 // Registered before the other scripts' listeners, so it is current when they run.
@@ -63,3 +106,27 @@ function storedValue(storageKey, empty) {
     },
   };
 }
+
+// A tab's parent in Sidebery's tree, from openerTabId, which Sidebery keeps
+// equal to the parent. Sidebery counts a parent only before its children, and
+// cannot clear openerTabId when it makes a tab a root (Firefox keeps the old
+// opener), so a tab once seen with its opener after it is a root, also after
+// the opener has moved up again (folders first), until its opener changes.
+// (Dragged back into the same folder, it still counts as a root: Sidebery
+// then sets the same opener again, which cannot be seen.)
+const staleOpener = new Map(); // tabId -> the opener it had when it became a root
+function treeParent(tab, byId) {
+  const p = byId.get(tab.openerTabId);
+  if (!p || p.id === tab.id || p.windowId !== tab.windowId) return undefined;
+  if (p.index > tab.index) { staleOpener.set(tab.id, p.id); return undefined; }
+  if (staleOpener.get(tab.id) === p.id) return undefined;
+  staleOpener.delete(tab.id);
+  return p;
+}
+// Seen at once when a tab moves, before folders first moves its old parent up.
+browser.tabs.onMoved.addListener(async (tabId, { windowId }) => {
+  const tabs = await browser.tabs.query({ windowId }).catch(() => []);
+  const byId = new Map(tabs.map(t => [t.id, t])), tab = byId.get(tabId);
+  if (tab) treeParent(tab, byId);
+});
+browser.tabs.onRemoved.addListener(tabId => staleOpener.delete(tabId));

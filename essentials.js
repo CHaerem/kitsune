@@ -25,8 +25,22 @@ const busy = new Set();
 // Tab ID -> key, so we know which essential a closed tab was.
 const keyByTab = new Map();
 
-const getList = () => essentialsList.get();
-const setList = list => essentialsList.set(list);
+// Each space's essentials are kept together, the spaces in the order they
+// already have in the list: Sidebery shows pinned tabs by space, and when
+// Firefox starts it moves them so that each space's are together, in its
+// order of spaces, which would otherwise reorder the essentials.
+let spaceOrder = null; // containers, in the order of their essentials in the list
+async function getList() {
+  const list = await essentialsList.get();
+  if (!spaceOrder) spaceOrder = [...new Set(list.map(e => e.cookieStoreId))];
+  return list;
+}
+function setList(list) {
+  const order = [...new Set([...(spaceOrder || []), ...list.map(e => e.cookieStoreId)])];
+  const grouped = [...list].sort((a, b) => order.indexOf(a.cookieStoreId) - order.indexOf(b.cookieStoreId));
+  spaceOrder = [...new Set(grouped.map(e => e.cookieStoreId))];
+  essentialsList.set(grouped);
+}
 
 function tagTab(tabId, key) {
   keyByTab.set(tabId, key);
@@ -60,8 +74,9 @@ async function initList() {
 // real page's title and icon, unloads itself, and opens the real page when
 // you select it. They are created unpinned, so Sidebery puts each in its
 // container's space, and pinned together a moment later; a pinned tab keeps
-// its space (see PIN_SETTLE_MS).
-async function createEssentials(windowId, items) { // [{ entry, index }]
+// its space (see PIN_SETTLE_MS). In a new window `settle` waits for Sidebery's
+// sidebar there first (see fillWindow), so it is passed in.
+async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
   const tabs = [];
   for (const { entry, index } of items) {
     const tab = await browser.tabs.create({
@@ -70,20 +85,43 @@ async function createEssentials(windowId, items) { // [{ entry, index }]
     });
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
-    tabs.push(tab);
+    tabs.push({ tab, entry });
     await sleep(CREATE_GAP_MS);
   }
   if (!tabs.length) return;
-  await sleep(PIN_SETTLE_MS);
   try {
-    for (const tab of tabs) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
+    await settle(tabs);
+    await pinEssentialCopies(tabs);
+    // Created unpinned, they could not be put among the pinned tabs, and
+    // pinning puts each last: now each goes to its place in the list.
+    await sortEssentials(windowId, await getList());
   } finally {
-    setTimeout(() => tabs.forEach(t => busy.delete(t.id)), 1500);
+    setTimeout(() => tabs.forEach(({ tab }) => busy.delete(tab.id)), 1500);
+  }
+}
+
+// Sidebery gives a tab that existed before a window's sidebar was ready the
+// last active space, ignoring its container rules, and a pinned tab keeps its
+// space (mbnuqw/sidebery#2497). Its container rules are applied again when an
+// unpinned tab's address changes, so each copy loads its placeholder once
+// more, gets a moment to be moved to its own space, and is pinned only then.
+async function pinEssentialCopies(tabs) {
+  await reloadPlaceholders(tabs);
+  await sleep(RULE_SETTLE_MS);
+  for (const { tab } of tabs) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});
+}
+
+// Load each copy's placeholder again (a new address, so Sidebery sees a change).
+let placedCount = 0;
+async function reloadPlaceholders(tabs) {
+  placedCount++;
+  for (const { tab, entry } of tabs) {
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", entry.key) + "&placed=" + placedCount }).catch(() => {});
   }
 }
 
 // Add any essentials a window is missing. Safe to run repeatedly.
-async function ensureWindow(windowId) {
+async function ensureWindow(windowId, settle) {
   const list = await getList();
   if (!list.length) return;
   const win = await browser.windows.get(windowId).catch(() => null);
@@ -114,35 +152,69 @@ async function ensureWindow(windowId) {
     if (!isWeb(entry.url)) continue;
     missing.push({ entry, index: index++ });
   }
-  await createEssentials(windowId, missing);
+  await createEssentials(windowId, missing, settle);
 }
 
 async function ensureAllWindows() {
   for (const w of await normalWindows()) await ensureWindow(w.id);
 }
 
-// New essential (the tab was pinned).
+// New essential (the tab was pinned). A placeholder that is pinned (a ghost,
+// or a live folder tab never opened) stands for its synced tab's page; tab
+// sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
-  if (!isWeb(tab.url)) return;
+  // An essential dragged to another window arrives there as a pinned tab, as
+  // if it was just pinned; it is still the same essential (see onAttached).
+  const known = keyByTab.get(tab.id);
+  if (known && (await getList()).some(e => e.key === known)) { await tagTab(tab.id, known); return; }
+  let { url, title, favIconUrl: icon } = tab;
+  if (isGhostUrl(url)) {
+    const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
+    if (!entry || !isWeb(entry.url)) return;
+    ({ url, title, icon } = entry);
+  }
+  if (!isWeb(url)) return;
   const list = await getList();
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
-  setList([...list, { key, url: tab.url, cookieStoreId: tab.cookieStoreId, title: tab.title, icon: tab.favIconUrl }]);
+  setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
+  // The pinned placeholder becomes this essential's copy, still unloaded.
+  if (isGhostUrl(tab.url)) {
+    busy.add(tab.id);
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", key) }).catch(() => {});
+    setTimeout(() => busy.delete(tab.id), 1500);
+  }
   for (const w of await normalWindows()) if (w.id !== tab.windowId) await ensureWindow(w.id);
+  await sortEssentials(tab.windowId, await getList()); // with the others of its space
 }
 
 // Essential removed (the tab was unpinned): remove the copies in other windows.
+// An unloaded copy you unpin is still the placeholder page, which has nothing
+// to show once the essential is gone, so it opens the real page and becomes
+// an ordinary tab.
 async function onUnpinned(tab) {
   const key = await keyOf(tab);
   if (!key) return;
   keyByTab.delete(tab.id);
   await browser.sessions.removeTabValue(tab.id, TAB_KEY);
-  setList((await getList()).filter(e => e.key !== key));
+  const list = await getList();
+  const entry = list.find(e => e.key === key);
+  setList(list.filter(e => e.key !== key));
+  if (isGhostUrl(tab.url)) {
+    if (entry) await browser.tabs.update(tab.id, { url: entry.url }).catch(() => {});
+    else {
+      // Unpinned while the essential was being removed from another window
+      // (its copies are removed then): it goes the same way.
+      busy.add(tab.id);
+      await browser.tabs.remove(tab.id).catch(() => {});
+    }
+  }
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
   copies.forEach(id => busy.add(id));
   await browser.tabs.remove(copies);
+  await forgetClosedPlaceholders("essential", [key]);
 }
 
 // Essential closed: add it back, unloaded, in the same window.
@@ -223,7 +295,8 @@ async function onEssentialMoved(windowId) {
   slots.forEach((slot, j) => { next[slot] = byKey.get(order[j]); });
   if (next.every((e, i) => e === list[i])) return;
   setList(next);
-  for (const w of await normalWindows()) if (w.id !== windowId) await sortEssentials(w.id, next);
+  // Every window, this one too: the list keeps each space's essentials together.
+  for (const w of await normalWindows()) await sortEssentials(w.id, await getList());
 }
 
 // Put a window's essentials in the list's order (pinned tabs come first).
@@ -240,11 +313,32 @@ async function sortEssentials(windowId, list) {
   }
 }
 
-// An essential dragged to another window: fill the gap in the window it left.
+// An essential dragged to another window: fill the gap in the window it left,
+// and in the window it came to, where it now is twice, keep the one you
+// brought (it may be loaded) and put it in the copy's place.
 browser.tabs.onDetached.addListener((tabId, info) => {
   if (!keyByTab.has(tabId)) return;
   serial(() => ensureWindow(info.oldWindowId));
 });
+browser.tabs.onAttached.addListener((tabId, info) => {
+  if (!keyByTab.has(tabId) || busy.has(tabId)) return;
+  serial(() => dropDoubleCopies(tabId, info.newWindowId));
+});
+
+async function dropDoubleCopies(tabId, windowId) {
+  const key = keyByTab.get(tabId);
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!key || !tab?.pinned) return;
+  await tagTab(tabId, key); // a tab dragged from the tab bar may arrive without its sessions values
+  const pinned = await browser.tabs.query({ windowId, pinned: true });
+  const keys = await Promise.all(pinned.map(keyOf));
+  const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
+  if (!doubles.length) return;
+  doubles.forEach(id => busy.add(id));
+  await browser.tabs.remove(doubles).catch(() => {});
+  await forgetClosedPlaceholders("essential", [key]);
+  await sortEssentials(windowId, await getList());
+}
 
 // Startup is driven from tabsync.js, so both features start in one order.
 async function startEssentials() {
