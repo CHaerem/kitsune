@@ -182,10 +182,14 @@ async function ensureAllWindows() {
   for (const w of await normalWindows()) await ensureWindow(w.id);
 }
 
+const pinPlaces = new Map(); // tab ID -> the essential's tab it was dropped before (sidebar-view.js)
+
 // New essential (the tab was pinned). A placeholder that is pinned (a ghost,
 // or a live folder tab never opened) stands for its synced tab's page; tab
 // sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
+  const beforeKey = keyByTab.get(pinPlaces.get(tab.id));
+  pinPlaces.delete(tab.id);
   // An essential dragged to another window arrives there as a pinned tab, as
   // if it was just pinned; it is still the same essential (see onAttached).
   const known = keyByTab.get(tab.id);
@@ -200,7 +204,8 @@ async function onPinned(tab) {
   const list = await getList();
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
-  setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
+  const place = list.findIndex(e => e.key === beforeKey);
+  setList(list.toSpliced(place < 0 ? list.length : place, 0, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }));
   // The pinned placeholder becomes this essential's copy, still unloaded.
   if (isGhostUrl(tab.url)) {
     busy.add(tab.id);

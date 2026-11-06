@@ -108,9 +108,17 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
-  else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
+  else if (msg.type === "pin") await pinFromSidebar(msg.tabId, msg.pinned, msg.before);
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
   viewSoon(windowId);
+}
+
+// A tab dropped on a tile is an essential at that place: Firefox pins it after the
+// others, and onPinned (essentials.js) gives it its place in the list as it adds it. Moving
+// it there afterwards would show the tile at the end first, and then jump.
+async function pinFromSidebar(tabId, pinned, before) {
+  if (pinned && before) pinPlaces.set(tabId, before);
+  await browser.tabs.update(tabId, { pinned }).catch(err => { pinPlaces.delete(tabId); throw err; });
 }
 
 // An essential's tile moved: moving its tab is what the rest of Tidier listens to.

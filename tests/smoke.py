@@ -1557,6 +1557,264 @@ def alone_drag(m):
     check("a tab dragged to the essentials is an essential, and dragged back an ordinary tab", r.get("pinned") is True and r.get("unpinned") is True, str(r))
 
 
+# What a drag shows, for the checks below: dragover says whether a drop would do something
+# (drag.js cancels it, and only then does a drop send anything), and what is marked.
+DRAG_TOOLS = """
+  const list = doc.getElementById("tabs"), grid = doc.getElementById("essentials");
+  const marked = () => [...doc.querySelectorAll(".drop-before, .drop-after, .drop-left, .drop-right, .drop-into")].map(e => [...e.classList].find(c => c.startsWith("drop-")));
+  const ev = (type, el, x = .5, y = .5) => { const b = el.getBoundingClientRect();
+    return new page.DragEvent(type, {bubbles: true, cancelable: true, clientX: b.left + b.width * x, clientY: b.top + b.height * y, dataTransfer: new page.DataTransfer()}); };
+  const start = el => el.dispatchEvent(ev("dragstart", el));
+  const end = el => el.dispatchEvent(ev("dragend", el));
+  const over = (el, x, y) => [!el.dispatchEvent(ev("dragover", el, x, y)), ...marked()];
+  const drop = (el, x, y) => !el.dispatchEvent(ev("drop", el, x, y));
+  const until = async (test, ms = 8000) => { for (let t = 0; t < ms && !test(); t += 50) await wait(50); return !!test(); };
+  const ids = els => [...els].map(e => Number(e.dataset.tab));
+  const tileEls = () => [...doc.querySelectorAll("#essentials .tile")];
+"""
+
+
+def alone_drag_details(m):
+    # Honest dragging, in drag events on the real sidebar: a mark only where a drop does
+    # something, places among the essentials, and a click that shakes. A second window to follow.
+    more_tabs_here(m, "details")
+    m.js(H + """if (other()) return 1;
+      const a = main(), n = a.gBrowser.tabs.filter(t => t.pinned).length, w = a.OpenBrowserWindow(); w.__smoke = true;
+      for (let i = 0; i < 200 && !(w.gBrowser && w.gBrowser.tabs.filter(t => t.pinned).length >= n); i++) await wait(50);
+      await wait(2000); return 1;""")
+    r = sidebar_page(m, DRAG_TOOLS + """
+      // The newest three: side by side, with nothing of the test's own between them.
+      const out = {}, rows = plainTabs(), [a, b, c] = rows.slice(-3), last = c, order = ids(rows);
+      start(b);
+      out.belowPrevious = over(a, .5, .8);
+      out.aboveNext = over(c, .5, .2);
+      out.itself = over(b);
+      out.dropNext = drop(c, .5, .2);
+      end(b);
+      start(b);
+      out.belowNext = over(c, .5, .8);
+      out.abovePrevious = over(a, .5, .2);
+      doc.body.dispatchEvent(new page.DragEvent("dragleave", {bubbles: true, relatedTarget: null}));
+      out.leftTheSidebar = marked();
+      out.back = over(a, .5, .2);
+      end(b);
+      out.afterEnd = marked();
+      start(last);
+      out.endFromLast = over(list, .5, .999);
+      end(last);
+      start(a);
+      out.end = over(list, .5, .999);
+      end(a);
+      out.stayed = JSON.stringify(ids(plainTabs())) === JSON.stringify(order);
+      return out;""")
+    check("no mark and nothing sent right above or below the dragged row, or on it",
+          r["belowPrevious"] == [False] and r["aboveNext"] == [False] and r["itself"] == [False] and r["dropNext"] is False and r["stayed"], str(r))
+    check("a mark where a drop does move the row", r["belowNext"] == [True, "drop-after"] and r["abovePrevious"] == [True, "drop-before"], str(r))
+    check("a mark goes when the drag leaves the sidebar, and comes back, and goes at the end of the drag",
+          r["leftTheSidebar"] == [] and r["back"] == [True, "drop-before"] and r["afterEnd"] == [], str(r))
+    check("the empty end of the list is a line after the last tab, and nothing for the last tab itself",
+          r["end"] == [True, "drop-after"] and r["endFromLast"] == [False], str(r))
+
+    r = sidebar_page(m, DRAG_TOOLS + """
+      const out = {}, space = spaces().find(s => s.active).id;
+      const head = name => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === name);
+      for (const name of ["Drag 1", "Drag 2", "Drag 3"]) { send({type: "newFolder", space, name}); await until(() => head(name)); }
+      const [h1, h2, h3] = ["Drag 1", "Drag 2", "Drag 3"].map(head);
+      start(h2);
+      out.belowPrevious = over(h1, .5, .8);
+      out.aboveNext = over(h3, .5, .2);
+      out.itself = over(h2);
+      out.belowNext = over(h3, .5, .8);
+      out.abovePrevious = over(h1, .5, .2);
+      end(h2);
+      // A tab in a folder.
+      const row = plainTabs()[0], rowId = Number(row.dataset.tab);
+      start(row); drop(h1); end(row);
+      await until(() => h1.parentElement.querySelector(".tab"));
+      const inside = h1.parentElement.querySelector(".tab");
+      start(inside);
+      out.ownFolderLast = over(h1);
+      out.otherFolder = over(h2);
+      out.indent = over(h1.parentElement.lastChild, .01, .5);
+      out.gap = over(doc.querySelector("#tabs .divider"));
+      // A live folder keeps its tabs: nothing but the essentials or a space is a place for them.
+      h1.parentElement.classList.add("live");
+      out.liveToRow = over(plainTabs()[0], .5, .2);
+      out.liveToFolder = over(h2);
+      out.liveToEnd = over(list, .5, .999);
+      h1.parentElement.classList.remove("live");
+      end(inside);
+      start(inside); drop(plainTabs()[0], .5, .2); end(inside);
+      await until(() => !h1.parentElement.querySelector(".tab"));
+      for (const h of [h1, h2, h3]) send({type: "deleteFolder", key: h.dataset.folderHead});
+      await until(() => !doc.querySelector("#tabs .folder"));
+      return out;""")
+    check("no mark and nothing sent right above or below a dragged folder, or on it",
+          r["belowPrevious"] == [False] and r["aboveNext"] == [False] and r["itself"] == [False]
+          and r["belowNext"] == [True, "drop-after"] and r["abovePrevious"] == [True, "drop-before"], str(r))
+    check("no mark on the folder a tab is last in already; a mark on another", r["ownFolderLast"] == [False] and r["otherFolder"] == [True, "drop-into"], str(r))
+    check("a folder's indent is no place, and the gap above the tabs is the top of them", r["indent"] == [False] and r["gap"] == [True, "drop-before"], str(r))
+    check("a tab in a live folder has no place among the other tabs", r["liveToRow"] == [False] and r["liveToFolder"] == [False] and r["liveToEnd"] == [False], str(r))
+
+    def essentials_here():
+        return m.js(H + """const ctx = main().gBrowser.selectedTab.userContextId || Number(args[0].split("-").pop());
+          return wins().map(w => w.gBrowser.tabs.filter(t => t.pinned && t.userContextId === ctx).map(t => ek(w, t)));""", space)
+    space = sidebar_page(m, "return spaces().find(s => s.active).id;")
+    keys0 = essentials_here()
+    r = sidebar_page(m, DRAG_TOOLS + """
+      const out = {}, [t0, t1] = tileEls(), first = Number(t0.dataset.tab), second = Number(t1.dataset.tab);
+      start(t0);
+      out.itselfLeft = over(t0, .25);
+      out.itselfRight = over(t0, .75);
+      out.nextLeft = over(t1, .25);
+      out.nextRight = over(t1, .75);
+      out.emptyEnd = over(grid, .999, .5);
+      out.placed = drop(t1, .75);
+      end(t0);
+      out.order = await until(() => ids(tileEls())[1] === first) && ids(tileEls());
+      out.want = [second, first];
+      const row = plainTabs()[0];
+      start(row);
+      out.tabGap = over(grid, 0, .5);
+      out.tabLeft = over(t1, .25);
+      out.tabRight = over(t1, .75);
+      end(row);
+      return out;""")
+    keys1 = essentials_here()
+    check("no mark on a tile itself or at the place right after it", r["itselfLeft"] == [False] and r["itselfRight"] == [False] and r["nextLeft"] == [False], str(r))
+    check("a tile's left or right half decides the side of the line", r["nextRight"] == [True, "drop-right"] and r["tabLeft"] == [True, "drop-left"] and r["tabRight"] == [True, "drop-right"], str(r))
+    check("the empty end of the essentials' last line is the last place", r["emptyEnd"] == [True, "drop-right"], str(r))
+    check("the gaps of the grid are places too, so a line does not flicker on its way", r["tabGap"][0] is True, str(r))
+    check("a tile dragged to the right half of the last tile lands last", r["placed"] is True and r["order"] == r["want"], str(r))
+    check("and last in every window", len(keys1) > 1 and all(k == keys0[0][1:] + keys0[0][:1] for k in keys1), f"{keys0} -> {keys1}")
+
+    keys0 = essentials_here()
+    r = sidebar_page(m, DRAG_TOOLS + """
+      const out = {}, [t0, t1] = tileEls(), row = plainTabs()[0], id = Number(row.dataset.tab);
+      out.want = [Number(t0.dataset.tab), id, Number(t1.dataset.tab)];
+      start(row); out.placed = drop(t1, .25); end(row);
+      out.order = await until(() => tileEls().length === 3) && ids(tileEls());
+      out.left = !plainTabs().some(r => Number(r.dataset.tab) === id);
+      return {...out, id};""")
+    keys1 = essentials_here()
+    check("a tab dropped on a tile's left half is an essential right before it", r["placed"] is True and r["order"] == r["want"] and r["left"], str(r))
+    check("and in that place in every window", len(keys1) > 1 and all(len(k) == 3 and k[0] == keys0[0][0] and k[2] == keys0[0][1] and k[1] == keys1[0][1] for k in keys1), f"{keys0} -> {keys1}")
+    r = sidebar_page(m, DRAG_TOOLS + """
+      const tile = tileEls().find(t => Number(t.dataset.tab) === args[0]);
+      start(tile); drop(list); end(tile);
+      await until(() => tileEls().length === 2);
+      const row = plainTabs().find(r => Number(r.dataset.tab) === args[0]) || plainTabs()[0], id = Number(row.dataset.tab), [, t1] = tileEls();
+      const want = [...ids(tileEls()), id];
+      await wait(1000); // an unpin counts only after a moment (essentials.js, UNPIN_SETTLE_MS)
+      start(row); const placed = drop(t1, .75); end(row);
+      const order = await until(() => tileEls().length === 3) && ids(tileEls());
+      const tile2 = tileEls().at(-1);
+      start(tile2); drop(list); end(tile2);
+      await until(() => tileEls().length === 2);
+      await wait(1000);
+      return {placed, order, want};""", r["id"])
+    check("a tab dropped on the right half of the last tile is the last essential", r["placed"] is True and r["order"] == r["want"], str(r))
+
+    # × inside a draggable row. A drag from it is refused, and the next drag is not.
+    r = sidebar_page(m, DRAG_TOOLS + """
+      const out = {}, [row, other] = plainTabs(), x = row.querySelector(".close"), press = el => el.dispatchEvent(new page.MouseEvent("mousedown", {bubbles: true}));
+      press(x);
+      out.refused = !start(row);
+      out.over = over(other, .5, .8);
+      out.drop = drop(other, .5, .8);
+      end(row);
+      press(row.querySelector(".title"));
+      out.fromTitle = start(row);
+      out.overAfter = over(other, .5, .8);
+      end(row);
+      send({type: "mute", tabId: Number(row.dataset.tab), muted: true});
+      await until(() => row.querySelector(".sound"));
+      press(row.querySelector(".sound"));
+      out.soundRefused = !start(row);
+      end(row);
+      send({type: "mute", tabId: Number(row.dataset.tab), muted: false});
+      await until(() => !row.querySelector(".sound"));
+      const icon = doc.createElement("img");
+      row.append(icon);
+      out.iconTakesNoMouse = page.getComputedStyle(icon).pointerEvents === "none";
+      icon.remove();
+      return out;""")
+    check("a drag that starts on × or the sound button is refused, and does nothing", r["refused"] is True and r["soundRefused"] is True and r["over"] == [False] and r["drop"] is False, str(r))
+    check("a drag that starts on the row itself still works", r["fromTitle"] is True and r["overAfter"] == [True, "drop-after"], str(r))
+    check("a row is dragged whole, also when grabbed by its icon", r["iconTakesNoMouse"] is True, str(r))
+
+    # The rest with what only a real pointer does, in the sidebar page as the selected tab:
+    # real mouse events, a real drag session, and what Firefox itself does with them.
+    m.js(H + """const w = main(); w.__beforeDrag = w.gBrowser.selectedTab;
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+
+    def here(script):
+        return m.cmd("WebDriver:ExecuteAsyncScript", {"sandbox": "system", "script": """
+          const done = arguments[arguments.length - 1], wait = ms => new Promise(r => setTimeout(r, ms));
+          const until = async (test, ms = 8000) => { for (let t = 0; t < ms && !test(); t += 50) await wait(50); return !!test(); };
+          const rows = () => [...document.querySelectorAll("#tabs > .tab")].filter(r => r.querySelector(".title").textContent !== "Tidier");
+          const list = document.getElementById("tabs");
+          (async () => { """ + script + """ })().then(r => done(r ?? null), e => done({error: String(e)}));""", "args": []})
+
+    def pointer(*steps):
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "drag", "parameters": {"pointerType": "mouse"}, "actions": list(steps)}]})
+
+    def to(x, y):
+        return {"type": "pointerMove", "x": x, "y": y, "origin": "viewport", "duration": 0}
+    down, up, pause = {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}, {"type": "pause", "duration": 40}
+
+    try:
+        # A click whose hand shakes, on ×: past the distance that starts a drag, still on the button.
+        at = here("""const [row] = rows(), b = row.querySelector(".close").getBoundingClientRect();
+          return {n: rows().length, id: row.dataset.tab, order: rows().slice(1).map(r => r.dataset.tab), x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2)};""")
+        pointer(to(at["x"] - 40, at["y"]), pause, to(at["x"], at["y"]), pause)
+        here("""window.__heard = 0; window.addEventListener("dragstart", () => window.__heard++, {capture: true, once: true}); return 1;""")
+        pointer(down, to(at["x"] + 3, at["y"] + 3), to(at["x"] + 6, at["y"] + 6), pause, up)
+        r = here("""await until(() => rows().length < arguments[0]); return {n: rows().length, heard: window.__heard, order: rows().map(r => r.dataset.tab)};""".replace("arguments[0]", str(at["n"])))
+        check("a click on × that shakes (Firefox starts a drag) stays a click, and closes the tab",
+              r["heard"] == 1 and r["n"] == at["n"] - 1 and r["order"] == at["order"], f"{at} -> {r}")
+
+        # A long list: dragged to its bottom edge it scrolls, by Firefox itself, in this session of a real drag.
+        m.chrome()
+        m.js(H + """const w = main(), ctx = Number(args[0].split("-").pop());
+          for (let i = 0; i < 40; i++) w.gBrowser.addTrustedTab("https://example.org/?smoke-long-" + i, {userContextId: ctx, inBackground: true});
+          for (let i = 0; i < 200 && w.gBrowser.tabs.filter(t => url(t).includes("smoke-long")).length < 40; i++) await wait(100);
+          return 1;""", space)
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        at = here("""await until(() => list.scrollHeight > list.clientHeight + 200);
+          list.scrollTop = 0; await wait(100);
+          const box = list.getBoundingClientRect(), b = rows()[1].getBoundingClientRect();
+          return {x: Math.round(b.left + 60), y: Math.round(b.top + b.height / 2), bottom: Math.floor(box.bottom), overflow: list.scrollHeight - list.clientHeight};""")
+        pointer(to(at["x"], at["y"]), pause, down, to(at["x"], at["y"] + 8), pause, to(at["x"], at["y"] + 16), pause, to(at["x"], at["bottom"] - 200), pause)
+        r0 = here("""const session = !!window.windowUtils.dragSession; await wait(100); return {session, top: list.scrollTop, marks: document.querySelectorAll(".drop-before, .drop-after").length};""")
+        steps = [s for i in range(12) for s in (to(at["x"] + i % 2, at["bottom"] - 6), pause)]
+        pointer(*steps)
+        r1 = here("""await wait(200); return {top: list.scrollTop, marks: document.querySelectorAll(".drop-before, .drop-after").length};""")
+        pointer(*[s for i in range(4) for s in (to(at["x"] + i % 2, at["bottom"] - 200), pause)])
+        r2 = here("""const a = list.scrollTop; await wait(600); return [a, list.scrollTop];""")
+        r3 = here("""window.windowUtils.dragSession.endDragSession(true); await wait(300);
+          const a = list.scrollTop; await wait(500); return {session: !!window.windowUtils.dragSession, top: [a, list.scrollTop], marks: document.querySelectorAll(".drop-before, .drop-after").length};""")
+        check("a real drag starts from a row, and marks where it would land", r0["session"] and r0["top"] == 0 and r0["marks"] == 1, str(r0))
+        check("a drag at the bottom edge of a long list scrolls the list", r1["top"] > 0 and r1["marks"] == 1, f"{at} {r1}")
+        check("away from the edge it does not, and after the drag nothing moves or stays marked", r2[0] == r2[1] and not r3["session"] and r3["top"][0] == r3["top"][1] and r3["marks"] == 0, f"{r2} {r3}")
+    finally:
+        here("""window.windowUtils.dragSession?.endDragSession(true); return 1;""")
+        pointer(up)
+        m.cmd("WebDriver:ReleaseActions")
+        m.chrome()
+        m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("smoke-long")) w.gBrowser.removeTab(t);
+          if (w.__beforeDrag?.isConnected) w.gBrowser.selectedTab = w.__beforeDrag; await wait(2500); return 1;""")
+
+
 def alone_settings(m):
     # The settings page draws, and rules work: a tab's first page, in the rule's space.
     r = ext_page(m, "/settings/settings.html", """
@@ -1632,6 +1890,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
+                alone_drag_details,
                 alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
 
 
