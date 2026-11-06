@@ -208,7 +208,8 @@ async function onPinned(tab) {
     await browser.tabs.update(tab.id, { url: ghostUrl("essential", key) }).catch(() => {});
     setTimeout(() => busy.delete(tab.id), 1500);
   }
-  for (const w of await normalWindows()) if (w.id !== tab.windowId) await ensureWindow(w.id);
+  // Its own window too: the tab may have closed meanwhile.
+  for (const w of await normalWindows()) await ensureWindow(w.id);
   await sortEssentials(tab.windowId, await getList()); // with the others of its space
 }
 
@@ -496,13 +497,13 @@ browser.windows.onFocusChanged.addListener(windowId => {
   });
 });
 
-// A copy started loading its page: the others become placeholders.
 // A new tab page you pinned has no page to be an essential of, until you give it an address.
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (!started || busy.has(tabId) || !tab.pinned || !isWeb(change.url) || keyByTab.has(tabId)) return;
   serial(async () => { if (!(await keyOf(tab))) await onPinned(tab); });
 }, { properties: ["url"] });
 
+// A copy started loading its page: the others become placeholders.
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || isGhostUrl(tab.url)) return;
   const key = keyByTab.get(tabId);

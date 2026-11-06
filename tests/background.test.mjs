@@ -1026,3 +1026,24 @@ test("at a start, a pinned page the list does not know is an essential, and a pl
   assert.equal(ff.list(other.id).filter(t => t.pinned).length, 2);
   x.kill();
 });
+
+test("a tab pinned just as it gets an address is not opened again in a space", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.run(8000);
+  const t = ff.openTab(w.id, { url: "about:blank" });
+  await ff.clock.run(10);
+  ff.load(t, "https://link.example/");
+  await ff.clock.run(6);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  assert.ok(ff.tabs.has(t.id), "your tab stays");
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://link.example/"]);
+  assert.equal(ff.list(w.id).filter(y => y.pinned).length, 1, "and is there once");
+  x.kill();
+});

@@ -224,7 +224,7 @@ async function byRule(tabId, url) {
 async function intoSpace(tabId) {
   newTabs.delete(tabId);
   const tab = await browser.tabs.get(tabId).catch(() => null);
-  if (!tab || tab.cookieStoreId !== NO_CONTAINER) return;
+  if (!tab || tab.pinned || tab.cookieStoreId !== NO_CONTAINER) return; // (pinned meanwhile: an essential now)
   const win = await browser.windows.get(tab.windowId).catch(() => null);
   // (A new window's first tab can come before the window is announced.)
   const space = activeSpace.get(tab.windowId) ?? activeSpace.get(focusedWindowId);
