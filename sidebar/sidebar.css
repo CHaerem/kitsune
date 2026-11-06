@@ -73,6 +73,16 @@ body {
 /* A thin line between the folders (the kept part) and the other tabs. */
 .divider { height: 1px; margin: 8px 8px; background: var(--hover); }
 
+/* News (news.js): a still dot in the space's colour while a page you are not looking at
+ * has something new. Out of the flow, in the row's left margin, so it moves nothing. */
+.row, .tile, .space { position: relative; }
+.row.news::before, .folder.collapsed.news > .head::before, .tile.news::before, .space.news::after {
+  content: ""; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+.row.news::before, .folder.collapsed.news > .head::before { left: 0; top: calc(50% - 3px); }
+.tile.news::before { top: 5px; right: 5px; }
+.space.news::after { top: 7px; left: 20px; width: 5px; height: 5px; background: var(--color); }
+
 /* Spaces, at the bottom. */
 #spaces {
   display: flex; justify-content: center; gap: 4px;

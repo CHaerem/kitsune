@@ -290,6 +290,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
+    newsMarks, newsSeen,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
@@ -477,6 +478,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   if (dismiss) await noteLiveFolderDismissed(all[key]);
   delete all[key];
   lastRefresh.delete(key);
+  clearTimeout(refreshTimers.get(key)); refreshTimers.delete(key); // up to a minute off, for a tab that is no more
   saveSynced(all);
   const reps = repsOf(key, await browser.tabs.query({}));
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
@@ -971,6 +973,7 @@ async function start(delayMs) {
     await step(oneLoadedEach); // essentials.js: Firefox may have restored a page in several windows
     await step(forgetClosedGhosts);
     await step(startSpaces); // spaces.js: Firefox shows hidden tabs again at an update
+    await step(startNews); // news.js
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;

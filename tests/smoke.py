@@ -1464,6 +1464,127 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+def alone_news(m):
+    # Pages in the background, each named by its address so that its row can be found:
+    # one in the list, one in a closed folder, one as an essential, one in another space.
+    name = "smoke-news-"
+    page = lambda which: f"{m.pages}/titled?{name}{which}"
+    spaces = sidebar_page(m, "return spaces();")
+    here = next(s["id"] for s in spaces if s["active"])
+    there = next(s["id"] for s in spaces if not s["active"] and s["id"] != "firefox-container-4")
+    number = lambda space: int(space.rsplit("-", 1)[1])
+    opened = m.js(H + """const [pages, here, there] = args, w = main(); w.focus();
+      const tabs = pages.map(([address, inHere]) => w.gBrowser.addTrustedTab(address, {userContextId: inHere ? here : there, inBackground: true}));
+      for (let i = 0; i < 100 && !tabs.every(t => role(w, t) === "live"); i++) await wait(100);
+      return tabs.map(t => role(w, t));""", [[page("row"), True], [page("folder"), True], [page("tile"), True], [page("there"), False], [f"{m.pages}/ticking?{name}clock", True]], number(here), number(there))
+    check("the test's background pages are Tidier's tabs", opened == ["live"] * 5, str(opened))
+    pinned = m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes(args[0])); w.gBrowser.pinTab(t);
+      for (let i = 0; i < 100 && !ek(w, t); i++) await wait(100);
+      return !!ek(w, t);""", name + "tile")
+    check("one of them is an essential", pinned, str(pinned))
+    # JavaScript for each check: what has a mark now, under a rule the sidebar draws by.
+    marked = """
+      const named = which => [...doc.querySelectorAll(".tab, .tile")].find(r => r.title.includes(args[0] + which));
+      const has = () => ({
+        rows: [...doc.querySelectorAll("#tabs .tab.news")].filter(r => r.offsetParent).map(r => r.title.replace(args[0], "")),
+        heads: [...doc.querySelectorAll(".folder.collapsed.news")].map(f => f.querySelector(".head .title").textContent),
+        tiles: [...doc.querySelectorAll(".tile.news")].map(r => r.title.replace(args[0], "")),
+        spaces: [...doc.querySelectorAll(".space.news")].map(b => b.dataset.space),
+      });
+      // By the clock: this page is a tab in the background, whose timers Firefox slows down.
+      const when = async test => { for (const end = Date.now() + 8000; Date.now() < end && !test();) await wait(100); };
+      const until = async test => { await when(() => test(has())); return has(); };
+      const bar = id => doc.querySelector(`.space[data-space="${id}"]`);
+      const inSpace = id => when(() => spaces().find(s => s.active).id === id);"""
+    r = sidebar_page(m, marked + """
+      send({type: "newFolder", space: args[1], name: args[0] + "kept"});
+      let head = null;
+      for (let i = 0; i < 50 && !head; i++) { await wait(100); head = [...doc.querySelectorAll(".folder .head")].find(h => h.title === args[0] + "kept"); }
+      send({type: "moveTab", tabId: Number(named("folder").dataset.tab), folder: head.dataset.folderHead, before: null});
+      for (let i = 0; i < 50 && !head.parentElement.querySelector(".tab"); i++) await wait(100);
+      head.click();
+      await when(() => head.parentElement.classList.contains("collapsed"));
+      // The other space's last used tab is another one, so that going there does not select this page.
+      bar(args[2]).click();
+      await inSpace(args[2]);
+      const other = [...doc.querySelectorAll("#tabs .tab")].find(x => !x.title.includes(args[0]));
+      other.click();
+      await when(() => other.classList.contains("active"));
+      bar(args[1]).click();
+      await inSpace(args[1]);
+      return {key: head.dataset.folderHead, collapsed: head.parentElement.classList.contains("collapsed"), back: spaces().find(s => s.active).id};""", name, here, there)
+    check("a folder with one of them in it is closed", r["collapsed"] and r["back"] == here, str(r))
+    folder_key = r["key"]
+    # Past the quiet after loading. A title that only ticks says nothing, however long it does.
+    time.sleep(6)
+    r = sidebar_page(m, marked + """
+      const ticking = [...doc.querySelectorAll("#tabs .tab")].filter(x => /^\\d+$/.test(x.title));
+      return {ticking: ticking.length, seconds: ticking.map(x => Number(x.title)), has: has()};""", name)
+    check("a title that only ticks has no dot", r["ticking"] == 1 and r["has"] == {"rows": [], "heads": [], "tiles": [], "spaces": []}, str(r))
+    m.js(H + """const w = main(); await removeWhere((x, t) => url(t).includes("/ticking?")); return 1;""")
+
+    place = """const r = named("row"), t = r.querySelector(".title").getBoundingClientRect(), i = r.querySelector("img, .letter").getBoundingClientRect();
+      return {title: [t.left, t.top, t.width], icon: [i.left, i.top], row: r.getBoundingClientRect().height};"""
+    before = sidebar_page(m, marked + place, name)
+    set_title(m, page("row"), f"{name}row Anna wrote")
+    r = sidebar_page(m, marked + """
+      const got = await until(h => h.rows.length);
+      const row = named("row"), dot = page.getComputedStyle(row, "::before");
+      const probe = doc.createElement("i"); probe.style.color = page.getComputedStyle(doc.documentElement).getPropertyValue("--accent"); doc.body.append(probe);
+      const accent = page.getComputedStyle(probe).color; probe.remove();
+      const t = row.querySelector(".title").getBoundingClientRect(), i = row.querySelector("img, .letter").getBoundingClientRect();
+      return {got, dot: {color: dot.backgroundColor, position: dot.position, animation: dot.animationName, width: dot.width}, accent, title: [t.left, t.top, t.width], icon: [i.left, i.top], row: row.getBoundingClientRect().height};""", name)
+    check("a background page's new title gives its row a dot", r["got"]["rows"] == ["row Anna wrote"], str(r))
+    check("the dot is still, and in the space's colour", r["dot"]["color"] == r["accent"] and r["dot"]["animation"] == "none" and r["dot"]["position"] == "absolute", str(r))
+    check("the dot moves nothing in the row", all(before[k] == r[k] for k in ("title", "icon", "row")), f"{before} -> {r}")
+    set_title(m, page("folder"), f"{name}folder (1) unread")
+    set_title(m, page("tile"), f"{name}tile (1) unread")
+    set_title(m, page("there"), f"{name}there (1) unread")
+    r = sidebar_page(m, marked + "return await until(h => h.heads.length && h.tiles.length && h.spaces.length);", name)
+    check("a closed folder shows that a tab in it has news", r["heads"] == [name + "kept"], str(r))
+    check("an essential's tile shows it", len(r["tiles"]) == 1 and r["tiles"][0].startswith("tile"), str(r))
+    check("another space's dot shows it", r["spaces"] == [there], str(r))
+
+    # Selecting clears each, by real clicks in the sidebar.
+    r = sidebar_page(m, marked + """
+      const out = {};
+      named("row").click();
+      out.row = await until(h => !h.rows.length);
+      named("tile").click();
+      out.tile = await until(h => !h.tiles.length);
+      const head = [...doc.querySelectorAll(".folder .head")].find(h => h.title === args[0] + "kept");
+      head.click();
+      await when(() => !head.parentElement.classList.contains("collapsed"));
+      out.open = await until(h => h.rows.length);  // an open folder's head has no dot: its row has it
+      named("folder").click();
+      out.folder = await until(h => !h.rows.length);
+      bar(args[2]).click();
+      out.inThere = await until(h => !h.spaces.length && h.rows.length);  // in the space itself, its list shows it, not the bar
+      named("there").click();
+      out.there = await until(h => !h.rows.length);
+      bar(args[1]).click();
+      await inSpace(args[1]);
+      out.back = has();
+      return out;""", name, here, there)
+    empty = {"rows": [], "heads": [], "tiles": [], "spaces": []}
+    check("selecting the row clears its dot", not r["row"]["rows"], str(r))
+    check("selecting the essential clears its tile's dot", not r["tile"]["tiles"], str(r))
+    check("an open folder shows the dot on its row, not on its head", not r["open"]["heads"] and r["open"]["rows"] == ["folder (1) unread"], str(r))
+    check("selecting the tab clears its folder's dot", r["folder"] == {**empty, "spaces": [there]}, str(r))
+    check("in the space itself its list shows the news, and the bar does not", r["inThere"]["rows"] == ["there (1) unread"] and not r["inThere"]["spaces"], str(r))
+    check("selecting the tab clears the space's dot, and nothing is left", r["there"] == empty and r["back"] == empty, str(r))
+
+    # What was opened goes again; nothing stays behind in memory.
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", folder_key)
+    m.js(H + """const w = main();
+      for (const t of w.gBrowser.tabs.filter(t => t.pinned && url(t).includes(args[0]))) w.gBrowser.unpinTab(t);
+      await wait(3000);
+      await removeWhere((x, t) => url(t).includes(args[0]));
+      return 1;""", name)
+    stats = extension_message(m, {"type": "stats"})
+    check("no mark stays once its pages are gone", stats["sizes"]["newsMarks"] == 0, str(stats["sizes"]))
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1632,7 +1753,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_news, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

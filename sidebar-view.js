@@ -19,6 +19,7 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
+  news: hasNews(t.id),
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
@@ -30,6 +31,7 @@ async function viewFor(windowId) {
   const used = new Set([...list.map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
   const spaces = await spaceList(used);
   const space = await spaceOf(windowId, tabs, spaces);
+  for (const s of spaces) s.news = s.id !== space && spaceHasNews(s.id); // the space you are in shows it in its list
 
   const rank = new Map(list.map((e, i) => [e.key, i]));
   const pinned = tabs.filter(t => t.pinned && (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER));
@@ -51,6 +53,7 @@ async function viewFor(windowId) {
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
     (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
   }
+  for (const f of folders) f.news = f.tabs.some(t => t.news);
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
 }
 

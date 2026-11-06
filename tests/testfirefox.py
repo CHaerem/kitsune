@@ -73,6 +73,7 @@ TEST_PREFS = {
 PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+    "/titled": "<script>document.title = location.search.slice(1);</script>a page named by its address",
 }
 
 
