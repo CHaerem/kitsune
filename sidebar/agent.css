@@ -1,0 +1,28 @@
+/* An agent at work: one quiet line above the bar, only while it is (sidebar/agent.js). */
+#agent-line {
+  display: flex; align-items: center; gap: 8px;
+  height: 26px; padding: 0 2px 0 8px; margin-bottom: 2px;
+  color: var(--muted); font-size: 12px;
+}
+#agent-line[hidden] { display: none; }
+.agent-action { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-stop {
+  flex: none; height: 22px; padding: 0 8px; border: 0; border-radius: 5px;
+  background: none; color: var(--text); font: inherit; cursor: default;
+}
+.agent-stop:hover { background: var(--hover); }
+
+/* Its space's dot: a thin ring, still, inside the room the dot already has. */
+.space { position: relative; }
+.space.agent-active .dot { outline: 1.5px solid var(--color); outline-offset: 3px; }
+/* A tab it left you waits there: a small still mark, gone when For you is empty. */
+.space.agent-left::after {
+  content: ""; position: absolute; top: 5px; right: 5px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--color);
+}
+
+/* The note on a tab it left you. */
+.row .agent-note {
+  flex: 1 1 0; min-width: 0; color: var(--muted); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}

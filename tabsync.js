@@ -45,7 +45,7 @@ let started = false;             // tab sync waits for startup before reacting
 
 const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
-const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); };
+const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); forYouSoon(); };
 // Sidebery adds a channel suffix ("~!...!~") to group URLs; strip it when copying.
 // (Ghost placeholder URLs come from ghostUrl() in common.js.)
 const groupBaseUrl = url => url.replace(/~!.*!~$/, "");
@@ -974,6 +974,7 @@ async function start(delayMs) {
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
+  await step(startBridge); // bridge.js
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
 }

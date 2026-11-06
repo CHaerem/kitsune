@@ -19,6 +19,7 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
+  note: forYouNotes.get(syncKeyByTab.get(t.id)), // bridge.js
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";

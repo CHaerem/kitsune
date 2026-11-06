@@ -28,7 +28,8 @@
     "menus.overrideContext"
   ],
   "optional_permissions": [
-    "tabHide"
+    "tabHide",
+    "<all_urls>"
   ],
   "options_ui": {
     "page": "settings/settings.html",
@@ -57,7 +58,8 @@
       "moveover.js",
       "sidebar-view.js",
       "archive.js",
-      "shortcuts.js"
+      "shortcuts.js",
+      "bridge.js"
     ],
     "persistent": true
   },
@@ -73,7 +75,10 @@
     "space-2": { "description": "Go to the second space" },
     "space-3": { "description": "Go to the third space" },
     "space-4": { "description": "Go to the fourth space" },
-    "space-5": { "description": "Go to the fifth space" }
+    "space-5": { "description": "Go to the fifth space" },
+    "claude-copy-page": { "description": "Copy this page for Claude (once turned on in Tidier's settings)" },
+    "claude-copy-tabs": { "description": "Copy this space's tabs for Claude (once turned on in Tidier's settings)" },
+    "claude-ask": { "description": "Ask Claude about this page (once turned on in Tidier's settings)" }
   },
   "icons": {
     "48": "icon.svg",

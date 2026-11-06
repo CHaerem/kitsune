@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Register github-prs.py as a Firefox native messaging host, so only the
-# Tidier extension can start it. Run again if this folder moves.
+# Register github-prs.py and tidier-bridge.py as Firefox native messaging hosts, so
+# only the Tidier extension can start them. Run again if this folder moves.
 set -euo pipefail
 here="${0:A:h}"
 dir="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
@@ -16,6 +16,18 @@ cat > "$dir/tidier_github.json" <<EOF
 }
 EOF
 echo "Installed: $dir/tidier_github.json"
+# The bridge to agents (README). It only runs while you have it turned on in Tidier's settings.
+chmod +x "$here/tidier-bridge.py" "$here/tidier-mcp.py"
+cat > "$dir/tidier_bridge.json" <<EOF
+{
+  "name": "tidier_bridge",
+  "description": "The bridge between Tidier and agents, only while it is turned on",
+  "path": "$here/tidier-bridge.py",
+  "type": "stdio",
+  "allowed_extensions": ["{6844a953-9931-4334-9ff6-257c246485cb}"]
+}
+EOF
+echo "Installed: $dir/tidier_bridge.json"
 # From when the extension was called Kitsune: its host is no longer used.
 if [ -e "$dir/kitsune_github.json" ]; then
   rm "$dir/kitsune_github.json"
