@@ -19,6 +19,7 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
+  page: isWeb(t.url) || isGhostUrl(t.url), // else a new tab page or the like, which only has a place among the tabs (drag.js)
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
@@ -116,9 +117,17 @@ async function sidebarAction(windowId, msg) {
 // A tab dropped on a tile is an essential at that place: Firefox pins it after the
 // others, and onPinned (essentials.js) gives it its place in the list as it adds it. Moving
 // it there afterwards would show the tile at the end first, and then jump.
+//
+// A tab moved or pinned a moment ago is still in the sets that make the listeners ignore
+// Tidier's own changes. This one is yours, and ignored it would leave the tab both an
+// essential and a tab with placeholders in the other windows, for good.
 async function pinFromSidebar(tabId, pinned, before) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.pinned === pinned) return; // closed or pinned meanwhile: no event will use a place
+  busy.delete(tabId);
+  syncBusy.delete(tabId);
   if (pinned && before) pinPlaces.set(tabId, before);
-  await browser.tabs.update(tabId, { pinned }).catch(err => { pinPlaces.delete(tabId); throw err; });
+  await browser.tabs.update(tabId, { pinned }).catch(() => pinPlaces.delete(tabId));
 }
 
 // An essential's tile moved: moving its tab is what the rest of Tidier listens to.
@@ -128,6 +137,7 @@ async function moveEssential(windowId, tabId, beforeId) {
   if (!tab) return;
   let index = before ? before.index : tabs.at(-1).index;
   if (before && tab.index < before.index) index--;
+  busy.delete(tabId); // yours, also right after its pin (see pinFromSidebar)
   if (index !== tab.index) await browser.tabs.move(tabId, { index });
 }
 

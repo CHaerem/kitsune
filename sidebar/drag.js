@@ -5,10 +5,6 @@
 //
 // A mark means that a drop there does something. Right next to what you are dragging
 // nothing would move, so there is no mark, and a drop there sends nothing.
-//
-// Nothing here scrolls the list: during a drag Firefox itself scrolls whatever
-// scrollable element the pointer is within 20 device pixels of the edge of, a step
-// for each dragover (ScrollContainerFrame::DragScroll). The smoke test holds it to that.
 let dragging = null;
 
 // × and the sound button sit inside a draggable row, and a drag can start from any
@@ -26,23 +22,77 @@ function startDrag(e, what) {
   e.dataTransfer.setData("text/plain", ""); // Firefox starts no drag without data
   e.stopPropagation();
 }
-addEventListener("dragend", () => { dragging = null; marks(); });
+addEventListener("dragend", () => { dragging = null; settle(); });
 // Past the sidebar's edge a drop does nothing here, and no more dragover comes to take
 // the mark away. (A leave with no next element is the leaving of the page itself.)
-addEventListener("dragleave", e => { if (!e.relatedTarget) marks(); });
+addEventListener("dragleave", e => { if (!e.relatedTarget) settle(); });
+const settle = () => { marks(); scrollList(0); };
 
 const MARKS = ["drop-before", "drop-after", "drop-left", "drop-right", "drop-into"];
 const MARKED = MARKS.map(c => "." + c).join();
 // Called for every dragover, many times a second, so what is right already stays untouched.
 function marks(target, cls) {
   for (const e of document.querySelectorAll(MARKED)) if (e !== target || !e.classList.contains(cls)) e.classList.remove(...MARKS);
-  target?.classList.add(cls);
+  if (target && !target.classList.contains(cls)) target.classList.add(cls);
 }
 
-// What is being dragged, as drawn now. Undefined if a tab event took it away meanwhile
-// (the tab closed): its dragend then goes to the removed element and never reaches
-// us, so `dragging` could be left over for a later drag from somewhere else.
+// What is being dragged, as drawn now.
 const draggedNow = () => kept.get(dragging.kind === "folder" ? "folder:" + dragging.key : (dragging.kind === "essential" ? "tile:" : "tab:") + dragging.tabId);
+
+// A tab event can take it away during the drag (the tab closed, or went to another window
+// or space). Its dragend then goes to the removed element and never reaches us. That
+// ends the drag here, or a tab coming back later would be moved by the next drag from a
+// page that happens to be dropped on the sidebar.
+port.onMessage.addListener(() => {
+  if (!dragging || draggedNow()) return;
+  dragging = null;
+  settle();
+});
+
+// --- The list scrolls at its edges ------------------------------------------------
+// Firefox has a scroll of its own during a drag (ScrollContainerFrame::DragScroll), but it
+// cannot be relied on here: its zone is 20 device pixels, so 10 points on a Retina screen,
+// right above the space bar; it takes a fixed step per dragover; and in the test Firefox
+// it took one step and no more, however long a drag was held there. So this does it: it
+// goes on while the pointer rests there, faster the closer to the edge, and exists only
+// during a drag. It ends by itself at the list's end, so nothing can keep it going.
+const EDGE_ZONE = 40, EDGE_SPEED = 900; // how near the edge in pixels, and pixels a second at the edge
+let scrolling = null; // { speed, frame, last, carry }
+
+function edgeSpeed(e) {
+  const list = document.getElementById("tabs");
+  // An essential has no place in the list to be scrolled to: anywhere there unpins it.
+  if (!dragging || dragging.kind === "essential" || !list.contains(e.target)) return 0;
+  const box = list.getBoundingClientRect();
+  const fromTop = e.clientY - box.top, fromBottom = box.bottom - e.clientY, near = Math.min(fromTop, fromBottom);
+  if (near >= EDGE_ZONE) return 0;
+  const closeness = 1 - Math.max(near, 0) / EDGE_ZONE;
+  return (fromTop < fromBottom ? -1 : 1) * EDGE_SPEED * (.1 + .9 * closeness * closeness);
+}
+
+function scrollList(speed) {
+  if (!speed) {
+    if (scrolling) cancelAnimationFrame(scrolling.frame);
+    scrolling = null;
+  } else if (scrolling) {
+    scrolling.speed = speed;
+  } else {
+    scrolling = { speed, last: performance.now(), carry: 0, frame: requestAnimationFrame(scrollStep) };
+  }
+}
+
+function scrollStep(now) {
+  const list = document.getElementById("tabs"), was = list.scrollTop;
+  // By the time passed, as a sidebar has no fixed frame rate, and in whole pixels, as a
+  // small fraction added to scrollTop would be rounded away and never add up.
+  scrolling.carry += scrolling.speed * Math.max(now - scrolling.last, 0) / 1000;
+  scrolling.last = now;
+  const step = Math.trunc(scrolling.carry);
+  scrolling.carry -= step;
+  list.scrollTop = was + step;
+  if (step && list.scrollTop === was) scrolling = null; // the end of the list
+  else scrolling.frame = requestAnimationFrame(scrollStep);
+}
 
 // The place among the essentials under the pointer. They are a grid, so a tile's left
 // or right half decides. The nearest tile counts, so the gaps and the empty end of the
@@ -63,7 +113,7 @@ function tilePlace(e) {
 function dropAt(e) {
   // A drag event can be aimed at the text under the pointer, which has no closest().
   const over = e.target.closest ? e.target : e.target.parentElement;
-  let t = over?.closest("[data-tab], [data-folder-head], #essentials, #tabs, .space");
+  let t = over?.closest("[data-tab], [data-folder-head], #essentials, #space-name, #tabs, .space");
   if (!t || !dragging) return null;
   const own = draggedNow();
   if (!own) return null;
@@ -75,6 +125,15 @@ function dropAt(e) {
     const beyond = after(box.firstChild) ? next(box) : box.dataset.key;
     if (beyond === dragging.key || beyond === next(own)) return null;
     return { target: box, cls: beyond === box.dataset.key ? "drop-before" : "drop-after", msg: { type: "moveFolder", key: dragging.key, before: beyond } };
+  }
+  // A new tab page or the like: no space can open it and no essential or folder can keep
+  // it (moveToSpace, onPinned and moveTab go by the address), so it only has a place among
+  // the ordinary tabs. Such a tab is never in a folder, so this looks at the loose ones.
+  if (dragging.kind === "tab" && view.tabs.some(i => i.id === dragging.tabId && !i.page) && (!t.closest("#tabs") || t.dataset.folderHead || t.dataset.folder)) return null;
+  // With no essentials the grid takes no room, and the space's name is where it would be.
+  if (t.id === "space-name") {
+    if (dragging.kind !== "tab" || document.querySelector("#essentials .tile")) return null;
+    return { target: t, cls: "drop-into", msg: { type: "pin", tabId: dragging.tabId, pinned: true, before: null } };
   }
   if (t.classList.contains("space")) {
     if (dragging.kind !== "tab" || t.dataset.space === view.space) return null;
@@ -120,11 +179,12 @@ function nextTab(t) {
 addEventListener("dragover", e => {
   const drop = dropAt(e);
   marks(drop?.target, drop?.cls);
+  scrollList(edgeSpeed(e));
   if (drop) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
 });
 addEventListener("drop", e => {
   const drop = dropAt(e);
-  marks();
+  settle();
   dragging = null;
   if (drop) { e.preventDefault(); send(drop.msg); }
 });

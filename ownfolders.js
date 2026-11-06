@@ -66,18 +66,27 @@ async function moveFolder(key, beforeKey) {
 // before another tab (`beforeTabId`, or null: last there). Every window follows,
 // and without Sidebery's rules about what may move where, any tab can simply move.
 async function moveTab(windowId, tabId, beforeTabId, folderKey) {
+  // A tab opened or unpinned a moment ago is not in the record yet: tab sync waits for
+  // redirects first. You are moving it now, and without a record no folder can take it.
+  await register(tabId);
   const all = await getSynced();
-  const key = syncKeyByTab.get(tabId), beforeKey = beforeTabId ? syncKeyByTab.get(beforeTabId) : null;
+  const key = syncKeyByTab.get(tabId);
   if (key && all[key]) {
     if (folderKey !== undefined && !all[key].liveFolder && !all[folderKey]?.live) {
       all[key].parentKey = folderKey;
       noteSaved(all, [key]);
       saveSynced(all);
     }
+    // What it goes before can be a tab only this window has, such as a new tab page: the
+    // other windows have nothing for that, so there the next tab they do have counts.
+    const here = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
+    const from = here.findIndex(t => t.id === beforeTabId);
+    const beforeKey = from < 0 ? null : here.slice(from).map(t => syncKeyByTab.get(t.id)).find(k => k && k !== key) ?? null;
     for (const w of await normalWindows()) {
       const tabs = await browser.tabs.query({ windowId: w.id });
       const reps = repMap(tabs);
-      if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : null);
+      const before = w.id === windowId && from >= 0 ? beforeTabId : beforeKey ? reps.get(beforeKey) : null;
+      if (reps.has(key)) await moveInWindow(tabs, reps.get(key), before);
     }
   } else {
     await moveInWindow(await browser.tabs.query({ windowId }), tabId, beforeTabId);
