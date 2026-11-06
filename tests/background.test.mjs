@@ -1011,3 +1011,19 @@ test("a copy of an essential unpinned just after it was made is an ordinary tab"
   assert.ok(ff.synced[ff.values.get(t.id).syncKey], "and the tab is synced");
   x.kill();
 });
+
+test("a pinned tab that is no essential, unpinned, is synced", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://a.example/", pinned: true, cookieStoreId: C1 });
+  const x = await run(ff);
+  x.js(`syncKeyByTab.delete(${t.id}); keyByTab.delete(${t.id})`);
+  ff.values.delete(t.id);
+  ff.store.essentials = [];
+  x.js("essentialsList.set([])");
+  await x.b.tabs.update(t.id, { pinned: false });
+  await wait(3000);
+  assert.ok(ff.synced[ff.values.get(t.id)?.syncKey], "it has a record");
+  x.kill();
+});

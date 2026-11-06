@@ -717,7 +717,8 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   const key = syncKeyByTab.get(tabId);
   if (!key) {
     // A new tab that has navigated to a page, e.g. "New Tab" -> a URL.
-    if (!syncBusy.has(tabId) && (change.url || change.status === "complete")) registerSoon(tabId);
+    // Or a pinned tab Tidier knew nothing about, unpinned: nothing else will happen to it.
+    if (!syncBusy.has(tabId) && (change.url || change.status === "complete" || change.pinned === false)) registerSoon(tabId);
     return;
   }
   // A tab Tidier has just made or moved (syncBusy) is still yours: what you do with it

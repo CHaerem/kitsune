@@ -258,6 +258,8 @@ LIB = r"""
 SETUP = LIB + r"""
   // The control page: a popup window, which Tidier leaves out of everything, so the
   // test can ask Tidier things without opening tabs among the ones it is checking.
+  for (const b of browsers()) if (!b.toolbar.visible) b.close();  // an earlier one, after an update or a restart
+  await wait(300);
   const w = normal()[0];
   const helper = w.gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[EXT] + "/ghost.html?kind=test", {inBackground: true});
   for (let i = 0; i < 100 && (!helper.linkedBrowser.currentURI.spec.includes("ghost.html") || helper.getAttribute("busy")); i++) await wait(100);
@@ -305,7 +307,7 @@ ACTIONS = r"""
   const pick = list => list.length ? list[Math.floor(R() * list.length)] : null;
   let serial = 0;
   const pageUrl = () => a.pages + "/p/" + a.n + "-" + (serial++);
-  const note = {closed: [], unpinned: [], deleted: []};
+  const note = {closed: [], unpinned: [], deleted: [], mayDouble: []};
   const here = () => {
     const f = Services.focus.activeWindow, ws = normal();
     if (ws.includes(f)) return f;
@@ -527,12 +529,14 @@ ACTIONS = r"""
     reopen_tab() {
       const w = here();
       if (!w.SessionStore.getClosedTabCountForWindow(w)) return null;
-      const what = w.SessionStore.getClosedTabDataForWindow(w)[0]?.state?.entries?.at(-1)?.url;
+      const closed = w.SessionStore.getClosedTabDataForWindow(w)[0]?.state, what = closed?.entries?.at(-1)?.url;
+      if (closed?.pinned && what) note.mayDouble.push(what);
       w.SessionStore.undoCloseTab(w, 0);
       return "⌘⇧T: " + String(what).split(/[/?]/).pop();
     },
     reopen_window() {
       if (a.windows >= $MAX_WINDOWS || !control().SessionStore.getClosedWindowCount()) return null;
+      for (const t of control().SessionStore.getClosedWindowData()[0]?.tabs ?? []) note.mayDouble.push(...t.entries.map(e => e.url));
       control().SessionStore.undoCloseWindow(0);
       return "reopen a closed window";
     },
@@ -719,13 +723,14 @@ INVARIANTS = LIB + r"""
     if (live.length > 1) bad("a synced tab has two live tabs", e.title || e.url);
     if (live.length === 0 && reps.length && !e.saved && !e.liveFolder && !a.noLiveOk.includes(key)) bad("a synced tab has no live tab", e.title || e.url);
     const open = reps.filter(x => x.loaded && !x.ghost);
-    if (open.length > 1) bad("a page is loaded twice", e.title || e.url, open.map(x => x.role + " in " + x.wi).join(", "));
+    if (open.length > 1 && !open.some(x => x.selected && x.w !== focused)) bad("a page is loaded twice", e.title || e.url, open.map(x => x.role + " in " + x.wi).join(", "));
     // A record that is behind its page: the other windows and the next start would show the old one.
     const page = live.find(x => x.loaded && realWeb(x) && !x.t.getAttribute("busy"));
     if (page && page.url !== e.url) bad("the record has another address than its page", e.title, e.url.slice(-20) + " vs " + page.url.slice(-20));
     for (const x of reps) {
       if (x.ctx !== e.cookieStoreId) bad("a synced tab in another container", e.title || e.url, x.ctx + " vs " + e.cookieStoreId);
-      if (x.role === "ghost" && x.loaded && !x.ghost && realWeb(x)) bad("a ghost has loaded the real page", e.title || e.url);
+      // (Selected in a window you are not using, it waits for you to come back, see pull.)
+      if (x.role === "ghost" && x.loaded && !x.ghost && realWeb(x) && !(x.selected && x.w !== focused)) bad("a ghost has loaded the real page", e.title || e.url);
     }
   }
   for (const x of tabs) {
@@ -733,10 +738,11 @@ INVARIANTS = LIB + r"""
     if (x.key && !all[x.key]) bad("a tab of a synced tab that is gone", x.label, x.role + " " + x.url.slice(0, 80));
     if (!x.key && realWeb(x)) bad("a web page that is not synced", x.label, x.url.slice(0, 80));
   }
-  // Each address is used once (see Pages): two records with one address are a tab doubled,
-  // unless you asked for it: ⌘⇧T on a tab moved to another space, or on a saved tab you opened again.
+  // Each address is used once (see Pages): two records with one address are a tab doubled, unless
+  // you asked for it: ⌘⇧T on a tab moved to another space, on a saved tab you opened again or an
+  // essential you made an ordinary tab, or a window reopened with a page you have since reopened.
   const byUrl = new Map();
-  for (const e of Object.values(all)) if (!e.group && !e.liveFolder && !e.saved) { const k = e.cookieStoreId + " " + e.url; byUrl.set(k, (byUrl.get(k) || 0) + 1); }
+  for (const e of Object.values(all)) if (!e.group && !e.liveFolder && !e.saved && !a.mayDouble.includes(e.url)) { const k = e.cookieStoreId + " " + e.url; byUrl.set(k, (byUrl.get(k) || 0) + 1); }
   for (const [k, n] of byUrl) if (n > 1) bad("a tab is doubled", k.split(" ")[1].slice(-40), n + " records, " + k.split(" ")[0]);
 
   // --- Placeholders ---
@@ -893,6 +899,7 @@ class Soak:
         self.pop = {"windows": 1, "tabs": 10, "essentials": 6, "ticking": 0}
         self.closed, self.unpinned, self.deleted = set(), set(), set()
         self.no_live_ok = []
+        self.may_double = []
         self.prev = None
         self.restarts = self.segment = 0
         self.violations = {}    # (kind, subject) -> the first detail, when
@@ -929,6 +936,7 @@ class Soak:
             self.unpinned.update(r["note"]["unpinned"])
             self.deleted.update(r["note"]["deleted"])
             self.no_live_ok += r["note"].get("noLiveOk", [])
+            self.may_double += r["note"]["mayDouble"]
             if r["failed"]:
                 self.action_failures[f"{name}: {r['failed']}"] = self.action_failures.get(f"{name}: {r['failed']}", 0) + 1
                 self.say(f"{name}: the test's own action failed: {r['failed']}")
@@ -984,7 +992,7 @@ class Soak:
         t0 = time.time()
         r = None
         while True:
-            r = self.call(INVARIANTS, noLiveOk=self.no_live_ok)
+            r = self.call(INVARIANTS, noLiveOk=self.no_live_ok, mayDouble=self.may_double)
             if not r["violations"] or time.time() - t0 > VIOLATION_WAIT_S:
                 break
             for v in r["violations"]:  # errors are taken from the console once: keep them
