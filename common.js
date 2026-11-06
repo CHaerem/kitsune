@@ -17,7 +17,12 @@ function serial(fn) {
       return await Promise.race([fn(), new Promise((_, reject) => {
         limit = setTimeout(() => reject(new Error("a job did not finish within the time limit")), JOB_LIMIT_MS);
       })]);
-    } finally { clearTimeout(limit); work.queueMs += performance.now() - t0; }
+    } finally {
+      clearTimeout(limit);
+      const ms = performance.now() - t0;
+      work.queueMs += ms;
+      work.longestJobMs = Math.max(work.longestJobMs, ms);
+    }
   });
   queue = run.catch(noteError);
   return run;
@@ -37,9 +42,10 @@ globalThis.addEventListener?.("unhandledrejection", event => noteError(event.rea
 
 // How much Tidier does, for the smoke test (the "stats" message, tabsync.js):
 // jobs run in the queue and how long they held it (waits for Sidebery
-// included), tab lookups made outside it (noteOrder, tabsync.js), and the
-// timed checks (archiving, live folders), the only work with nothing happening.
-const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0, errors: 0, views: 0 };
+// included), tab lookups made outside it (noteOrder, tabsync.js), the timed
+// checks (archiving, live folders), the only work with nothing happening, and
+// the sidebar's views: how many were built and how long that took.
+const work = { jobs: 0, queueMs: 0, longestJobMs: 0, lookups: 0, alarms: 0, errors: 0, views: 0, viewMs: 0, longestViewMs: 0 };
 browser.alarms.onAlarm.addListener(() => { work.alarms++; });
 
 // Tidier alone: Tidier's own sidebar, spaces and folders, with no Sidebery. Off by

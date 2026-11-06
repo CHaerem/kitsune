@@ -60,7 +60,11 @@ function viewSoon(windowId) {
   viewTimers.set(windowId, setTimeout(async () => {
     viewTimers.delete(windowId);
     work.views++;
+    const t0 = performance.now();
     const view = await viewFor(windowId).catch(err => (console.error("Tidier: sidebar", err), null));
+    const ms = performance.now() - t0;
+    work.viewMs += ms;
+    work.longestViewMs = Math.max(work.longestViewMs, ms);
     if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
   }, VIEW_DEBOUNCE_MS));
 }
