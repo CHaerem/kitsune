@@ -130,8 +130,9 @@ function lookUpMore() {
   clearTimeout(historyTimer);
   const text = field.value.trim();
   const seq = ++historySeq;
-  if (found.length) { found = []; }
-  if (!text || step || !(browser.history || browser.bookmarks)) return;
+  // What is found stays until the next answer: ranking drops what no longer matches, and
+  // the rows do not flicker on every key.
+  if (!text || step || !(browser.history || browser.bookmarks)) { found = []; return; }
   historyTimer = setTimeout(async () => {
     const [history, bookmarks] = await Promise.all([
       browser.history?.search({ text, maxResults: HISTORY_RESULTS, startTime: 0 }).catch(() => []) ?? [],
@@ -242,9 +243,15 @@ list.addEventListener("click", e => {
   if (row) choose(rows[Number(row.dataset.i)], e.metaKey || e.ctrlKey);
 });
 
-// Losing the focus closes it, like Arc's. A moment later, since a window can lose the focus
-// for an instant while it opens; not while Firefox's own prompt has it.
+// Losing the focus closes it, like Arc's. What counts is the window: inside it the focus can
+// hop away from the page and back (Firefox settles the new window), and then you can simply
+// go on typing. A moment later, for a window that is still getting the focus, and not while
+// Firefox's own prompt has it.
 addEventListener("blur", e => {
   if (e.target !== window) return;
-  setTimeout(() => { if (!document.hasFocus() && !asking) close(false); }, 50);
+  setTimeout(async () => {
+    if (asking || document.hasFocus()) return;
+    const win = await browser.windows.getCurrent();
+    if (win.focused) { window.focus(); field.focus(); } else close(false);
+  }, 50);
 });

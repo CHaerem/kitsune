@@ -479,6 +479,35 @@ test("commands that need a tab act on the real one, through what the sidebar use
   x.kill();
 });
 
+test("Enter pressed twice is one choice", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  const page = await openBar(ff, x, w.id);
+  const row = { kind: "address", url: "https://once.example/" };
+  await Promise.all([page.tell({ type: "choose", row }), page.tell({ type: "choose", row })]);
+  await wait(300);
+  assert.equal(ff.list(w.id).filter(t => t.url === row.url).length, 1);
+  x.kill();
+});
+
+test("a space switched to is the one that comes back after a restart", async () => {
+  // Found by the bar: going to a tab in another space saved that space, and ⌃1 back then
+  // saved nothing, so a restart came back showing the other space's tabs.
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  const saved = new Map();
+  x.b.sessions.setWindowValue = async (id, key, value) => { saved.set(id, value); };
+  await x.js(`switchSpace(${w.id}, "${C2}")`);
+  await wait(300);
+  assert.equal(saved.get(w.id), C2);
+  await x.js(`switchSpace(${w.id}, "${C1}")`);
+  await wait(300);
+  assert.equal(saved.get(w.id), C1);
+  x.kill();
+});
+
 test("a closed folder chosen in the bar opens, in its space", async () => {
   const ff = new FakeFirefox();
   const { w } = world(ff);

@@ -1635,7 +1635,8 @@ def wait_for_bar(m, want=True, tries=100):
 
 def bar_open(m, window="main()"):
     """Open the bar with its key from `window`, as you would; returns when you can type."""
-    m.js(H + f"const w = {window}; w.focus(); w.gBrowser.selectedBrowser.focus(); await wait(300); return 1;")
+    # Once the window really has the focus: asked for, it can come after the bar has opened, which would close it.
+    m.js(H + f"const w = {window}; w.focus(); for (let i = 0; i < 100 && Services.focus.activeWindow !== w; i++) await wait(50); w.gBrowser.selectedBrowser.focus(); await wait(100); return 1;")
     press(m, "k", CMD, SHIFT)
     if not wait_for_bar(m):
         raise RuntimeError("the command bar did not open")
@@ -1735,8 +1736,7 @@ def alone_command_bar(m):
 
     # From a second window the tab is a placeholder there: its real address is found, and it is pulled in.
     second = m.js(H + """let w = other(), made = false;
-      if (!w) { w = main().OpenBrowserWindow(); w.__smoke = true; made = true; await wait(3000); }
-      w.focus(); await wait(500);
+      if (!w) { w = main().OpenBrowserWindow(); w.__smoke = true; made = true; for (let i = 0; i < 200 && !w.gBrowserInit?.delayedStartupFinished; i++) await wait(50); await wait(2500); }
       const t = w.gBrowser.tabs.find(x => { const k = key(w, x), m0 = main().gBrowser.tabs.find(y => url(y).includes("smoke-bar-one")); return k && m0 && k === key(main(), m0); });
       return {made, role: t ? role(w, t) : null, own: t ? url(t) : null};""")
     bar_open(m, "other()")
@@ -1764,15 +1764,22 @@ def alone_command_bar(m):
     r = m.js(BAR + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("smoke-bar-address"); i++) await wait(100);
       const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId, bar: !!bar()};""")
     check("Enter on an address opens it in the active space", "smoke-bar-address" in r["url"] and r["space"] == start["space"], str(r))
+    # With an engine of the test's own as Firefox's default, so this stays out of a real search engine's logs.
+    SEARCH = H + """const {SearchService: s} = ChromeUtils.importESModule("moz-src:///toolkit/components/search/SearchService.sys.mjs");"""
+    m.js(SEARCH + """await s.init(); main().__engineBefore = (await s.getDefault()).name;
+      await s.addUserEngine({name: "Smoke bar engine", url: args[0] + "/smoke-engine?q={searchTerms}", alias: ""});
+      await s.setDefault(await s.getEngineByName("Smoke bar engine"), s.CHANGE_REASON.UNKNOWN); return 1;""", m.pages)
     bar_open(m)
     bar_keys(m, "smoke bar search words")
     rows = bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "search")
     check("plain text with no good match is a search", rows and rows[0]["kind"] == "search", str(rows[:2]))
     bar_keys(m, [ENTER])
     closed = wait_for_bar(m, False)
-    r = m.js(BAR + """const w = main(); for (let i = 0; i < 80 && !/smoke.bar.search/.test(url(w.gBrowser.selectedTab)); i++) await wait(100);
+    r = m.js(BAR + """const w = main(); for (let i = 0; i < 80 && !url(w.gBrowser.selectedTab).includes("smoke-engine"); i++) await wait(100);
       const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId};""")
-    check("a search opens with Firefox's own engine, in the active space, and asks nothing", closed and re.search("smoke.bar.search", r["url"]) and r["space"] == start["space"], str(r))
+    check("a search opens with Firefox's default engine, in the active space, and asks nothing", closed and "smoke-engine" in r["url"] and "smoke" in r["url"].split("q=")[-1] and r["space"] == start["space"], str(r))
+    m.js(SEARCH + """await s.setDefault(await s.getEngineByName(main().__engineBefore), s.CHANGE_REASON.UNKNOWN);
+      await s.removeEngine(await s.getEngineByName("Smoke bar engine")); await removeWhere((w, t) => url(t).includes("smoke-engine") || t.label.includes("smoke-engine")); return 1;""")
     bar_open(m)
     bar_keys(m, "smoke-bar-one")
     bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "tab")
@@ -1834,8 +1841,9 @@ def alone_command_bar(m):
     bar_keys(m, "Smoke bar folder")
     bar_keys(m, [ENTER])
     closed = wait_for_bar(m, False)
-    r = m.js(BAR + """const w = main(); await wait(500); const all = (await storage("%s", ["syncedTabs"])).syncedTabs; const space = "firefox-container-" + w.gBrowser.selectedTab.userContextId;
-      return {folders: Object.values(all).filter(e => e.own && e.name === "Smoke bar folder").map(e => e.cookieStoreId), space};""" % EXT_ID)
+    r = m.js(BAR + """const w = main(), space = "firefox-container-" + w.gBrowser.selectedTab.userContextId; let folders = [];
+      for (let i = 0; i < 50 && !folders.length; i++) { await wait(100); folders = Object.values((await storage("%s", ["syncedTabs"])).syncedTabs).filter(e => e.own && e.name === "Smoke bar folder").map(e => e.cookieStoreId); }
+      return {folders, space};""" % EXT_ID)
     check("the command makes a folder, asking its name in the field", closed and r["folders"] == [r["space"]], str(r))
     bar_open(m)
     bar_keys(m, "move to folder")
@@ -1847,7 +1855,8 @@ def alone_command_bar(m):
     check("a command with a list asks in the bar, and typing narrows it", len(rows) == 1, str(rows))
     bar_keys(m, [ENTER])
     wait_for_bar(m, False)
-    r = m.js(BAR + """const w = main(); await wait(700); const all = (await storage("%s", ["syncedTabs"])).syncedTabs, k = JSON.parse(key(w, w.gBrowser.selectedTab));
+    r = m.js(BAR + """const w = main(), k = JSON.parse(key(w, w.gBrowser.selectedTab)); let all = {};
+      for (let i = 0; i < 50 && all[all[k]?.parentKey]?.name !== "Smoke bar folder"; i++) { await wait(100); all = (await storage("%s", ["syncedTabs"])).syncedTabs; }
       return {url: all[k]?.url, folder: all[all[k]?.parentKey]?.name};""" % EXT_ID)
     check("Move to folder moves the tab you are on", r["folder"] == "Smoke bar folder", str(r))
     bar_open(m)

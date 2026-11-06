@@ -70,6 +70,7 @@ async function barClose(bar, refocus) {
   if (refocus) await browser.windows.update(bar.from, { focused: true }).catch(() => {});
 }
 
+browser.windows.onRemoved.addListener(id => { if (commandBar?.id === id) commandBar = null; });
 browser.commands.onCommand.addListener((name, tab) => {
   if ((name === "command-bar" || name === "command-bar-t") && tidierAlone && started) toggleCommandBar(tab).catch(noteError);
 });
@@ -114,6 +115,7 @@ async function barContext(windowId) {
 // A number in a label, when there are several: "Close 3 tabs".
 const barCount = (ctx, one, many) => ctx.picked.length > 1 ? many.replace("#", ctx.picked.length) : one;
 const barOnlyThisTab = ctx => ctx.picked.length === 1 && !!ctx.tab;
+const barMovable = ctx => ctx.picked.length > 0 && ctx.picked.every(t => !t.pinned);
 
 // --- The commands ------------------------------------------------------------------
 // One table: a name (the same as the shortcut's in manifest.json, if it has one, so the
@@ -145,11 +147,16 @@ const BAR_COMMANDS = [
   { name: "toggle-essential", label: ctx => ctx.tab.pinned ? "Remove from essentials" : "Make this tab an essential",
     when: ctx => barOnlyThisTab(ctx) && (ctx.tab.pinned || isWeb(ctx.tab.url)),
     run: ctx => sidebarAction(ctx.windowId, { type: "pin", tabId: ctx.tab.id, pinned: !ctx.tab.pinned }) },
-  { name: "move-to-folder", label: ctx => barCount(ctx, "Move to folder", "Move # tabs to folder"), when: ctx => ctx.picked.every(t => !t.pinned && syncKeyByTab.has(t.id)),
+  { name: "move-to-folder", label: ctx => barCount(ctx, "Move to folder", "Move # tabs to folder"), when: ctx => barMovable(ctx) && ctx.picked.every(t => syncKeyByTab.has(t.id) || isWeb(t.url)),
     list: ctx => [{ label: "No folder", value: "" }, ...foldersOf(ctx.all, ctx.picked[0].cookieStoreId).filter(f => !f.live).map(f => ({ label: f.name, value: f.key }))],
     placeholder: "Which folder?",
-    run: async (ctx, folder) => { for (const t of ctx.picked) await sidebarAction(ctx.windowId, { type: "moveTab", tabId: t.id, folder: folder || null }); } },
-  { name: "move-to-space", label: ctx => barCount(ctx, "Move to space", "Move # tabs to space"), when: ctx => ctx.picked.every(t => !t.pinned),
+    run: async (ctx, folder) => {
+      for (const t of ctx.picked) {
+        await register(t.id); // a tab opened a moment ago may have no record yet, and a move would only change its place
+        await sidebarAction(ctx.windowId, { type: "moveTab", tabId: t.id, folder: folder || null });
+      }
+    } },
+  { name: "move-to-space", label: ctx => barCount(ctx, "Move to space", "Move # tabs to space"), when: barMovable,
     list: ctx => ctx.spaces.filter(s => !ctx.picked.every(t => t.cookieStoreId === s.id)).map(s => ({ label: s.name, value: s.id, space: s.id })),
     placeholder: "Which space?",
     run: async (ctx, space) => { for (const t of ctx.picked) await sidebarAction(ctx.windowId, { type: "moveToSpace", tabId: t.id, space }); } },
@@ -211,7 +218,7 @@ async function barTabItems(ctx) {
   const list = await getList();
   const normal = new Set((await normalWindows()).map(w => w.id));
   const tabs = (await browser.tabs.query({})).filter(t => normal.has(t.windowId));
-  const here = s => s === ctx.space;
+  const here = s => s === ctx.space || s === NO_CONTAINER; // as the sidebar shows them
   const repsByKey = new Map();
   for (const t of tabs) {
     const key = syncKeyByTab.get(t.id);
@@ -385,7 +392,8 @@ browser.runtime.onConnect.addListener(port => {
   port.onMessage.addListener(async msg => {
     if (msg.type === "close") await barClose(bar, msg.refocus);
     else if (msg.type === "asked") await browser.storage.local.set({ [BAR_ASKED]: true });
-    else if (msg.type === "choose") {
+    else if (msg.type === "choose" && !bar.chosen) { // Enter pressed twice is one choice
+      bar.chosen = true;
       await barClose(bar, true); // first: only the window you are in may pull a tab in, and Firefox opens what follows in the top window
       if (bar.ctx) await barCarryOut(bar.ctx, msg).catch(noteError);
     }
