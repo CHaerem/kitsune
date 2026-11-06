@@ -24,9 +24,9 @@ export class FakeFirefox {
     this.nextTab = 100; this.nextWin = 1; this.ext = null;
     this.hooks = {}; this.log = [];
   }
-  addWindow({ focused = false, type = "normal" } = {}) {
+  addWindow({ focused = false, type = "normal", left = 100, top = 50, width = 1200, height = 800 } = {}) {
     const id = this.nextWin++;
-    const w = { id, type, incognito: false, focused, order: [] };
+    const w = { id, type, incognito: false, focused, order: [], left, top, width, height };
     this.wins.set(id, w);
     if (focused) this.focused = id;
     return w;
@@ -129,8 +129,11 @@ export class FakeFirefox {
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),
       getAll: async ({ populate } = {}) => [...ff.wins.values()].map(w => ({ id: w.id, type: w.type, incognito: w.incognito, focused: ff.focused === w.id, ...(populate ? { tabs: ff.list(w.id) } : {}) })),
-      get: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); return { id, type: w.type, incognito: w.incognito, focused: ff.focused === id }; },
+      get: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); return { id, type: w.type, incognito: w.incognito, focused: ff.focused === id, left: w.left, top: w.top, width: w.width, height: w.height }; },
       getLastFocused: async () => { const w = ff.wins.get(ff.focused); return w ? { id: w.id, focused: true } : { id: -1, focused: false }; },
+      create: async ({ type = "normal", url, left, top, width, height }) => { const w = ff.addWindow({ type, left, top, width, height }); ff.focused = w.id; b.windows.onCreated.fire({ id: w.id, type, incognito: false }); const t = ff.addTab(w.id, { url, active: true }); b.tabs.onCreated.fire(ff.snap(t)); b.windows.onFocusChanged.fire(w.id); return { id: w.id, type, left, top, width, height }; },
+      remove: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); for (const t of [...w.order]) ff.rm(t, { closing: true }); ff.wins.delete(id); if (ff.focused === id) ff.focused = undefined; b.windows.onRemoved.fire(id); },
+      update: async (id, { focused }) => { if (!ff.wins.has(id)) throw new Error(`Invalid window ID: ${id}`); if (focused) { ff.focused = id; b.windows.onFocusChanged.fire(id); } return { id }; },
     };
     b.sessions = {
       onChanged: ev(),
@@ -147,7 +150,7 @@ export class FakeFirefox {
     } };
     b.alarms = { create() {}, onAlarm: ev() };
     b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
-      sendNativeMessage: () => reject("no host") };
+      sendNativeMessage: () => reject("no host"), sendMessage: () => reject("Could not establish connection. Receiving end does not exist."), openOptionsPage: async () => {} };
     b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(c => ({ cookieStoreId: c, name: c, colorCode: "#000", icon: "circle" })), onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
     b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
     b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };

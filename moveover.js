@@ -75,6 +75,7 @@ async function moveBack() {
   await flushWrites();
   await browser.tabs.show((await browser.tabs.query({ hidden: true })).map(t => t.id)).catch(() => {});
   await resetSpaceKeys(); // Sidebery's again
+  for (const name of ["command-bar", "command-bar-t"]) await browser.commands.reset(name).catch(() => {}); // they stay, with no key and nothing to open
   await browser.storage.local.set({ tidierAlone: false });
   browser.runtime.reload();
 }

@@ -1616,6 +1616,302 @@ def alone_archive(m):
     check("archiving keeps a tab in a folder", late.get("kept", {}).get(s["kept"]) == "folder", str(late))
 
 
+# --- The command bar: real keys, in the window it really opens in. ---------------------
+ENTER, DOWN, UP, TAB = "", "", "", ""
+BAR = H + """const bar = () => wins().find(w => !w.toolbar.visible && w.gBrowser.tabs.some(t => url(t).includes("/commandbar/commandbar.html")));"""
+
+
+def bar_is_open(m):
+    return m.js(BAR + "return !!bar();")
+
+
+def wait_for_bar(m, want=True, tries=100):
+    for _ in range(tries):
+        if bar_is_open(m) == want:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def bar_open(m, window="main()"):
+    """Open the bar with its key from `window`, as you would; returns when you can type."""
+    m.js(H + f"const w = {window}; w.focus(); w.gBrowser.selectedBrowser.focus(); await wait(300); return 1;")
+    press(m, "k", CMD, SHIFT)
+    if not wait_for_bar(m):
+        raise RuntimeError("the command bar did not open")
+    for _ in range(100):
+        state = bar_page(m, "return doc.documentElement.dataset.readyMs || null;")
+        if state:
+            return int(state)
+        time.sleep(0.05)
+    raise RuntimeError("the command bar has no rows")
+
+
+def bar_keys(m, keys, *mods):
+    """Real key events, to the bar's window. The last one may close it, so the release can find no window."""
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if m.js("return !window.toolbar.visible;"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
+            break
+    acts = [{"type": "keyDown", "value": k} for k in mods]
+    for key in keys:
+        acts += [{"type": "keyDown", "value": key}, {"type": "keyUp", "value": key}]
+    acts += [{"type": "keyUp", "value": k} for k in reversed(mods)]
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "key", "id": "kb", "actions": acts}]})
+    try:
+        m.cmd("WebDriver:ReleaseActions")
+    except RuntimeError:
+        pass
+    m.chrome()
+
+
+def bar_page(m, script, *args):
+    """Run `script` in the bar's own page."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    result = None
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "/commandbar/commandbar.html" in m.cmd("WebDriver:GetCurrentURL"):
+            result = m.cmd("WebDriver:ExecuteScript", {"script": "const page = window.wrappedJSObject || window, doc = page.document; " + script, "args": list(args)})
+            break
+    m.chrome()
+    return result
+
+
+BAR_ROWS = """return [...doc.querySelectorAll(".row")].map(r => ({kind: r.dataset.kind, url: r.dataset.url || null, title: r.querySelector(".title").textContent, selected: r.classList.contains("selected")}));"""
+
+
+def bar_rows_until(m, test, tries=50):
+    """The rows, once `test(rows)` holds (rows are drawn as the keys arrive)."""
+    rows = []
+    for _ in range(tries):
+        rows = bar_page(m, BAR_ROWS) or []
+        if test(rows):
+            return rows
+        time.sleep(0.05)
+    return rows
+
+
+def alone_command_bar(m):
+    start = m.js(H + """const w = main(); w.focus(); await wait(300); const space = w.gBrowser.selectedTab.userContextId;
+      const others = [1, 2, 3].filter(c => c !== space);
+      const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-bar-one", {userContextId: others[0], inBackground: true});
+      for (let i = 0; i < 100 && !key(w, t); i++) await wait(100);
+      return {space, other: others[0], selected: url(w.gBrowser.selectedTab), hidden: t.hidden, normal: wins().length};""")
+    ready = bar_open(m)
+    print(f"INFO  the command bar is ready {ready} ms after the key", flush=True)
+    r = bar_page(m, """return {focused: doc.activeElement?.id === "field" && doc.hasFocus(), rows: doc.querySelectorAll(".row").length};""")
+    check("the key opens the bar, ready to type", r["focused"] and r["rows"] > 0, str(r))
+    place = m.js(BAR + """const w = main(), b = bar(); return {tabs: b.gBrowser.tabs.length, centre: Math.abs((b.screenX + b.outerWidth / 2) - (w.screenX + w.outerWidth / 2)),
+      inside: b.screenY >= w.screenY && b.screenY + b.outerHeight <= w.screenY + w.outerHeight, kept: b.gBrowser.tabs.filter(t => key(b, t) || role(b, t)).length};""")
+    check("it is a small window of its own, centred over the one you are in, and no part of tab sync",
+          place["tabs"] == 1 and place["centre"] < 8 and place["inside"] and place["kept"] == 0, str(place))
+    # Esc, the key again, and the focus going elsewhere each close it, and nothing has moved.
+    bar_keys(m, [ESC])
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """await wait(200); const w = main(); return {selected: url(w.gBrowser.selectedTab), focus: Services.focus.activeWindow === w};""")
+    check("Esc closes it, back in the same tab of the same window", closed and r["selected"] == start["selected"] and r["focus"], str(r))
+    bar_open(m)
+    bar_keys(m, ["k"], CMD, SHIFT)
+    check("the key closes it again", wait_for_bar(m, False))
+    bar_open(m)
+    m.js(BAR + "main().focus(); return 1;")
+    check("losing the focus closes it", wait_for_bar(m, False))
+
+    # A tab of another space: unloaded here or not, Enter goes to it and takes you there.
+    bar_open(m)
+    bar_keys(m, "smoke-bar-one")
+    rows = bar_rows_until(m, lambda rows: rows and "smoke-bar-one" in (rows[0]["url"] or ""))
+    check("typing finds a tab of another space, by its address", rows and rows[0]["kind"] == "tab" and rows[0]["selected"], str(rows[:3]))
+    bar_keys(m, [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """const w = main(); await wait(800); const t = w.gBrowser.selectedTab;
+      return {url: url(t), space: t.userContextId, shown: [...new Set(w.gBrowser.tabs.filter(x => !x.pinned && !x.hidden && x.userContextId).map(x => x.userContextId))]};""")
+    check("Enter goes to it, in its space, and the bar closes", closed and "smoke-bar-one" in r["url"] and r["space"] == start["other"] and r["shown"] == [start["other"]], str(r))
+    m.js(H + "const w = main(); w.focus(); return 1;")
+    press(m, str(start["space"]), CTRL)
+    time.sleep(1)
+
+    # From a second window the tab is a placeholder there: its real address is found, and it is pulled in.
+    second = m.js(H + """let w = other(), made = false;
+      if (!w) { w = main().OpenBrowserWindow(); w.__smoke = true; made = true; await wait(3000); }
+      w.focus(); await wait(500);
+      const t = w.gBrowser.tabs.find(x => { const k = key(w, x), m0 = main().gBrowser.tabs.find(y => url(y).includes("smoke-bar-one")); return k && m0 && k === key(main(), m0); });
+      return {made, role: t ? role(w, t) : null, own: t ? url(t) : null};""")
+    bar_open(m, "other()")
+    bar_keys(m, "smoke-bar-one")
+    rows = bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "tab")
+    check("a placeholder is found by the real tab's address", second["role"] == "ghost" and "ghost.html" in second["own"] and rows and "smoke-bar-one" in (rows[0]["url"] or "") and "ghost.html" not in rows[0]["url"], f"{second} {rows[:2]}")
+    bar_keys(m, [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """await wait(1500); const w = other(), t = w.gBrowser.selectedTab, k = key(w, t);
+      return {url: url(t), role: role(w, t), loaded: !!t.linkedPanel, inMain: main().gBrowser.tabs.filter(x => key(main(), x) === k).map(x => role(main(), x)), space: t.userContextId};""")
+    check("choosing it from there pulls the real tab in", closed and "smoke-bar-one" in r["url"] and r["role"] == "live" and r["inMain"] == ["ghost"] and r["space"] == start["other"], str(r))
+    if second["made"]:
+        m.js(H + "other().close(); await wait(1500); return 1;")
+    m.js(H + "main().focus(); await wait(300); return 1;")
+    press(m, str(start["space"]), CTRL)
+    time.sleep(1)
+
+    # An address goes there, in the active space; a search too; ⌘↵ opens instead of going.
+    bar_open(m)
+    bar_keys(m, "example.org/?smoke-bar-address")
+    rows = bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "address")
+    check("what looks like an address comes first", rows and rows[0]["kind"] == "address" and any(x["kind"] == "search" for x in rows), str(rows[:2]))
+    bar_keys(m, [ENTER])
+    wait_for_bar(m, False)
+    r = m.js(BAR + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("smoke-bar-address"); i++) await wait(100);
+      const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId, bar: !!bar()};""")
+    check("Enter on an address opens it in the active space", "smoke-bar-address" in r["url"] and r["space"] == start["space"], str(r))
+    bar_open(m)
+    bar_keys(m, "smoke bar search words")
+    rows = bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "search")
+    check("plain text with no good match is a search", rows and rows[0]["kind"] == "search", str(rows[:2]))
+    bar_keys(m, [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """const w = main(); for (let i = 0; i < 80 && !/smoke.bar.search/.test(url(w.gBrowser.selectedTab)); i++) await wait(100);
+      const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId};""")
+    check("a search opens with Firefox's own engine, in the active space, and asks nothing", closed and re.search("smoke.bar.search", r["url"]) and r["space"] == start["space"], str(r))
+    bar_open(m)
+    bar_keys(m, "smoke-bar-one")
+    bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "tab")
+    bar_keys(m, [ENTER], CMD)
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("smoke-bar-one"); i++) await wait(100);
+      const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId};""")
+    check("⌘↵ opens it in a new tab here instead of going to the one in its own space", closed and "smoke-bar-one" in r["url"] and r["space"] == start["space"], str(r))
+
+    # ↑↓ move, ⇥ completes, and a real click chooses too.
+    bar_open(m)
+    bar_keys(m, "example.org/?smoke-bar-a")
+    bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "address")
+    bar_keys(m, [DOWN])
+    rows = bar_rows_until(m, lambda rows: len(rows) > 1 and rows[1]["selected"])
+    check("↓ moves down the rows", len(rows) > 1 and rows[1]["selected"] and not rows[0]["selected"], str(rows[:2]))
+    bar_page(m, """doc.getElementById("field").select();""")
+    bar_keys(m, "smoke-bar-address")
+    bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "tab")
+    bar_keys(m, [TAB])
+    field = bar_page(m, """return {value: doc.getElementById("field").value, focused: doc.activeElement?.id === "field"};""")
+    check("⇥ completes to the address of the row, and stays in the field", field["value"] == "example.org/?smoke-bar-address" and field["focused"], str(field))
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "/commandbar/commandbar.html" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    row = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": ".row[data-kind=tab]"})
+    m.cmd("WebDriver:ElementClick", {"id": next(iter(row.values()))})
+    m.chrome()
+    closed = wait_for_bar(m, False)
+    r = m.js(H + """await wait(500); return url(main().gBrowser.selectedTab);""")
+    check("a click on a row chooses it", closed and "smoke-bar-address" in r, str(r))
+
+    # What was closed can be found, and comes back in its space.
+    r = m.js(H + """const w = main(), t = w.gBrowser.selectedTab; await wait(1000); w.gBrowser.removeTab(t); await wait(1500); return 1;""")
+    bar_open(m)
+    bar_keys(m, "smoke-bar-address")
+    rows = bar_rows_until(m, lambda rows: any(x["kind"] == "closed" for x in rows))
+    check("a closed tab can be found", any(x["kind"] == "closed" and "smoke-bar-address" in x["url"] for x in rows), str(rows[:3]))
+    at = next((i for i, x in enumerate(rows) if x["kind"] == "closed"), 0)
+    bar_keys(m, [DOWN] * at + [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(H + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("smoke-bar-address"); i++) await wait(100);
+      const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId};""")
+    check("and Enter brings it back in its space", closed and "smoke-bar-address" in r["url"] and r["space"] == start["space"], str(r))
+
+    # Commands: a question in the field, a choice from a list, and Esc goes back one step.
+    bar_open(m)
+    bar_keys(m, "new folder")
+    rows = bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "command")
+    bar_keys(m, [ENTER])
+    time.sleep(0.2)
+    bar_keys(m, [ESC])
+    still = bar_page(m, """return doc.getElementById("field").value;""")
+    check("Esc in a question goes back one step", still == "new folder", repr(still))
+    bar_keys(m, [ENTER])
+    time.sleep(0.2)
+    bar_keys(m, "Smoke bar folder")
+    bar_keys(m, [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """const w = main(); await wait(500); const all = (await storage("%s", ["syncedTabs"])).syncedTabs; const space = "firefox-container-" + w.gBrowser.selectedTab.userContextId;
+      return {folders: Object.values(all).filter(e => e.own && e.name === "Smoke bar folder").map(e => e.cookieStoreId), space};""" % EXT_ID)
+    check("the command makes a folder, asking its name in the field", closed and r["folders"] == [r["space"]], str(r))
+    bar_open(m)
+    bar_keys(m, "move to folder")
+    bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "command")
+    bar_keys(m, [ENTER])
+    time.sleep(0.2)
+    bar_keys(m, "smoke bar")
+    rows = bar_rows_until(m, lambda rows: len(rows) == 1 and rows[0]["title"] == "Smoke bar folder")
+    check("a command with a list asks in the bar, and typing narrows it", len(rows) == 1, str(rows))
+    bar_keys(m, [ENTER])
+    wait_for_bar(m, False)
+    r = m.js(BAR + """const w = main(); await wait(700); const all = (await storage("%s", ["syncedTabs"])).syncedTabs, k = JSON.parse(key(w, w.gBrowser.selectedTab));
+      return {url: all[k]?.url, folder: all[all[k]?.parentKey]?.name};""" % EXT_ID)
+    check("Move to folder moves the tab you are on", r["folder"] == "Smoke bar folder", str(r))
+    bar_open(m)
+    bar_keys(m, "go to space")
+    rows = bar_rows_until(m, lambda rows: sum(x["kind"] == "command" for x in rows) >= 2)
+    bar_keys(m, [DOWN, UP, ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(BAR + """await wait(1000); const w = main(); return w.gBrowser.selectedTab.userContextId;""")
+    check("Go to space switches space", closed and r != start["space"], f"{r} {start} {rows}")
+    m.js(H + "main().focus(); await wait(200); return 1;")
+    press(m, str(start["space"]), CTRL)
+    time.sleep(1)
+
+    # History and bookmarks, once allowed: one quiet row, asked in the bar's own window.
+    bar_open(m)
+    bar_keys(m, "example")
+    rows = bar_rows_until(m, lambda rows: rows and rows[-1]["kind"] == "ask")
+    check("one quiet row offers history and bookmarks", rows and rows[-1]["kind"] == "ask", str(rows[-2:]))
+    bar_keys(m, [UP, ENTER])  # round from the top to the last row
+    r = {}
+    for _ in range(50):
+        r = m.js(BAR + """const b = bar(), n = b?.PopupNotifications.getNotification("addon-webext-permissions", b.gBrowser.selectedBrowser);
+          return {bar: !!b, prompt: !!n, shown: n ? b.document.getElementById("addon-webext-permissions-notification")?.getBoundingClientRect().height > 0 : false};""")
+        if r["shown"]:
+            break
+        time.sleep(0.1)
+    check("Firefox asks, and the bar waits for the answer", r.get("bar") and r.get("shown"), str(r))
+    m.js(BAR + """const b = bar(); b.document.getElementById("addon-webext-permissions-notification")?.button.click(); await wait(500); return 1;""")
+    rows = bar_rows_until(m, lambda rows: not any(x["kind"] == "ask" for x in rows))
+    check("once allowed the row is gone and the bar still open", bar_is_open(m) and not any(x["kind"] == "ask" for x in rows), str(rows[-2:]))
+    r = bar_page(m, """const f = doc.getElementById("field"); return {focused: doc.activeElement === f && doc.hasFocus(), history: !!page.browser.history};""")
+    check("and you can go on typing", r["focused"] and r["history"], str(r))
+    bar_keys(m, [ESC])
+    wait_for_bar(m, False)
+    m.js(H + """const {PlacesUtils} = ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs");
+      await PlacesUtils.bookmarks.insert({url: "https://example.org/?smoke-bar-bookmark", title: "Smoke bar saved page", parentGuid: PlacesUtils.bookmarks.unfiledGuid});
+      await PlacesUtils.history.insert({url: "https://example.org/?smoke-bar-visited", title: "Smoke bar visited page", visits: [{date: new Date()}]});
+      return 1;""")
+    bar_open(m)
+    bar_keys(m, "smoke bar")
+    rows = bar_rows_until(m, lambda rows: {"history", "bookmark"} <= {x["kind"] for x in rows})
+    check("history and bookmarks are searched too, after what is open", {"history", "bookmark"} <= {x["kind"] for x in rows}, str(rows))
+    at = next((i for i, x in enumerate(rows) if x["kind"] == "bookmark"), 0)
+    bar_keys(m, [DOWN] * at + [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(H + """const w = main(); for (let i = 0; i < 50 && !url(w.gBrowser.selectedTab).includes("smoke-bar-bookmark"); i++) await wait(100);
+      const t = w.gBrowser.selectedTab; return {url: url(t), space: t.userContextId};""")
+    check("and open a new tab in the active space", closed and "smoke-bar-bookmark" in r["url"] and r["space"] == start["space"], str(r))
+    m.js(H + """const {PlacesUtils} = ChromeUtils.importESModule("resource://gre/modules/PlacesUtils.sys.mjs");
+      await PlacesUtils.bookmarks.remove((await PlacesUtils.bookmarks.fetch({url: "https://example.org/?smoke-bar-bookmark"})).guid);
+      await PlacesUtils.history.remove(["https://example.org/?smoke-bar-visited", "https://example.org/?smoke-bar-bookmark"]);
+      return 1;""")
+
+    # Nothing stays behind.
+    sidebar_page(m, """await wait(300); const key = [...doc.querySelectorAll(".folder")].find(x => x.querySelector(".head .title")?.textContent === "Smoke bar folder")?.dataset.key;
+      if (key) { send({type: "deleteFolder", key}); await wait(500); }""")
+    left = m.js(BAR + """await removeWhere((w, t) => /smoke.bar/.test(url(t)) || /smoke.bar/.test(t.label) || url(t).includes("/sidebar/sidebar.html"));
+      return {bars: wins().filter(w => !w.toolbar.visible).map(w => url(w.gBrowser.selectedTab))};""")
+    check("no window stays behind", not left["bars"], str(left))
+    m.js(H + "main().focus(); return 1;")
+    press(m, "1", CTRL)
+    time.sleep(1)
+
+
 def alone_end(m):
     no_problems(m, "with Tidier alone")
 
@@ -1632,7 +1928,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_command_bar, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

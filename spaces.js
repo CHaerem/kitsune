@@ -235,6 +235,7 @@ async function setSpaceKeys() {
   if (commands.some(c => c.name === "_execute_sidebar_action" && !c.shortcut)) {
     await browser.commands.update({ name: "_execute_sidebar_action", shortcut: `${control}+Shift+S` }).catch(noteError);
   }
+  await giveCommandBarKey(commands); // commandbar.js
 }
 
 async function resetSpaceKeys() {
