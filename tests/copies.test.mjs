@@ -224,6 +224,20 @@ test("the settings page gets one line per space, before anything is written", as
   x.kill();
 });
 
+test("an essential in no container needs no name, and stays in none", async () => {
+  const ff = machine();
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.data.essentials = [{ key: "bare", url: "https://bare.example.org/", cookieStoreId: "firefox-default", title: "Bare" }];
+  const lines = plain(await x.js("copySummary")(copy));
+  assert.equal(lines["firefox-default"].name, "No container");
+  assert.equal(lines["firefox-default"].essentials, 1);
+  await x.js("mergeCopy")(copy, ["firefox-default"]);
+  await wait(300);
+  assert.equal(ff.store.essentials.find(e => e.key === "bare").cookieStoreId, "firefox-default");
+  x.kill();
+});
+
 test("a file that is not a copy says so, and neither kind passes for the other", async () => {
   const ff = machine();
   const x = await run(ff);
