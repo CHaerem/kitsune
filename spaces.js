@@ -177,6 +177,7 @@ browser.tabs.onCreated.addListener(tab => {
 });
 browser.tabs.onUpdated.addListener((tabId, change) => {
   if (!change.url) return;
+  if (isWeb(change.url) && littleTakes(tabId, change.url)) return; // littlewindow.js
   if (isWeb(change.url) && firstPage.delete(tabId)) serial(() => byRule(tabId, change.url));
   else if (newTabs.has(tabId) && (isWeb(change.url) || change.url === "about:newtab" || change.url === "about:home")) serial(() => intoSpace(tabId));
 }, { properties: ["url"] });
@@ -250,6 +251,7 @@ async function startSpaces() {
   if (!tidierAlone) return;
   await setSpaceKeys();
   startMenus(); // ownfolders.js
+  await startLittleWindow(); // littlewindow.js, after startMenus: that one clears all menus
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
     const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);

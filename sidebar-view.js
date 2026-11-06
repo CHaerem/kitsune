@@ -51,7 +51,7 @@ async function viewFor(windowId) {
     const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
     (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
   }
-  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
+  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose, little: await littleRows(spaces) };
 }
 
 function viewSoon(windowId) {
@@ -110,6 +110,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
+  else if (msg.type.startsWith("little:")) await littleAction(windowId, msg); // littlewindow.js
   viewSoon(windowId);
 }
 

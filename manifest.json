@@ -53,6 +53,7 @@
       "livefolders.js",
       "spaces.js",
       "ownfolders.js",
+      "littlewindow.js",
       "copies.js",
       "moveover.js",
       "sidebar-view.js",

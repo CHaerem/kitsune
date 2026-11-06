@@ -47,6 +47,11 @@
     <label>Close tabs not used for <input type="number" id="archive-hours" min="0" step="1"> hours (0: never)</label>
   </section>
 
+  <section id="little-section" hidden>
+    <h2>Links from other apps</h2>
+    <label class="line"><input type="checkbox" id="little-window"> Open them in a small window, to read and close, or to keep</label>
+  </section>
+
   <section>
     <h2>A copy of your essentials and folders</h2>
     <p id="copy-state"></p>
@@ -62,5 +67,6 @@
 
   <p class="hint" id="version"></p>
   <script src="settings.js"></script>
+  <script src="littlewindow.js"></script>
 </body>
 </html>

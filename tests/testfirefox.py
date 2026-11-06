@@ -73,6 +73,7 @@ TEST_PREFS = {
 PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+    "/links": "<title>Links</title><a id='a' href='/ticking?little-from-a-link' style='font-size:40px'>a link</a>",
 }
 
 

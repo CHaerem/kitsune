@@ -1464,6 +1464,232 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+# A link from another app, the way it reaches Firefox: on a Mac as on the command line, the
+# last step is openURI with OPEN_EXTERNAL. What comes before it (the OS, the app coming to
+# the front) cannot be done in a headless Firefox.
+LITTLE = H + """
+  const popups = () => wins().filter(w => !w.toolbar.visible);
+  const external = u => main().browserDOMWindow.openURI(Services.io.newURI(u), null, Ci.nsIBrowserDOMWindow.OPEN_DEFAULTWINDOW, Ci.nsIBrowserDOMWindow.OPEN_EXTERNAL, Services.scriptSecurityManager.getSystemPrincipal());
+  const until = async (f, ms = 10000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(50)) { const v = f(); if (v) return v; } return f(); };
+  const onSpaceTab = async () => { const w = main(); w.focus(); const t = w.gBrowser.tabs.find(t => !t.hidden && !t.pinned && t.userContextId); w.gBrowser.selectedTab = t; await wait(500); return t; };
+  const record = async () => Object.values((await storage("%s", ["syncedTabs"])).syncedTabs);
+  const shownIn = p => { const t = p.gBrowser.selectedTab; return {url: url(t), space: t.userContextId, tabs: p.gBrowser.tabs.length, width: p.outerWidth, height: p.outerHeight, title: p.document.title}; };
+""" % EXT_ID
+
+
+def little_menu(m, handle_part, selector, item):
+    """Right-click `selector` in the page of a tab with this address, for real, and choose `item` in Firefox's menu."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
+        if handle_part in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": selector})
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "little", "parameters": {"pointerType": "mouse"}, "actions": [
+        {"type": "pointerMove", "x": 0, "y": 0, "origin": {"element-6066-11e4-a52e-4f735466cecf": list(found.values())[0]}},
+        {"type": "pointerDown", "button": 2}, {"type": "pointerUp", "button": 2}]}]})
+    m.chrome()
+    return m.js(LITTLE + """const [part, item] = args;
+      const w = wins().find(w => url(w.gBrowser.selectedTab).includes(part)), menu = w.document.getElementById("contentAreaContextMenu");
+      await until(() => menu.state === "open");
+      await wait(300); // Tidier fills it in as it opens
+      const items = () => [...menu.querySelectorAll("menuitem, menu")].filter(e => e.id.includes("tidier") && !e.hidden);
+      const seen = items().map(e => e.label);
+      const chosen = items().find(e => e.label === item);
+      const inside = chosen?.closest("menu") ? [...chosen.closest("menu").querySelectorAll("menuitem")].map(e => e.label) : [];
+      chosen?.doCommand(); // a hidden submenu's item cannot be activated, and its command is what counts
+      await wait(200);
+      menu.hidePopup();
+      return {seen, inside, chosen: !!chosen};""", handle_part, item)
+
+
+def alone_little_window(m):
+    base = m.pages + "/ticking?little-"
+    # Two windows, as tabs show in both. (alone_second_window may have opened one.)
+    opened = m.js(H + """if (other()) return false;
+      const w = main().OpenBrowserWindow(); w.__smoke = true;
+      for (let i = 0; i < 100 && !(w.gBrowser && w.gBrowser.tabs.filter(t => role(w, t)).length); i++) await wait(100);
+      await wait(1500); main().focus(); await wait(300); return true;""")
+
+    # A link from another app, with a space's tab selected: Firefox gives it that tab's container.
+    r = m.js(LITTLE + """const w = main(); const on = await onSpaceTab(), n = w.gBrowser.tabs.length;
+      external(args[0]);
+      const p = await until(() => popups()[0]);
+      if (!p) return {none: true};
+      await until(() => url(p.gBrowser.selectedTab).includes("little-one"));
+      await wait(2500); // long past the moment tab sync registers a new tab
+      return {...shownIn(p), wanted: on.userContextId, back: w.gBrowser.selectedTab.userContextId, more: w.gBrowser.tabs.length - n,
+              elsewhere: wins().filter(x => x !== p).flatMap(x => x.gBrowser.tabs.filter(t => url(t).includes("little-one") || String(t.label).includes("little-one"))).length,
+              recorded: (await record()).some(e => (e.url || "").includes("little-one")), active: Services.focus.activeWindow === p,
+              inTitle: p.document.title.includes("127.0.0.1")};""", base + "one")
+    check("a link from another app opens in a small window", not r.get("none") and r["tabs"] == 1, str(r))
+    check("about 900 by 700", r.get("width") == 900 and r.get("height") == 700, str(r))
+    check("in the space you are in", r.get("space") == r.get("wanted"), str(r))
+    check("and it has the keyboard", r.get("active"), str(r))
+    check("its address is in the title, for want of an address bar", r.get("inTitle"), str(r))
+    check("your window stays as it was", r.get("more") == 0 and r.get("back") == r.get("wanted"), str(r))
+    check("it is not in tab sync until kept", r.get("elsewhere") == 0 and not r.get("recorded"), str(r))
+
+    # The row in the sidebar, which brings it back and keeps it.
+    r = sidebar_page(m, """
+      for (let i = 0; i < 100 && !doc.querySelector("#little .little"); i++) await wait(100);
+      const row = doc.querySelector("#little .little");
+      if (!row) return {none: true};
+      const seen = {keep: row.querySelector(".keep").textContent, rows: doc.querySelectorAll("#little .little").length, height: row.getBoundingClientRect().height};
+      return seen;""")
+    check("the sidebar has one quiet row for it, naming the space", r.get("rows") == 1 and r.get("keep", "").startswith("Keep in "), str(r))
+    r = m.js(LITTLE + "return {front: Services.focus.activeWindow === popups()[0]};")
+    check("(the test's own page took the keyboard)", not r["front"], str(r))
+    sidebar_page(m, """doc.querySelector("#little .little").click(); await wait(600);""")
+    r = m.js(LITTLE + "return {front: Services.focus.activeWindow === popups()[0]};")
+    check("a click on the row brings the small window back", r["front"], str(r))
+
+    r = m.js(LITTLE + """const p = popups()[0]; return {ticks: Number(p.gBrowser.selectedBrowser.contentTitle) || 0};""")
+    ticks = r["ticks"]
+    r = sidebar_page(m, """
+      doc.querySelector("#little .keep").click();
+      for (let i = 0; i < 100 && doc.querySelector("#little .little"); i++) await wait(100);
+      await wait(800);
+      const first = doc.querySelector("#tabs > .tab");
+      return {rowGone: !doc.querySelector("#little .little"), firstIsSelected: first?.classList.contains("active"), first: first?.title};""")
+    check("Keep is one click, and the row goes", r.get("rowGone"), str(r))
+    check("kept, it is first among today's tabs, and selected", r.get("firstIsSelected"), str(r))
+    r = m.js(LITTLE + """await wait(800); const w = main(), o = other();
+      const t = w.gBrowser.tabs.find(t => url(t).includes("little-one"));
+      if (!t) return {none: true, popups: popups().length};
+      const k = key(w, t), there = o.gBrowser.tabs.filter(x => key(o, x) === k);
+      const rows = x => x.gBrowser.tabs.filter(y => !y.pinned && key(x, y) && y.userContextId === t.userContextId && !value(x, y, "folder"));
+      return {popups: popups().length, selected: w.gBrowser.selectedTab === t, space: t.userContextId, ticks: Number(t.linkedBrowser.contentTitle) || 0, role: role(w, t),
+              there: there.length, thereRole: there[0] && role(o, there[0]), firstHere: key(w, rows(w)[0]) === k, firstThere: key(o, rows(o)[0]) === k,
+              recorded: (await record()).some(e => (e.url || "").includes("little-one"))};""")
+    check("the small window closes with it", r.get("popups") == 0, str(r))
+    check("it is your tab now: live here, a placeholder in the other window, in the record",
+          r.get("role") == "live" and r.get("there") == 1 and r.get("thereRole") == "ghost" and r.get("recorded"), str(r))
+    check("in the same place in both windows", r.get("firstHere") and r.get("firstThere"), str(r))
+    check("the page was not loaded again", r.get("ticks", 0) >= ticks > 0, f"{ticks} then {r}")
+
+    # Closing it leaves nothing.
+    r = m.js(LITTLE + """await onSpaceTab(); const before = (await record()).length;
+      external(args[0]);
+      const p = await until(() => popups()[0]);
+      await until(() => url(p.gBrowser.selectedTab).includes("little-two"));
+      p.BrowserCommands.closeTabOrWindow(); // ⌘W
+      await until(() => !popups().length); await wait(800);
+      return {popups: popups().length, more: (await record()).length - before,
+              left: wins().flatMap(x => x.gBrowser.tabs.filter(t => url(t).includes("little-two"))).length};""", base + "two")
+    check("⌘W closes it, and it leaves nothing", r["popups"] == 0 and r["more"] == 0 and r["left"] == 0, str(r))
+    r = sidebar_page(m, """await wait(300); return {rows: doc.querySelectorAll("#little .little").length};""")
+    check("and the row goes with it", r["rows"] == 0, str(r))
+
+    # A tab opened any other way is what it always was.
+    r = m.js(LITTLE + """const w = main(); await onSpaceTab();
+      const out = {};
+      const tryIt = async (name, open) => {
+        const n = wins().length; open(); await wait(1500);
+        out[name] = popups().length;
+        for (const p of popups()) p.close();
+        await until(() => !popups().length);
+      };
+      const principal = Services.scriptSecurityManager.getSystemPrincipal();
+      await tryIt("bookmark", () => w.openTrustedLinkIn(args[0] + "bookmark", "tab"));
+      await tryIt("address", () => { w.gURLBar.value = args[0] + "address"; w.gURLBar.focus(); w.gURLBar.handleCommand(new w.KeyboardEvent("keydown", {altKey: true, key: "Enter"})); });
+      await tryIt("related", () => w.openLinkIn(args[0] + "related", "tab", {triggeringPrincipal: principal, relatedToCurrent: true}));
+      await tryIt("background", () => w.gBrowser.addTrustedTab(args[0] + "background", {inBackground: true}));
+      await tryIt("newtab", () => w.BrowserCommands.openTab());
+      const closed = w.gBrowser.tabs.find(t => url(t).includes("little-bookmark"));
+      if (closed) { w.gBrowser.removeTab(closed); await wait(800); await tryIt("reopened", () => w.SessionStore.undoCloseTab(w, 0)); }
+      for (const name of ["bookmark", "address", "related", "background"]) out[name + "Here"] = w.gBrowser.tabs.some(t => url(t).includes("little-" + name));
+      return out;""", base)
+    check("a bookmark, an address, a link from a page and a new tab are not small windows",
+          not any(r.get(k) for k in ("bookmark", "address", "related", "background", "newtab", "reopened")), str(r))
+    check("they stay in your list", r.get("addressHere") and r.get("relatedHere") and r.get("backgroundHere"), str(r))
+    m.js(LITTLE + """await removeWhere((x, y) => url(y).includes("little-")); return 1;""")
+
+    # While another app has the keyboard. A window Firefox does not count as a browser is the
+    # nearest a headless Firefox has: extensions are told that no window has the focus.
+    r = m.js(LITTLE + """await onSpaceTab();
+      const d = Services.ww.openWindow(null, "chrome://browser/content/aboutDialog.xhtml", "_blank", "chrome,all,dialog=no", null);
+      await wait(1000); d.focus(); await wait(600);
+      const away = Services.focus.activeWindow === d;
+      external(args[0]);
+      const p = await until(() => popups()[0]);
+      await wait(600);
+      const got = p ? {...shownIn(p), front: Services.focus.activeWindow === p} : {none: true};
+      d.close(); p?.close(); await until(() => !popups().length); main().focus(); await wait(300);
+      return {away, ...got};""", base + "away")
+    check("a link from another app while Firefox is behind it", r.get("away") and r.get("tabs") == 1 and r.get("front"), str(r))
+
+    # A selected tab with no container (a page like this one): into the space you are in.
+    # A rule: into its space. Both are opened again there, and the first tab goes.
+    r = m.js(LITTLE + """const w = main(); const space = (await onSpaceTab()).userContextId;
+      const plain = w.gBrowser.addTrustedTab("about:about"); w.gBrowser.selectedTab = plain; await wait(600);
+      external(args[0]);
+      const p = await until(() => popups()[0]);
+      if (!p) return {none: true};
+      await until(() => url(p.gBrowser.selectedTab).includes("little-plain"));
+      const got = {...shownIn(p), wanted: space, left: w.gBrowser.tabs.filter(t => url(t).includes("little-plain")).length};
+      p.close(); await until(() => !popups().length); w.gBrowser.removeTab(plain); await wait(300);
+      return got;""", base + "plain")
+    check("with a page without a container selected, it opens in the space you are in", r.get("space") == r.get("wanted") and r.get("left") == 0, str(r))
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "little-ruled", "space": "firefox-container-2"}]})
+    r = m.js(LITTLE + """const w = main(); await onSpaceTab(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => !t.hidden && !t.pinned && t.userContextId === 1) ?? w.gBrowser.selectedTab; await wait(400);
+      const on = w.gBrowser.selectedTab.userContextId;
+      external(args[0]);
+      const p = await until(() => popups()[0]);
+      if (!p) return {none: true};
+      await until(() => url(p.gBrowser.selectedTab).includes("little-ruled"));
+      await wait(800);
+      const got = {...shownIn(p), on, left: w.gBrowser.tabs.filter(t => url(t).includes("little-ruled")).length, popups: popups().length};
+      p.close(); await until(() => !popups().length);
+      return got;""", base + "ruled")
+    check("a rule decides its space, and nothing sends it back", r.get("space") == 2 and r.get("left") == 0 and r.get("popups") == 1, str(r))
+    extension_message(m, {"type": "settings:rules", "rules": []})
+
+    # Firefox's own menus, opened for real on a real page.
+    m.js(H + """const w = main(); w.focus(); const t = w.gBrowser.addTrustedTab(args[0], {userContextId: 1}); w.gBrowser.selectedTab = t; await wait(1500); return 1;""", m.pages + "/links?little-page")
+    r = little_menu(m, "little-page", "#a", "Small window")
+    check("a link's menu offers a small window and the other spaces", "Small window" in r["inside"] and len(r["inside"]) >= 3, str(r))
+    r = m.js(LITTLE + """const p = await until(() => popups()[0]);
+      if (!p) return {none: true};
+      await until(() => url(p.gBrowser.selectedTab).includes("little-from-a-link"));
+      return shownIn(p);""")
+    check("it opens in a small window, in the page's space", r.get("space") == 1 and r.get("tabs") == 1, str(r))
+    r = little_menu(m, "little-from-a-link", "body", "Keep in Space 1")
+    check("in a small window the page's menu has Keep", r["chosen"], str(r))
+    r = m.js(LITTLE + """await until(() => !popups().length); await wait(600); const w = main();
+      const t = w.gBrowser.tabs.find(t => url(t).includes("little-from-a-link"));
+      return {popups: popups().length, here: !!t, selected: w.gBrowser.selectedTab === t, role: t && role(w, t)};""")
+    check("and Keep from there keeps it", r["popups"] == 0 and r["here"] and r["selected"] and r["role"] == "live", str(r))
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("little-page")); await wait(500); return 1;""")
+    r = little_menu(m, "little-page", "#a", "Space 2")
+    check("a link can be opened in another space", r["chosen"], str(r))
+    r = m.js(LITTLE + """const w = main(); const t = await until(() => w.gBrowser.tabs.find(t => t.userContextId === 2 && url(t).includes("little-from-a-link")));
+      await wait(1500);
+      return {there: !!t, hidden: t?.hidden, stayed: url(w.gBrowser.selectedTab).includes("little-page"), popups: popups().length};""")
+    check("in that space, out of sight, and you stay where you are", r["there"] and r["hidden"] and r["stayed"] and r["popups"] == 0, str(r))
+    r = little_menu(m, "little-page", "body", "Keep")
+    check("outside a small window, the page's menu has no Keep", not r["chosen"], str(r))
+    m.js(LITTLE + """await removeWhere((x, y) => url(y).includes("little-")); return 1;""")
+
+    # Off in the settings, with a real click there.
+    r = ext_page(m, "/settings/settings.html", """
+      const box = doc.getElementById("little-window");
+      for (let i = 0; i < 50 && doc.getElementById("little-section").hidden; i++) await wait(100);
+      const shown = !doc.getElementById("little-section").hidden, was = box.checked;
+      box.click(); await wait(400);
+      return {shown, was, now: box.checked};""")
+    check("the settings page has the on-off, on by default", r["shown"] and r["was"] and not r["now"], str(r))
+    r = m.js(LITTLE + """const w = main(); await onSpaceTab();
+      external(args[0]); await wait(2500);
+      return {popups: popups().length, here: w.gBrowser.tabs.some(t => url(t).includes("little-off"))};""", base + "off")
+    check("off, a link is an ordinary tab", r["popups"] == 0 and r["here"], str(r))
+    ext_page(m, "/settings/settings.html", """doc.getElementById("little-window").click(); await wait(400);""")
+
+    m.js(LITTLE + """await removeWhere((x, y) => url(y).includes("little-") || url(y).includes("settings/settings.html")); main().focus(); await wait(300);
+      if (args[0]) { other().close(); await wait(1500); } return 1;""", opened)
+    m.chrome()
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1632,7 +1858,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_little_window, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

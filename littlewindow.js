@@ -1,0 +1,260 @@
+// A small window for links from other apps, like Little Arc (Tidier alone). A link
+// from Slack or Mail opens in a window of its own that you read and close, or keep with
+// one click, so that it does not end up in your list just because someone sent it.
+//
+// How such a link is told apart, measured in Firefox 158. Container and focus do not do it:
+//   - Firefox gives a link from another app the container of the selected tab, so "no
+//     container" says nothing: it has one nearly always. Only a bookmark has none.
+//   - On a Mac the app comes to the front around the time the link arrives, in either
+//     order, so "Firefox is in the background" misses some links, and it would catch
+//     anything else that happens to open while you are away.
+//   - What does tell: a link from outside is loaded with Firefox's own mark for that
+//     (LOAD_FLAGS_FROM_EXTERNAL), which ends the new tab's first about:blank early. So
+//     a new tab reports that about:blank as an address before its real one. A bookmark,
+//     an address typed with ⌥⏎, a page's own new tab and tabs.create do not.
+// That is a detail of Firefox's, not a promise. Should it go, links simply open as
+// ordinary tabs again, and the smoke test, which also runs on Developer Edition a month
+// ahead, says so.
+//
+// A link Firefox is started with is not told apart: Tidier is not running yet.
+//
+// A window that extensions open has no address bar and no toolbar at all, whatever the
+// look says, so nothing can be drawn in it without a script in the page. So its address
+// and space are in its title, "Keep" is on the right click in the page, and the sidebar
+// of the window behind it has a row for it for as long as it is open. Closing is ⌘W.
+//
+// It is left out of tab sync until you keep it (`register` skips all but normal windows).
+
+const LITTLE_WIDTH = 900, LITTLE_HEIGHT = 700;
+const LITTLE_KEY = "little"; // sessions window value: this window is one of these, also after a restart
+const LITTLE_SETTING = "littleWindow"; // on unless you turned it off in the settings
+const littleSetting = storedValue(LITTLE_SETTING, () => true);
+const littles = new Map(); // a small window's id -> the window it came from
+const newBlanks = new Map(); // new tabs on their first about:blank -> whether Firefox marked them as from outside
+
+// --- Telling a link from another app ------------------------------------------------
+browser.tabs.onCreated.addListener(tab => {
+  if (tidierAlone && started && tab.url === "about:blank" && tab.openerTabId === undefined && !tab.pinned && !tab.incognito && !syncBusy.has(tab.id)) newBlanks.set(tab.id, false);
+});
+browser.tabs.onUpdated.addListener((tabId, change) => {
+  if (!newBlanks.has(tabId)) return;
+  if (change.url === "about:blank") newBlanks.set(tabId, true);
+  else if (!isWeb(change.url)) newBlanks.delete(tabId); // a placeholder, a new tab page
+}, { properties: ["url"] });
+browser.tabs.onRemoved.addListener(tabId => newBlanks.delete(tabId));
+
+// Asked by spaces.js with a tab's first web address, before it looks at that address
+// itself: whether this is a link from another app, which is then taken care of here.
+function littleTakes(tabId, url) {
+  const fromOutside = newBlanks.get(tabId);
+  newBlanks.delete(tabId);
+  if (!fromOutside) return false;
+  firstPage.delete(tabId);
+  newTabs.delete(tabId);
+  serial(async () => {
+    const opened = await littleSetting.get() && await littleForLink(tabId, url).catch(err => { noteError(err); return false; });
+    if (!opened) await byRule(tabId, url); // what any new tab gets: off, or the rule's space is gone
+  });
+  return true;
+}
+
+// The rule's space, else the space you are in.
+async function littleSpace(url, windowId, fallback) {
+  const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
+  return rule?.space ?? activeSpace.get(windowId) ?? activeSpace.get(focusedWindowId) ?? (fallback !== NO_CONTAINER ? fallback : null);
+}
+
+// The tab itself moves if it is in the right container: a link can work only once (a
+// sign-in sent by mail), and it has already been asked for. Otherwise it is opened
+// again there, as a tab in the wrong space always is.
+async function littleForLink(tabId, url) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab) return true; // closed meanwhile: nothing left to do
+  if (syncKeyByTab.has(tabId)) return false;
+  const space = await littleSpace(url, tab.windowId, tab.cookieStoreId);
+  if (!space) return false;
+  const moves = tab.cookieStoreId === space;
+  await openLittle(tab.windowId, moves ? { tabId } : { url, cookieStoreId: space }, url, space, tab.width);
+  if (!moves) await browser.tabs.remove(tabId).catch(() => {});
+  return true;
+}
+
+// --- The window ----------------------------------------------------------------------
+// Centred over the page rather than the window, so the sidebar stays in view with its row.
+function littleBounds(win, pageWidth) {
+  const page = pageWidth > 0 && pageWidth < win.width ? pageWidth : win.width;
+  const pageLeft = win.left + win.width - page;
+  return {
+    width: LITTLE_WIDTH, height: LITTLE_HEIGHT,
+    left: Math.round(pageLeft + Math.max(0, (page - LITTLE_WIDTH) / 2)),
+    top: Math.round(win.top + Math.max(0, (win.height - LITTLE_HEIGHT) / 2)),
+  };
+}
+
+// What the title bar starts with: there is no address bar to show where this page is from.
+async function littleTitle(url, space) {
+  let host = "";
+  try { host = new URL(url).hostname; } catch (err) { /* about: and the like have none */ }
+  const name = (await containerSpaces()).find(s => s.id === space)?.name;
+  return [host, name].filter(Boolean).join(" · ") + " · ";
+}
+
+async function openLittle(fromWindowId, where, url, space, pageWidth) {
+  const from = await browser.windows.get(fromWindowId).catch(() => null);
+  const made = await browser.windows.create({
+    type: "popup", ...(from ? littleBounds(from, pageWidth) : { width: LITTLE_WIDTH, height: LITTLE_HEIGHT }),
+    titlePreface: await littleTitle(url, space), ...where,
+  });
+  littles.set(made.id, fromWindowId);
+  await browser.sessions.setWindowValue(made.id, LITTLE_KEY, true).catch(() => {});
+  viewAllSoon();
+  return made;
+}
+
+browser.windows.onRemoved.addListener(windowId => { if (littles.delete(windowId)) viewAllSoon(); });
+browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (!littles.has(tab.windowId)) return;
+  if (change.url) littleTitle(change.url, tab.cookieStoreId).then(titlePreface => browser.windows.update(tab.windowId, { titlePreface })).catch(() => {});
+  viewAllSoon();
+}, { properties: ["url", "title", "favIconUrl"] });
+
+// --- Keeping it ----------------------------------------------------------------------
+// The normal window a page goes to: the one asked for, else the one you are using.
+async function normalWindowFor(preferred) {
+  const wins = await normalWindows();
+  return wins.find(w => w.id === preferred) ?? wins.find(w => w.id === focusedWindowId) ?? wins[0] ?? null;
+}
+
+// The row a kept page goes above: the first of today's tabs of its space, as drawn.
+// Only a tab with a record, since other windows place theirs by the record's key.
+async function firstOfToday(windowId, space) {
+  const all = await getSynced();
+  const tabs = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
+  return tabs.find(t => !t.pinned && t.cookieStoreId === space && syncKeyByTab.has(t.id) && !folderKeyOf(all, syncKeyByTab.get(t.id)))?.id ?? null;
+}
+
+// Into your list, where a new tab goes, in every window. Firefox moves the page across
+// without loading it again, and closes the small window with its last tab. It stays
+// selected: you were reading it, and it would be odd for it to vanish from under you. In
+// another space that takes you there, as selecting any tab does (spaces.js).
+async function keepLittle(tabId, windowId) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || !littles.has(tab.windowId)) return;
+  const target = await normalWindowFor(windowId ?? littles.get(tab.windowId));
+  let into;
+  if (target) {
+    const before = await firstOfToday(target.id, tab.cookieStoreId);
+    await browser.tabs.move(tabId, { windowId: target.id, index: -1 });
+    await register(tabId);
+    await moveTab(target.id, tabId, before);
+    into = target.id;
+  } else {
+    into = (await browser.windows.create({ tabId })).id; // tab sync fills it, as any new window
+    await register(tabId);
+  }
+  await browser.tabs.update(tabId, { active: true }).catch(() => {});
+  await browser.windows.update(into, { focused: true }).catch(() => {});
+}
+
+// --- What the sidebar shows, and what it asks ----------------------------------------
+async function littleRows(spaces) {
+  const rows = [];
+  for (const windowId of littles.keys()) {
+    const [tab] = await browser.tabs.query({ windowId }).catch(() => []);
+    if (tab) rows.push({ id: tab.id, title: tab.title || tab.url, icon: tab.favIconUrl || null, space: spaces.find(s => s.id === tab.cookieStoreId)?.name ?? "" });
+  }
+  return rows;
+}
+
+async function littleAction(windowId, msg) {
+  if (msg.type === "little:keep") await keepLittle(msg.tabId, windowId);
+  else if (msg.type === "little:show") {
+    // Behind the window you clicked: this brings it back.
+    const tab = await browser.tabs.get(msg.tabId).catch(() => null);
+    if (tab && littles.has(tab.windowId)) await browser.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  }
+}
+
+// --- Menus: a link in the page, and the small window's own page -----------------------
+// The first needs no access to the page: Firefox gives the link's address with the click.
+// "Small window" is also link preview for those who never give access to all websites.
+const MENU_OPEN_IN = "tidier-open-in", MENU_OPEN_LITTLE = "tidier-open-little", MENU_KEEP = "tidier-keep";
+let linkChoices = [];
+
+function startLittleMenus() {
+  browser.menus.create({ id: MENU_OPEN_IN, title: "Open link in", contexts: ["link"], targetUrlPatterns: ["http://*/*", "https://*/*"] });
+  browser.menus.create({ id: MENU_OPEN_LITTLE, parentId: MENU_OPEN_IN, title: "Small window", contexts: ["link"] });
+  browser.menus.create({ id: MENU_KEEP, title: "Keep", contexts: ["page", "frame", "selection", "image"], visible: false });
+}
+
+browser.menus.onShown.addListener(async (info, tab) => {
+  if (!tidierAlone || !tab) return;
+  let changed = false;
+  if (info.contexts.includes("link")) {
+    for (const id of linkChoices) browser.menus.remove(id).catch(() => {});
+    linkChoices = (await containerSpaces()).filter(s => s.id !== tab.cookieStoreId).map(s => {
+      const id = `${MENU_OPEN_IN}:${s.id}`;
+      browser.menus.create({ id, parentId: MENU_OPEN_IN, title: s.name, contexts: ["link"] });
+      return id;
+    });
+    changed = true;
+  }
+  const little = littles.has(tab.windowId);
+  if (info.contexts.some(c => c !== "link" && c !== "tab")) {
+    const name = little ? (await containerSpaces()).find(s => s.id === tab.cookieStoreId)?.name : null;
+    await browser.menus.update(MENU_KEEP, { visible: little, title: name ? `Keep in ${name}` : "Keep" }).catch(() => {});
+    changed = true;
+  }
+  if (changed) browser.menus.refresh();
+});
+
+browser.menus.onClicked.addListener((info, tab) => {
+  const id = String(info.menuItemId);
+  if (!tidierAlone || !tab) return;
+  if (id === MENU_KEEP) serial(() => keepLittle(tab.id));
+  else if (id === MENU_OPEN_LITTLE) serial(() => linkInLittle(tab, info.linkUrl));
+  else if (id.startsWith(MENU_OPEN_IN + ":")) serial(() => linkInSpace(tab, info.linkUrl, id.slice(MENU_OPEN_IN.length + 1)));
+});
+
+// In the space of the page it is on, or the rule's, as a link from another app would be.
+async function linkInLittle(tab, url) {
+  if (!isWeb(url)) return;
+  const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
+  const space = rule?.space ?? (tab.cookieStoreId !== NO_CONTAINER ? tab.cookieStoreId : activeSpace.get(tab.windowId));
+  const from = littles.get(tab.windowId) ?? tab.windowId;
+  await openLittle(from, space ? { url, cookieStoreId: space } : { url }, url, space, tab.width);
+}
+
+// Where you chose, past any rule, and you stay where you are. A tab added to a small
+// window would be a tab nobody can reach, so from there it goes to a normal window.
+async function linkInSpace(tab, url, space) {
+  if (!isWeb(url)) return;
+  const win = await normalWindowFor(littles.get(tab.windowId) ?? tab.windowId);
+  if (!win) { await browser.windows.create({ url, cookieStoreId: space }); return; }
+  const index = await globalThis.topOfToday?.(win.id, space); // newtabs.js
+  const props = { windowId: win.id, url, cookieStoreId: space, active: false, ...(index === undefined ? {} : { index }) };
+  await (globalThis.openUnruled?.(props) ?? browser.tabs.create(props)); // safemoves.js
+  const name = (await containerSpaces()).find(s => s.id === space)?.name;
+  globalThis.say?.(win.id, `Opened in ${name}`); // quiet.js
+}
+
+// --- The setting ---------------------------------------------------------------------
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (!msg?.type?.startsWith("little:") || sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(""))) return;
+  return serial(async () => {
+    if (msg.type === "little:set") littleSetting.set(!!msg.on);
+    return { alone: tidierAlone, on: await littleSetting.get() };
+  });
+});
+
+// --- When Tidier starts --------------------------------------------------------------
+// Firefox brings a small window back after a restart, and Tidier starts again with an
+// update while one is open: without this, either would be a window nothing can keep.
+async function startLittleWindow() {
+  if (!tidierAlone) return;
+  startLittleMenus();
+  for (const w of await browser.windows.getAll({ windowTypes: ["popup"] })) {
+    if (await browser.sessions.getWindowValue(w.id, LITTLE_KEY).catch(() => undefined)) littles.set(w.id, null);
+  }
+  if (littles.size) viewAllSoon();
+}
