@@ -94,6 +94,7 @@ export class FakeFirefox {
         const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
         ff.log.push(["create", t.id, p.windowId, p.url]);
         const s = ff.snap(t); b.tabs.onCreated.fire(s);
+        if (p.active) ff.select(t.id); // the tab selected until now is not any more
         return s;
       },
       update: async (id, p) => {
@@ -101,6 +102,7 @@ export class FakeFirefox {
         if (p.active) ff.select(id);
         if (p.pinned !== undefined && p.pinned !== t.pinned) { t.pinned = p.pinned; b.tabs.onUpdated.fire(id, { pinned: p.pinned }, ff.snap(t)); }
         if (p.openerTabId !== undefined) t.openerTabId = p.openerTabId;
+        if (p.muted !== undefined) t.mutedInfo = { muted: p.muted };
         if (p.url) { ff.log.push(["update-url", id, p.url]); ff.navigate(id, p.url); }
         return ff.snap(t);
       },
@@ -124,7 +126,17 @@ export class FakeFirefox {
       remove: async ids => { ids = Array.isArray(ids) ? ids : [ids]; ids.forEach(need); for (const id of ids) { ff.log.push(["remove", id, ff.tabs.get(id).url]); ff.rm(id); } },
       show: async ids => { ff.log.push(["show", ids]); for (const id of [ids].flat()) need(id).hidden = false; },
       hide: async ids => { ff.log.push(["hide", ids]); for (const id of [ids].flat()) { const t = need(id); if (!t.pinned && !t.active) t.hidden = true; } },
-      discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id)) t.discarded = true; },
+      discard: async id => { const t = need(id); if (!t.active && !ff.refuseDiscard?.has(id)) t.discarded = true; }, // Firefox refuses the selected tab, and a page with unsaved input
+      reload: async id => { need(id); ff.log.push(["reload", id]); },
+      // As SessionStore does: created blank, then the original's values, then its page.
+      duplicate: async (id, { active, index } = {}) => {
+        const o = need(id), t = ff.addTab(o.windowId, { url: "about:blank", cookieStoreId: o.cookieStoreId, active: false, index });
+        ff.log.push(["duplicate", id, t.id]);
+        b.tabs.onCreated.fire(ff.snap(t));
+        if (ff.values.has(id)) ff.values.set(t.id, { ...ff.values.get(id) });
+        setTimeout(() => { if (ff.tabs.has(t.id)) ff.navigate(t.id, o.url, o.title); });
+        return { ...ff.snap(t), url: o.url };
+      },
     };
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),

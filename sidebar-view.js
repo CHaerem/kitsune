@@ -80,7 +80,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "select") {
       await browser.tabs.update(msg.tabId, { active: true }).catch(() => {});
     } else if (msg.type === "close") {
-      await browser.tabs.remove(msg.tabId).catch(() => {});
+      await browser.tabs.remove(await closeTargetOf(msg.tabId)).catch(() => {});
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
@@ -110,6 +110,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
+  else if (msg.type === "tabAction") await tabAction(windowId, msg); // tabactions.js
   viewSoon(windowId);
 }
 

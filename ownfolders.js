@@ -109,39 +109,3 @@ async function moveToSpace(tabId, space) {
   if (key) await closeEverywhere(key, { dismiss: false });
   else await browser.tabs.remove(tabId).catch(() => {});
 }
-
-// --- The tab's context menu in the sidebar -----------------------------------------
-// Firefox's own tab menu (sidebar.js asks for it), with Tidier's items added. The
-// folders and spaces to choose from are read when the menu opens.
-const MENU_FOLDER = "tidier-folder", MENU_SPACE = "tidier-space", MENU_NEW_FOLDER = "tidier-new-folder";
-let menuChoices = [];
-
-function startMenus() {
-  browser.menus.removeAll();
-  browser.menus.create({ id: MENU_NEW_FOLDER, title: "New folder with this tab", contexts: ["tab"] });
-  browser.menus.create({ id: MENU_FOLDER, title: "Move to folder", contexts: ["tab"] });
-  browser.menus.create({ id: MENU_SPACE, title: "Move to space", contexts: ["tab"] });
-}
-
-browser.menus.onShown.addListener(async (info, tab) => {
-  if (!tidierAlone || !info.contexts.includes("tab") || !tab) return;
-  for (const id of menuChoices) browser.menus.remove(id).catch(() => {});
-  menuChoices = [];
-  const add = (parentId, id, title) => { menuChoices.push(id); browser.menus.create({ id, parentId, title, contexts: ["tab"] }); };
-  const all = await getSynced();
-  add(MENU_FOLDER, `${MENU_FOLDER}:`, "No folder");
-  for (const f of foldersOf(all, tab.cookieStoreId).filter(f => !f.live)) add(MENU_FOLDER, `${MENU_FOLDER}:${f.key}`, f.name);
-  for (const s of await containerSpaces()) if (s.id !== tab.cookieStoreId) add(MENU_SPACE, `${MENU_SPACE}:${s.id}`, s.name);
-  browser.menus.refresh();
-});
-
-browser.menus.onClicked.addListener((info, tab) => {
-  const id = String(info.menuItemId);
-  if (!tidierAlone || !tab) return;
-  if (id === MENU_NEW_FOLDER) serial(async () => {
-    const key = await createFolder("New folder", tab.cookieStoreId);
-    await moveTab(tab.windowId, tab.id, null, key);
-  });
-  else if (id.startsWith(MENU_FOLDER + ":")) serial(() => moveTab(tab.windowId, tab.id, null, id.slice(MENU_FOLDER.length + 1) || null));
-  else if (id.startsWith(MENU_SPACE + ":")) serial(() => moveToSpace(tab.id, id.slice(MENU_SPACE.length + 1)));
-});

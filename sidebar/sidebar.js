@@ -78,7 +78,7 @@ function tile(item) {
     t.draggable = !!view?.alone;
     t.onclick = () => send({ type: "select", tabId: item.id });
     t.onauxclick = e => { if (e.button === 1) send({ type: "close", tabId: item.id }); };
-    t.oncontextmenu = () => browser.menus.overrideContext({ context: "tab", tabId: item.id });
+    t.oncontextmenu = e => { if (view?.alone) openTabMenu(e, item.id); else browser.menus.overrideContext({ context: "tab", tabId: item.id }); };
     t.ondragstart = e => startDrag(e, { kind: "essential", tabId: item.id });
     return t;
   }, item, t => {
@@ -96,7 +96,7 @@ function row(item, folderKey) {
     e.draggable = !!view?.alone;
     e.onclick = () => send({ type: "select", tabId: item.id });
     e.onauxclick = ev => { if (ev.button === 1) send({ type: "close", tabId: item.id }); };
-    e.oncontextmenu = () => browser.menus.overrideContext({ context: "tab", tabId: item.id });
+    e.oncontextmenu = ev => { if (view?.alone) openTabMenu(ev, item.id); else browser.menus.overrideContext({ context: "tab", tabId: item.id }); };
     e.ondragstart = ev => startDrag(ev, { kind: "tab", tabId: item.id });
     return e;
   }, item, e => {
