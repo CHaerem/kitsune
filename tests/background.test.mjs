@@ -808,3 +808,22 @@ test("closing a tab everywhere closes the others, also when one of them is gone 
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("a selected ghost that becomes the live tab opens its page", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  // In a window you are not using it is selected, and it was told to wait.
+  const there = ff.addWindow();
+  const ghost = ff.addTab(there.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  ff.rm(live.id, { closing: true });
+  ff.wins.delete(home.id);
+  ff.focused = there.id;
+  x.b.windows.onFocusChanged.fire(there.id);
+  await wait(500);
+  assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
+  x.kill();
+});

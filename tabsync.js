@@ -361,6 +361,7 @@ async function reconcileAll() {
   saveSynced(all);
   // A window closed meanwhile must not keep the others from being filled.
   for (const w of wins) await fillWindow(w.id).catch(noteError);
+  await openIfBlank(focusedWindowId);
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -504,7 +505,23 @@ async function dropIfUnused(key) {
 // The live tab's window is closing: a ghost in another window takes over.
 async function handOver(key, closingWindowId) {
   const reps = repsOf(key, await browser.tabs.query({})).filter(t => t.windowId !== closingWindowId);
-  if (reps.length) await setRole(reps[0].id, key, "live");
+  if (!reps.length) return;
+  // The one you are looking at, if it is one of them: it should not stay blank.
+  const heir = reps.find(t => t.active && t.windowId === focusedWindowId) || reps[0];
+  await setRole(heir.id, key, "live");
+  await openIfBlank(heir.windowId);
+}
+
+// A placeholder asks once what to do when it is shown (ghostShown), and it is told to
+// wait if another tab is live. If it then becomes the live tab itself while it is the
+// selected tab (that tab's window closed, say), nothing will ask again, and you are looking
+// at an empty page. So in the window you are using, it opens its page now.
+async function openIfBlank(windowId) {
+  if (windowId !== focusedWindowId) return; // when you switch to it, see pullSelected
+  const [active] = await browser.tabs.query({ windowId, active: true }).catch(() => []);
+  if (!active || syncRoleByTab.get(active.id) !== "live" || !isGhostUrl(active.url)) return;
+  const entry = (await getSynced())[syncKeyByTab.get(active.id)];
+  if (isWeb(entry?.url)) await browser.tabs.update(active.id, { url: entry.url }).catch(() => {});
 }
 
 // Pull the live tab for `ghostId` into the ghost's window. The part you see
@@ -524,6 +541,7 @@ async function pull(ghostId) {
   if (!live || live.windowId === ghost.windowId) {
     // No live tab to pull: the ghost becomes the live tab and loads itself.
     await setRole(ghostId, key, "live");
+    await openIfBlank(ghost.windowId);
     return;
   }
   pulling++;
@@ -890,6 +908,7 @@ function pullSelected(windowId) {
   return serial(async () => {
     const [active] = await browser.tabs.query({ windowId, active: true });
     if (active && syncRoleByTab.get(active.id) === "ghost") await pull(active.id);
+    await openIfBlank(windowId);
   });
 }
 browser.windows.onFocusChanged.addListener(windowId => {
