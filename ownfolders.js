@@ -34,6 +34,7 @@ async function foldFolder(key, collapsed) {
   if (!isOwnFolder(all[key])) return;
   all[key].collapsed = !!collapsed;
   saveSynced(all);
+  for (const w of await normalWindows()) successorSoon(w.id); // spaces.js: closing a tab does not land in a closed folder
 }
 
 // Deleting a folder loses nothing: its tabs become ordinary tabs, which archiving

@@ -67,7 +67,11 @@ body {
 .folder > .row .chevron { width: 16px; text-align: center; color: var(--muted); transition: transform .15s ease; }
 .folder.collapsed > .row .chevron { transform: rotate(-90deg); }
 .folder > .children { padding-left: 14px; }
-.folder.collapsed > .children { display: none; }
+/* A closed folder still shows the selected tab under its head, and only that, so you
+ * can always see where you are. Nothing unfolds and nothing is stored: it goes when you
+ * leave the tab. (With Sidebery the whole box stays hidden, as ever.) */
+.folder.collapsed > .children > .tab:not(.active), html:not(.alone) .folder.collapsed > .children { display: none; }
+.folder.collapsed > .children > .tab { scroll-margin-top: var(--row); } /* scrolled into view, it brings its head along */
 .folder > .row .title { font-weight: 500; }
 
 /* A thin line between the folders (the kept part) and the other tabs. */
