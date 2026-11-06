@@ -298,7 +298,13 @@ function storedValue(storageKey, empty) {
     timer = null;
     unwritten.delete(write);
     lastWrite = Date.now();
-    return browser.storage.local.set({ [storageKey]: value });
+    // Refused (a full disk, say): tried again later, or only memory would have it, and a
+    // start would lose what no other change happened to write.
+    return browser.storage.local.set({ [storageKey]: value }).catch(err => {
+      noteError(err);
+      unwritten.add(write);
+      timer ??= setTimeout(write, LAZY_WRITE_MS);
+    });
   };
   return {
     async get() {

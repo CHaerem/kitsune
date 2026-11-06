@@ -1194,3 +1194,17 @@ test("a tab pinned and closed at once, reopened, is an essential and no synced t
   assert.equal(x.js("syncKeyByTab").get(reopened.id), undefined);
   x.kill();
 });
+
+test("what could not be written is tried again", async () => {
+  const { ff, x, windows: [a] } = await chaosStart({ windows: 1 });
+  ff.refusePattern = /^storage\.local\.set$/;
+  ff.refuseRate = 1;
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  assert.ok(!ff.store.syncedTabs?.[key], "refused so far");
+  ff.refuseRate = 0;
+  await ff.clock.idle(120000);
+  assert.ok(ff.store.syncedTabs[key]);
+  x.kill();
+});
