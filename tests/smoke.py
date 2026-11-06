@@ -363,6 +363,30 @@ def tab_sync(m):
     check("the extension starts again after being disabled and enabled", r == [["live/loaded"], ["ghost/unloaded"]], str(r))
 
 
+def folder_pull(m):
+    # A tab in a folder, pulled into the other window: Sidebery has it in that
+    # window's copy of the folder, and the ghost left behind in the folder of
+    # the window it came from (Sidebery's own tree, from its tab data).
+    r = m.js(H + """
+      const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const id = t => ExtensionParent.apiManager.global.tabTracker.getId(t);
+      const sbParent = (w, t) => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, "extension:%s:data") || "{}").parentId; } catch (e) { return undefined; } };
+      const folderOf = (w, ctx) => w.gBrowser.tabs.find(t => url(t).includes("group.html#Fixture%%20folder%%20" + ctx));
+      const a = main(), b = other();
+      const live = a.gBrowser.tabs.find(t => role(a, t) === "live" && t.userContextId === 2 && t.openerTab === folderOf(a, 2) && !t.selected);
+      if (!live) return null;
+      const k = key(a, live), ghost = b.gBrowser.tabs.find(t => key(b, t) === k);
+      const before = [sbParent(a, live) === id(folderOf(a, 2)), ghost && sbParent(b, ghost) === id(folderOf(b, 2))];
+      b.focus(); await wait(500); b.gBrowser.selectedTab = ghost; await wait(4000);
+      const moved = b.gBrowser.tabs.find(t => key(b, t) === k), left = a.gBrowser.tabs.find(t => key(a, t) === k);
+      const after = [moved && sbParent(b, moved) === id(folderOf(b, 2)), left && sbParent(a, left) === id(folderOf(a, 2))];
+      const roles = [role(b, moved), role(a, left)];
+      a.focus(); await wait(500);
+      return {before, after, roles};""" % SIDEBERY_ID)
+    check("a tab pulled in from a folder is in the folder in both windows (Sidebery's tree)",
+          r and r["before"] == [True, True] and r["after"] == [True, True] and r["roles"] == ["live", "ghost"], str(r))
+
+
 def ghost_title(m):
     # A live tab whose title changes: its ghost in the other window shows the
     # new title a few seconds later.
@@ -773,7 +797,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
             try:
                 group(m)
             except Exception:
