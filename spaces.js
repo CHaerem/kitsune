@@ -194,19 +194,14 @@ browser.tabs.onRemoved.addListener(tabId => { newTabs.delete(tabId); firstPage.d
 const rulesList = storedValue("rules", () => []); // [{ url, space }]
 const firstPage = new Set(); // tabs that have not shown a web page yet
 
-function ruleMatches(rule, url) {
-  const re = /^\/(.+)\/([a-z]*)$/.exec(rule);
-  if (!re) return url.includes(rule);
-  try { return new RegExp(re[1], re[2]).test(url); } catch (err) { return false; }
-}
-
 async function byRule(tabId, url) {
-  const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
+  const rule = (await rulesList.get()).find(r => ruleCounts(r) && ruleMatches(r.url, url)); // rulematch.js, isolation.js
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === rule.space) return intoSpace(tabId);
   newTabs.delete(tabId);
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
-  await browser.tabs.remove(tabId).catch(() => {});
+  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
+  // Refused: the page stays, or it would be gone from everywhere.
+  if (opened) await browser.tabs.remove(tabId).catch(() => {});
 }
 
 async function intoSpace(tabId) {

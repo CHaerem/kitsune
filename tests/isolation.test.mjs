@@ -196,7 +196,7 @@ test("a tab opened by hand is exempt from the rules for the address it was opene
   x.kill();
 });
 
-test("a known tab outside any container: its record and placeholders go, and it comes back in the space", async () => {
+test("a known tab outside any container comes back in the space, and is still the same tab in every window", async () => {
   const ff = new FakeFirefox(); ff.granted = new Set(GUARD);
   ff.store.syncedTabs = { k: { url: "https://old.example/", title: "Old", cookieStoreId: NONE, parentKey: null, group: false, added: 1 } };
   const { w } = aWindow(ff);
@@ -208,7 +208,7 @@ test("a known tab outside any container: its record and placeholders go, and it 
   await wait(500);
   assert.ok(!ff.tabs.has(t.id));
   assert.ok(!ff.tabs.has(ghost.id));
-  assert.ok(!ff.synced.k);
+  assert.equal(ff.synced.k.cookieStoreId, A);
   assert.equal(opened(ff, w.id, "https://old.example/")[0].cookieStoreId, A);
   x.kill();
 });

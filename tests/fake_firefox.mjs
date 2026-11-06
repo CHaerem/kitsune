@@ -93,8 +93,9 @@ export class FakeFirefox {
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
         const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
         ff.log.push(["create", t.id, p.windowId, p.url]);
-        const s = ff.snap(t); b.tabs.onCreated.fire(s);
-        return s;
+        b.tabs.onCreated.fire(ff.snap(t));
+        if (p.active) ff.select(t.id); // as in Firefox: the old selection ends here, and is no longer one when it closes
+        return ff.snap(t);
       },
       update: async (id, p) => {
         const t = need(id);

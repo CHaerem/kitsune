@@ -59,21 +59,42 @@ function whereItBelongs({ url, tab, originUrl, firstPage, redirect = false, popu
 // A tab opened by hand into a space (moved there, a copy, undo) has a first page like
 // any new tab, and a rule would send it straight back. The request can arrive before
 // tabs.create has answered, so there is no tab id to mark yet: what is marked is the
-// address in that container, for the moment the tab takes to start loading. This wraps
+// address in that container, for the moment the tab takes to start loading. One mark per
+// tab: two tabs with the same address moved together are both yours. This wraps
 // openUnruled from safemoves.js, which does the same for the path without the permission.
-const byHand = new Map(); // "container address" -> until when
+const byHand = new Map(); // "container address" -> { tabs still to come, until when }
 const handKey = (space, url) => `${space} ${String(url).split("#")[0]}`;
 function markByHand({ cookieStoreId, url }) {
   if (!url) return;
   const now = Date.now();
-  for (const [key, until] of byHand) if (until < now) byHand.delete(key);
-  try { byHand.set(handKey(cookieStoreId, new URL(url).href), now + BY_HAND_MS); } catch (err) { /* not an address */ }
+  for (const [key, mark] of byHand) if (mark.until < now) byHand.delete(key);
+  try {
+    const key = handKey(cookieStoreId, new URL(url).href);
+    byHand.set(key, { tabs: (byHand.get(key)?.tabs ?? 0) + 1, until: now + BY_HAND_MS });
+  } catch (err) { /* not an address */ }
 }
 function takeByHand(space, url) {
-  const key = handKey(space, url), until = byHand.get(key);
-  byHand.delete(key);
-  return until >= Date.now();
+  const key = handKey(space, url), mark = byHand.get(key);
+  if (!mark) return false;
+  if (--mark.tabs < 1) byHand.delete(key);
+  return mark.until >= Date.now();
 }
+
+// Addresses a rule sends elsewhere but where this tab was allowed to be: a sign-in it
+// passed through in a redirect, a page you moved here by hand. Going back to one, Firefox
+// asks again with no page's name on it, just as for an address you type, and the tab must
+// not leave for it. (A link followed inside a page keeps that page's name when you go
+// back, so it needs nothing here.) Only until Firefox restarts: then a tab's history is
+// not known here, and going back through such an address opens it in its space.
+const settled = new Map(); // tabId -> addresses
+const SETTLED_PER_TAB = 20;
+const withoutFragment = url => String(url).split("#")[0];
+function settle(tabId, url) {
+  const here = settled.get(tabId) ?? settled.set(tabId, new Set()).get(tabId);
+  here.add(withoutFragment(url));
+  if (here.size > SETTLED_PER_TAB) here.delete(here.values().next().value);
+}
+const isSettled = (tabId, url) => !!settled.get(tabId)?.has(withoutFragment(url));
 const opensUnruled = globalThis.openUnruled;
 globalThis.openUnruled = props => {
   markByHand(props);
@@ -86,11 +107,55 @@ const reopening = new Set(); // tabs being opened elsewhere: more of their reque
 let guarding = false;
 const requestsGuarded = () => guarding; // spaces.js: then the tab need not be reopened afterwards
 
+// A rule that can do anything: it says where, and that space is there. A rule for a
+// container that is gone counts for nothing (spaces.js, here). It may come back at the
+// next start (bringBackSpaces); until then the address goes where it would without one.
+let knownSpaces = null; // containers Firefox has; null: not read yet
+const ruleCounts = r => typeof r?.url === "string" && !!r.url && !!r.space && r.space !== NO_CONTAINER && (!knownSpaces || knownSpaces.has(r.space));
+const spaceIsThere = id => !!id && id !== NO_CONTAINER && (!knownSpaces || knownSpaces.has(id));
+
+// A page can send its own tab on with no name on the request (a frame with sandbox and
+// allow-top-navigation does), which looks just like an address you type. Two such pages
+// under two rules would send each other from space to space for ever, with a new tab each
+// time and taking you along. Nobody types this fast, so after a few the tab stays.
+const TYPED_MOVES = 3, TYPED_MOVES_MS = 10000;
+let typedMoves = [];
+function typedTooFast() {
+  const now = Date.now();
+  typedMoves = typedMoves.filter(when => when > now - TYPED_MOVES_MS);
+  if (typedMoves.length >= TYPED_MOVES) return true;
+  typedMoves.push(now);
+  return false;
+}
+
+// The listener. Every page in every tab waits for what this says, so whatever else
+// happens it must answer: an API that stops answering while Firefox starts, or an error
+// here, would otherwise mean no page loads anywhere, with no sign of why. Far above
+// any real wait, and the timer only runs while a request is being looked at.
+const GUARD_LIMIT_MS = 10000;
+const slipped = new Set(); // tabs with no container whose page was let through: moved when it shows
+function beforeTopLevelRequest(details) {
+  const look = { given: false };
+  let timer;
+  const limit = new Promise(resolve => {
+    timer = setTimeout(() => {
+      look.given = true;
+      if (details.cookieStoreId === NO_CONTAINER && tidierAlone) slipped.add(details.tabId);
+      resolve({});
+    }, GUARD_LIMIT_MS);
+  });
+  const answer = lookAtRequest(details, look).catch(err => { noteError(err); return {}; });
+  return Promise.race([answer, limit]).finally(() => clearTimeout(timer));
+}
+browser.tabs.onUpdated.addListener((tabId, change) => {
+  if (isWeb(change.url) && slipped.delete(tabId)) serial(moveStragglers);
+}, { properties: ["url"] });
+
 // This runs for every top-level navigation, and the request waits for it, so a tab in
 // the right container passes after nothing but a look at the rules. A tab is only
 // looked up when it may have to move. Never through the queue, which can be busy for
 // seconds. (Sub-resources and frames are not even sent here: see the filter.)
-async function beforeTopLevelRequest(details) {
+async function lookAtRequest(details, look) {
   await isolationKnown;
   const { tabId, requestId, url, cookieStoreId: here } = details;
   if (!tidierAlone || tabId < 0 || details.incognito || !isWeb(url)) return {};
@@ -98,8 +163,12 @@ async function beforeTopLevelRequest(details) {
   requestOfTab.set(tabId, requestId);
   if (reopening.has(tabId)) return { cancel: true };
   const rules = await rulesList.get();
-  // (A form sent to a new tab cannot be sent again from another tab, so no rule takes it.)
-  if (here !== NO_CONTAINER && (redirect || (details.method ?? "GET") !== "GET" || !rules.some(r => r.space !== here && ruleMatches(r.url, url)))) return {};
+  if (here !== NO_CONTAINER) {
+    if (!rules.some(r => ruleCounts(r) && r.space !== here && ruleMatches(r.url, url))) return {};
+    if (redirect) { settle(tabId, url); return {}; }
+    // (A form sent to a new tab cannot be sent again from another tab, so no rule takes it.)
+    if ((details.method ?? "GET") !== "GET" || isSettled(tabId, url)) return {};
+  }
 
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab) return {};
@@ -108,12 +177,21 @@ async function beforeTopLevelRequest(details) {
   // ⌘⇧T brings a tab back on about:blank with its Tidier values: it is not a new tab.
   const firstPage = !isWeb(tab.url) && !isGhostUrl(tab.url) && !syncKeyByTab.has(tabId) &&
     !(await browser.sessions.getTabValue(tabId, SYNC_KEY).catch(() => undefined));
+  const home = here === NO_CONTAINER ? await homeOf(tab) : null;
+  const byHandNow = !tab.pinned && takeByHand(here, url);
+  if (byHandNow) settle(tabId, url);
   const space = whereItBelongs({
-    url, tab: { ...tab, cookieStoreId: here }, originUrl: details.originUrl, firstPage, redirect, popup, rules,
-    activeSpace: here === NO_CONTAINER ? await spaceToOpenIn(tab) : undefined,
-    exempt: tab.pinned || takeByHand(here, url),
+    url, tab: { ...tab, cookieStoreId: here }, originUrl: details.originUrl, firstPage, redirect, popup, rules: home?.inFolder ? [] : rules.filter(ruleCounts),
+    activeSpace: home?.space, exempt: tab.pinned || byHandNow,
   });
   if (!space) return {};
+  // The tab has moved on to another address meanwhile (Enter pressed twice): Firefox has
+  // dropped this request, and opening it would only give you the page twice.
+  if (look.given || requestOfTab.get(tabId) !== requestId) return {};
+  if (here !== NO_CONTAINER && !firstPage && typedTooFast()) {
+    tellOnce(tab.windowId, "A page kept sending this tab to other spaces, so it stays here");
+    return {};
+  }
   // A link from another app that a rule sends elsewhere goes to its small window there (littlewindow.js).
   if (typeof littleTakes === "function" && littleTakes(tabId, url)) return { cancel: true };
   reopening.add(tabId);
@@ -123,40 +201,94 @@ async function beforeTopLevelRequest(details) {
     reopening.delete(tabId);
   }
   // It could not be opened there. A tab in a space stays and loads there; a page that
-  // has no container is never loaded, since that is where a login must not land.
-  tellOnce(tab.windowId, here === NO_CONTAINER ? "That page could not be opened in a space, so it was not loaded" : "That page could not be opened in its space, so it stayed here");
+  // has no container is never loaded, since that is where a login must not land. The
+  // address goes with what is said, since it is then nowhere else.
+  tellOnce(tab.windowId, here === NO_CONTAINER ? `This could not be opened in a space, so it was not loaded: ${url}` : "That page could not be opened in its space, so it stayed here");
   return here === NO_CONTAINER ? { cancel: true } : {};
 }
 
 // The space you are in. Also while Firefox is still starting and Tidier has not read
-// the window's space yet: the tab Firefox restores can load before that.
+// the window's space yet: the tab Firefox restores can load before that. Never one that
+// has gone: opening in it is refused, and the page would not load at all.
 async function spaceToOpenIn(tab) {
-  const known = activeSpace.get(tab.windowId) ?? activeSpace.get(focusedWindowId) ?? [...activeSpace.values()][0];
+  const known = [activeSpace.get(tab.windowId), activeSpace.get(focusedWindowId), ...activeSpace.values()].find(spaceIsThere);
   if (known) return known;
   const tabs = await browser.tabs.query({ windowId: tab.windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
+  activeSpace.delete(tab.windowId);
   return spaceOf(tab.windowId, tabs, await spaceList(used));
 }
 
-// In the same place, with the same selection; the old tab is closed only once the new
-// one is there. Returns whether it worked.
+// Where a tab with no container belongs when no rule says: with its folder, if it is in
+// one (Sidebery's spaces can hold tabs with no container, and moving over keeps them
+// there), else the space you are in.
+async function homeOf(tab) {
+  const all = await getSynced();
+  const folderSpace = all[folderKeyOf(all, syncKeyByTab.get(tab.id))]?.cookieStoreId;
+  return spaceIsThere(folderSpace) ? { space: folderSpace, inFolder: true } : { space: await spaceToOpenIn(tab) };
+}
+
+// In the same place, with the same selection. Only a tab holding nothing is closed, and
+// only once the new one is there. A tab in a space showing a page or standing for one
+// (a saved tab, one in a folder, a placeholder, any page with its history) stays as it
+// was: what you asked for opens in its space, and what you had isn't lost for it. A tab
+// outside any container can't stay, so what it is goes with it (recordIntoSpace). Returns
+// whether it worked.
 async function openElsewhere(tab, url, space, popup) {
   if (tab.pinned && await essentialIntoSpace(tab, space)) return true;
+  const opening = openIn(tab, url, space, popup);
   let timer;
   const created = await Promise.race([
-    openIn(tab, url, space, popup),
+    opening,
     new Promise(resolve => { timer = setTimeout(() => resolve(null), REOPEN_LIMIT_MS); }),
   ]).catch(() => null);
   clearTimeout(timer);
-  if (!created) return false;
+  const stays = tab.cookieStoreId !== NO_CONTAINER && (syncKeyByTab.has(tab.id) || isWeb(tab.url) || isGhostUrl(tab.url));
+  if (!created) {
+    // Too late to count, but it may still come. Then the page is either loading in the
+    // old tab or nowhere: never two of it, and never nothing.
+    opening.then(late => {
+      if (!late?.id) return;
+      if (tab.cookieStoreId === NO_CONTAINER) return closeOldTab(tab, late, space);
+      return browser.tabs.remove(late.id);
+    }).catch(() => {});
+    return false;
+  }
   newTabs.delete(tab.id);
+  setNotice("isolation", null);
+  if (!stays) await closeOldTab(tab, created, space);
+  return true;
+}
+
+async function closeOldTab(tab, created, space) {
   const key = syncKeyByTab.get(tab.id);
   // A tab Tidier knows has placeholders in other windows and a record, which only the
   // queue may change. One it doesn't know yet (nearly all of them: this is its first
   // page) is simply closed, now, so you don't see it hanging around.
-  if (key) serial(() => closeEverywhere(key, { dismiss: false }));
-  else await browser.tabs.remove(tab.id).catch(() => {});
-  return true;
+  if (!key) return browser.tabs.remove(tab.id).catch(() => {});
+  // Now, not in the queue: or the new tab would be taken for a new one there.
+  if (created.id) await setRole(created.id, key, "live").catch(noteError);
+  serial(() => recordIntoSpace(key, created, space));
+}
+
+// A tab with a record, reopened from outside any container: the same tab, in a space. It
+// keeps its key, so it stays in its folder with its saved address, and each other window
+// gets its placeholder in the new container, in the same place and with the same
+// selection, before the old one goes: closing a window's last tab would close the window.
+async function recordIntoSpace(key, created, space) {
+  const all = await getSynced();
+  if (all[key]) {
+    all[key].cookieStoreId = space;
+    saveSynced(all);
+  }
+  const old = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== created.id);
+  old.forEach(t => { syncBusy.add(t.id); forget(t.id); });
+  for (const t of all[key] ? old.filter(o => o.windowId !== created.windowId) : []) {
+    const rep = await createRep(t.windowId, key, all[key], undefined, t.index).catch(noteError);
+    if (rep && t.active) await browser.tabs.update(rep.id, { active: true }).catch(() => {});
+  }
+  await browser.tabs.remove(old.map(t => t.id)).catch(() => {});
+  await forgetClosedPlaceholders("ghost", [key]);
 }
 
 async function openIn(tab, url, space, popup) {
@@ -170,26 +302,29 @@ async function openIn(tab, url, space, popup) {
 
 // An essential with no container: from before Tidier alone, say. It cannot stay what it
 // is, or its login lands outside every space, so it becomes an essential of the space
-// you are in, in every window, and the copy you were opening opens there.
+// you are in, in every window, and the copy you were opening opens there. Its copies in
+// two windows can both load at once (Firefox restoring them), and each asks here.
 async function essentialIntoSpace(tab, space) {
   const key = await keyOf(tab);
+  if (!key || !(await getList()).some(e => e.key === key)) return false;
+  serial(() => moveEssentialIntoSpace(key, space));
+  return true;
+}
+async function moveEssentialIntoSpace(key, space) {
   const list = await getList();
   const entry = list.find(e => e.key === key);
-  if (!entry) return false;
-  serial(async () => {
-    entry.cookieStoreId = space;
-    setList([...list]);
-    const old = await copiesOf(key);
-    // Unmarked first, so that each window counts it as missing and gets a new copy
-    // before the old one goes: closing a window's last tab would close the window.
-    for (const t of old) { busy.add(t.id); keyByTab.delete(t.id); await browser.sessions.removeTabValue(t.id, TAB_KEY).catch(() => {}); }
-    await ensureAllWindows();
-    await browser.tabs.remove(old.map(t => t.id)).catch(() => {});
-    await forgetClosedPlaceholders("essential", [key]);
-    const copy = tab.active && (await copiesOf(key)).find(t => t.windowId === tab.windowId);
-    if (copy) await browser.tabs.update(copy.id, { active: true }).catch(() => {});
-  });
-  return true;
+  if (entry?.cookieStoreId !== NO_CONTAINER) return; // the other window's copy got here first
+  entry.cookieStoreId = space;
+  setList([...list]);
+  const old = await copiesOf(key);
+  const selected = new Set(old.filter(t => t.active).map(t => t.windowId));
+  // Unmarked first, so that each window counts it as missing and gets a new copy
+  // before the old one goes: closing a window's last tab would close the window.
+  for (const t of old) { busy.add(t.id); keyByTab.delete(t.id); await browser.sessions.removeTabValue(t.id, TAB_KEY).catch(() => {}); }
+  await ensureAllWindows();
+  for (const copy of await copiesOf(key)) if (selected.has(copy.windowId)) await browser.tabs.update(copy.id, { active: true }).catch(() => {});
+  await browser.tabs.remove(old.map(t => t.id)).catch(() => {});
+  await forgetClosedPlaceholders("essential", [key]);
 }
 
 // The quiet line if there is one (quiet.js), else the lasting notice: this must be seen.
@@ -217,7 +352,7 @@ function unguardRequests() {
   if (guarding) browser.webRequest?.onBeforeRequest.removeListener(beforeTopLevelRequest);
   guarding = false;
 }
-browser.tabs.onRemoved.addListener(tabId => requestOfTab.delete(tabId));
+browser.tabs.onRemoved.addListener(tabId => { requestOfTab.delete(tabId); settled.delete(tabId); slipped.delete(tabId); });
 
 async function guardAfterReload() {
   if (!await browser.permissions.contains?.(ISOLATION_PERMISSIONS).catch(() => false)) return;
@@ -235,7 +370,8 @@ async function moveStragglers() {
     if (tab.pinned || tab.incognito || tab.discarded || !isWeb(tab.url)) continue;
     const win = await browser.windows.get(tab.windowId).catch(() => null);
     const popup = !!win && win.type !== "normal";
-    const space = whereItBelongs({ url: tab.url, tab, firstPage: false, popup, rules, activeSpace: await spaceToOpenIn(tab) });
+    const home = await homeOf(tab);
+    const space = whereItBelongs({ url: tab.url, tab, firstPage: false, popup, rules: home.inFolder ? [] : rules.filter(ruleCounts), activeSpace: home.space });
     if (space) await openElsewhere(tab, tab.url, space, popup);
   }
 }
@@ -333,6 +469,7 @@ async function startIsolation() {
   await readAlone();
   startingAlone = false;
   if (!tidierAlone) return stopIsolation();
+  await readSpaces();
   networkNow = await spaceNetwork.get();
   hostsGiven = !!await browser.permissions.contains?.({ origins: ["<all_urls>"] }).catch(() => false);
   if (await browser.permissions.contains?.(ISOLATION_PERMISSIONS).catch(() => false)) guardRequests();
@@ -341,6 +478,10 @@ async function startIsolation() {
   rememberForStart();
   await rememberSpaces();
   addToCommandBar();
+}
+async function readSpaces() {
+  // Containers turned off in Firefox: there is nothing a rule or a tab could go to.
+  knownSpaces = new Set((await identities().catch(() => [])).map(c => c.cookieStoreId));
 }
 function stopIsolation() {
   unguardRequests();
@@ -515,6 +656,15 @@ async function forgetSpace(id) {
   const left = await browser.tabs.query({ cookieStoreId: id });
   left.forEach(t => { syncBusy.add(t.id); forget(t.id); busy.add(t.id); keyByTab.delete(t.id); });
   await browser.tabs.remove(left.map(t => t.id)).catch(() => {});
+  // A window that was in it (removed in Firefox's own settings: deleteSpace has moved you
+  // already) goes to one that exists, or its new tabs and links have nowhere to open.
+  for (const [windowId, space] of [...activeSpace]) {
+    if (space !== id) continue;
+    activeSpace.delete(windowId);
+    const tabs = await browser.tabs.query({ windowId }).catch(() => []);
+    const next = await spaceOf(windowId, tabs, await spaceList(new Set()));
+    if (next) await setSpace(windowId, next);
+  }
 }
 
 // --- 5. A vanished container comes back --------------------------------------------
@@ -630,9 +780,14 @@ async function tabsIntoNewContainers(map) {
 }
 
 // Your own changes, while Tidier runs. A start has already seen what was there before.
-browser.contextualIdentities.onCreated.addListener(() => { if (tidierAlone) serial(rememberSpaces); });
+browser.contextualIdentities.onCreated.addListener(({ contextualIdentity }) => {
+  knownSpaces?.add(contextualIdentity?.cookieStoreId);
+  if (tidierAlone) serial(rememberSpaces);
+});
 browser.contextualIdentities.onUpdated.addListener(() => { if (tidierAlone) serial(rememberSpaces); });
 browser.contextualIdentities.onRemoved.addListener(({ contextualIdentity }) => {
+  // At once, not in the queue: a request now must not go to a space that is gone.
+  knownSpaces?.delete(contextualIdentity.cookieStoreId);
   if (tidierAlone) serial(() => forgetSpace(contextualIdentity.cookieStoreId));
 });
 
