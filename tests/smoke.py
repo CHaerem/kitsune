@@ -1526,6 +1526,9 @@ def alone_quiet_undo(m):
     selected = m.js(H + """return wins().map(w => key(w, w.gBrowser.selectedTab));""")
     stays = len(set(before[0][0]) & set(selected))
     goes = len(before[0][0]) - stays - 1
+    # Pages with no record stay too, such as the settings page a group before this left
+    # open (and this sidebar page itself, which plainTabs leaves out).
+    strangers = len(setup["rows"]) - len(before[0][0]) - len(before[0][1]) - 1
     r = sidebar_page(m, """
       const out = {};
       const button = doc.querySelector("#tabs .divider .clear"), box = button.parentElement.getBoundingClientRect();
@@ -1542,7 +1545,7 @@ def alone_quiet_undo(m):
       out.tiles = tiles().length;
       return out;""", setup["here"])
     check("Clear shows only near the line, in an area that takes no room", r["reach"] >= 18 and r["divider"] <= 2 and r["faded"] == "0", str(r))
-    check("Clear by a real click closes today's tabs, except any selected in a window", setup["here"] in r["rows"] and len(r["rows"]) == stays, f"{stays} stay: {r}")
+    check("Clear by a real click closes today's tabs, except any selected in a window", setup["here"] in r["rows"] and len(r["rows"]) == stays + strangers, f"{stays} stay, and {strangers} with no record: {r}")
     check("Clear leaves the folders", r["folders"] == setup["folders"], str(r))
     check("the line says how many went, and how many stayed", r["shown"] and r["line"] == f"{goes} tabs closed, 1 stayed", f"{goes} go: {r}")
     check("a page with unsaved input stays, without asking", r["stayed"] and r["asked"] != "Unsaved", str(r))
