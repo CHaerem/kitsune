@@ -1077,7 +1077,7 @@ class Soak:
         r = self.call(SETUP)
         if not r.get("ok"):
             raise SystemExit(f"Could not set up: {r}")
-        self.use_control_window()
+        self.use_window(control=True)
         self.call(SHOW_SIDEBARS)
         settle_s, r = self.check_everything()
         self.sample(settle_s, r)
@@ -1115,7 +1115,7 @@ class Soak:
         self.sample(settle_s, r)
         print(f"{'An update' if update else 'A restart'} at {(time.time() - self.t0) / 60:.1f} min", flush=True)
         self.say("an update of Tidier" if update else "Firefox is quit and started again")
-        self.m.chrome()  # the control page does not survive either
+        self.use_window(control=False)  # the control page does not survive either
         if update:
             self.m.cmd("Addon:Install", {"path": self.m.update_xpi(), "temporary": False})
         else:
@@ -1124,20 +1124,21 @@ class Soak:
         r = self.call(SETUP)
         if not r.get("ok"):
             raise RuntimeError(f"Could not set up again: {r}")
-        self.use_control_window()
+        self.use_window(control=True)
         self.call(SHOW_SIDEBARS)
         self.problems_seen = 0
         self.segment = len(self.samples)  # memory starts over too
         settle_s, r = self.check_everything()
         self.sample(settle_s, r)
 
-    def use_control_window(self):
-        # Marionette works in one window, and fails once that is closed.
+    def use_window(self, control):
+        # Marionette works in one window, and fails once that is closed: so the control
+        # window, which no action closes, or an ordinary one where that is what goes away.
         for handle in self.m.cmd("WebDriver:GetWindowHandles"):
             self.m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": False})
-            if self.m.js("return !window.toolbar.visible;"):
+            if self.m.js("return !window.toolbar.visible;") == control:
                 return
-        raise SystemExit("The control window is not there")
+        raise RuntimeError(f"No {'control' if control else 'ordinary'} window is there")
 
     def report(self):
         self.table()
