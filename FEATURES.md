@@ -23,12 +23,16 @@ there is a test.
 | Close button, middle click to close | Z A S | Done | in Tidier's sidebar |
 | New tab button at the top of the list | A Z | Done | Tidier alone |
 | Drag tabs to reorder, into and out of folders | Z A S | Done | Tidier alone, checked, every window follows; also to the essentials and to a space |
-| Select several tabs (⇧/⌘ click) and act on them | Z A S | Later | |
+| Select several tabs (⇧/⌘ click) and act on them | Z A S | Planned | move, close, drag, menu; the selection lives in the sidebar only |
 | Context menu on tabs, folders and spaces | Z A S | Partly | Tidier alone: Firefox's tab menu with Tidier's items, and folders; not yet spaces |
 | Keyboard navigation in the sidebar | S | Done | Tidier alone: ↑↓, Enter, ⌫, ←→ |
-| Search/filter the tabs | S A | Later | see the command bar |
+| Search/filter the tabs | S A | Planned | in the command bar |
 | Sound indicator and mute on a tab | Z A S | Done | Tidier alone |
-| Tab preview on hover | S | Decide | |
+| Tab preview on hover | S | No | a picture needs access to all websites; the tooltip shows title and address |
+| The list shows the selected tab, each space keeps its scroll | S | Planned | also a selected tab in a closed folder |
+| A mark when a background page has news | S | Planned | a still dot on the tab, a closed folder and a space |
+| A sign that a tab is loading | Z A S | Planned | a soft sign on the icon, after half a second |
+| A new tab has one place | A | Planned | the top of today's tabs |
 | Resizable sidebar width | Z A S | Done | Firefox's own sidebar handle (userChrome.css) |
 | Compact mode: sidebar hidden, shown at the edge | Z A | Done | userChrome.css, ⌘S |
 | Tabs nested under tabs (tree) | S | No | you only use folders; a tree is where most of Sidebery's bugs came from |
@@ -41,12 +45,13 @@ there is a test.
 | Space bar at the bottom with icons | Z A S | Partly | Tidier alone shows coloured dots, and the name above the list; icons to come |
 | Only the active space's tabs shown (⌃Tab too) | Z A S | Done | Tidier alone, checked. Other spaces' essentials stay in ⌃Tab: Firefox cannot hide a pinned tab |
 | Switch with ⌃1/2/3 | Z A S | Done | Tidier alone, checked; Sidebery's shortcuts in the daily browser |
-| Switch by swiping sideways on the trackpad | Z A | Decide | tried with Sidebery and left out: vertical swipes switched space by mistake |
+| Switch by swiping sideways on the trackpad | Z A | Later | tried with Sidebery and left out: vertical swipes switched space by mistake; to try again without it |
 | Colour per space, for the whole window | Z A | Done | userChrome.css and tidier.css |
 | Name, icon and colour of a space editable in Tidier | Z A | Partly | the name, on the settings page; else Firefox's container settings |
 | New tabs and links from other apps open in the active space | A S | Done | Tidier alone, checked; Sidebery in the daily browser |
 | Rules: an address always opens in a given space ("Air Traffic Control") | A S | Done | Tidier alone, checked, on the settings page, and imported from Sidebery's export; Sidebery's rules in the daily browser |
-| Open a link in another space (context menu) | A | Later | |
+| Open a link in another space (context menu) | A | Planned | |
+| Unload a whole space | S | Planned | the space's menu; essentials, the selected tab and sound stay |
 | The same essentials, folders and spaces on every machine, by sync | A | Planned | after Tidier has its own spaces and folders |
 | Hide a space on a given machine | | Planned | a workplace's space only on its Mac; hidden, not kept away |
 
@@ -61,7 +66,8 @@ there is a test.
 | Only one loaded copy of an essential (no double sounds) | | Done | |
 | Kept tabs (Arc's pinned section, Zen's pinned tabs): ⌘W unloads, back to the saved address | Z A | Done | tabs in folders ("saved tabs") |
 | A divider between kept tabs and today's tabs | A Z | Done | in Tidier's sidebar |
-| Clear today's tabs in one go | A | Later | |
+| Clear today's tabs in one go | A | Planned | with one line to undo it, no question |
+| Undo after closing several tabs or deleting a folder | S | Planned | one quiet line |
 
 ## Folders
 
@@ -70,7 +76,9 @@ there is a test.
 | Folders, collapsible | Z A S | Done | Tidier alone, Tidier's own data, checked; Sidebery's folder pages in the daily browser |
 | Folders first in each space | Z A | Done | Tidier keeps the order (folders.js, goes away with Sidebery) |
 | Create, rename and delete folders | Z A S | Done | Tidier alone, checked. Deleting one keeps its tabs |
-| Folders inside folders | A | Decide | you have none today |
+| Folders inside folders | A | Later | none today, and a tree is what is left out |
+| A closed folder rests: hidden from ⌃Tab and unloaded | S | Planned | the selected tab, sound and unsaved input stay |
+| New folder with a good name, ready to rename | S | Planned | also from a selection |
 | Live folders (GitHub pull requests) | A | Done | |
 | Folder state (open/closed) kept per space and window | Z A S | Partly | Tidier alone: kept per folder, the same in every window |
 
@@ -80,8 +88,8 @@ there is a test.
 |---|---|---|---|
 | Every tab in every window, loaded only once | Z | Done | |
 | Archive tabs unused for 12 hours | A | Done | |
-| Find archived tabs again | A | Later | Firefox's Recently Closed today |
-| Unload tabs unused for a while (keep them, free memory) | Z S | Decide | Firefox unloads on low memory already |
+| Find archived tabs again | A | Planned | Tidier's own list per space, also in the command bar |
+| Unload tabs unused for a while (keep them, free memory) | Z S | Later | Firefox unloads on low memory; closed folders and whole spaces unload in Tidier |
 | Nothing works when nothing happens (no idle work) | | Done | checked by the smoke test |
 
 ## Windows and links
@@ -90,16 +98,17 @@ there is a test.
 |---|---|---|---|
 | A new window gets every essential and tab | Z | Done | |
 | Closing a window hands its tabs over | Z | Done | |
-| A small window for links from other apps ("Little Arc") | A | Later | |
-| Link preview in a floating window ("Glance", "Peek") | Z A | Later | |
-| Split view | Z A | Decide | Firefox is getting its own; use that if it is good enough |
+| A small window for links from other apps ("Little Arc") | A | Planned | |
+| Link preview in a floating window ("Glance", "Peek") | Z A | Planned | only with the optional access to all websites |
+| Split view | Z A | No | Firefox has its own; Tidier stays out of its way, and it is checked with placeholders |
 
 ## Command bar and shortcuts
 
 | Feature | From | Status | Notes |
 |---|---|---|---|
 | ⌘⇧C copies the address | Z A | Done | |
-| A command bar: search tabs, essentials, history and commands | A Z | Later | |
+| A command bar: search tabs, essentials, history and commands | A Z | Planned | one key, a floating window, everything from one field |
+| Next and previous tab as shown, the n-th tab of this space, next and previous space | A | Planned | Firefox's own keys count other spaces' tabs |
 | All shortcuts set in one place, in Tidier | | Partly | Tidier alone: Firefox's own page for extension shortcuts, plus about:keyboard |
 
 ## Look
@@ -119,3 +128,14 @@ there is a test.
 | Snapshots of all tabs | S | Tidier keeps its own record; Firefox's session restore does the rest |
 | Per-site styles and scripts ("Boosts", "Mods") | A Z | not what Tidier is for |
 | Notes, easels, built-in AI | A | not what Tidier is for |
+
+## Working with Claude and other agents (stretch goal)
+
+Off by default, and nothing reaches a machine that has not turned it on.
+
+| Feature | From | Status | Notes |
+|---|---|---|---|
+| Copy a page or a list of tabs as clean text for Claude; ask Claude about a page | | Planned | |
+| An MCP server, so Claude Code can work in the browser | | Planned | local only: a socket only you can reach, and nothing runs while it is off |
+| Agents have a space of their own, with its own logins | | Planned | they see and touch only that space, unless you allow another |
+| What an agent does is visible, and one click stops it | | Planned | |

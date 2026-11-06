@@ -69,7 +69,16 @@ A first version of all of it works in the test Firefox, without Sidebery.
 - [x] **Rules.** An address always opens in a given space, edited in Tidier.
 - [x] **Settings in Tidier.** A page for the rules, spaces' names, archiving, copies and
       moving over.
-- [ ] **What Sidebery does well**, in Tidier's own simple way: see below.
+- [ ] **What Sidebery does well**, in Tidier's own simple way: a short menu of Tidier's own on
+      every tab, selecting several tabs, one quiet line with undo, Clear, a list that shows where
+      you are, one place for new tabs, closed folders that rest, sound and news marks, honest
+      dragging, safe moves. Sidebery has hundreds of options; each became one fixed
+      behaviour or nothing.
+- [ ] **The command bar**, as in Arc: one key, one field, everything from it. Shortcuts as in Arc.
+- [ ] **Finding archived tabs**, a small window for links from other apps, and link preview.
+- [ ] **A refined design**: judged from screenshots, in light and dark, at every width.
+- [ ] **Very robust and efficient**: random use checked against what must always hold, a long
+      run in a real Firefox, and measured with up to 1000 tabs.
 
 ## C. Trying it on the second Mac
 
@@ -98,11 +107,16 @@ A first version of all of it works in the test Firefox, without Sidebery.
 - [ ] Spaces hidden per machine. Hidden only: the data is on every machine.
 - [ ] Every Mac set up the same way.
 
+## Stretch goal: made for working with Claude and other agents
+
+Off by default. Copying a page or tabs as clean text for Claude. An MCP server so Claude
+Code can work in the browser, local only. Agents get a space of their own with its own
+logins, see and touch only that, unless you allow more. What they do shows, and one
+click stops it.
+
 ## F. After that
 
-What FEATURES.md has as Later or Decide, starting with what is missed most in use:
-finding archived tabs again, the command bar, a small window for links from other apps,
-link preview, split view.
+What FEATURES.md has as Later, starting with what is missed most in use.
 
 ## Choices made
 
