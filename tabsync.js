@@ -40,12 +40,12 @@ const SETTLE_MS = 1500;       // wait for redirects / container reopen before re
 const syncKeyByTab = new Map();  // tabId -> key
 const syncRoleByTab = new Map(); // tabId -> role
 const syncBusy = new Set();      // tab IDs we are changing ourselves
-let pulling = false;             // true while we move tabs, so activations we cause are ignored
+let pulling = 0;                 // pulls in progress: tabs being moved are not moves you made
 let started = false;             // tab sync waits for startup before reacting
 
 const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
-const saveSynced = all => syncedList.set(all);
+const saveSynced = (all, options) => syncedList.set(all, options);
 // Sidebery adds a channel suffix ("~!...!~") to group URLs; strip it when copying.
 // (Ghost placeholder URLs come from ghostUrl() in common.js.)
 const groupBaseUrl = url => url.replace(/~!.*!~$/, "");
@@ -210,7 +210,7 @@ async function fillWindow(windowId, { fresh = false } = {}) {
       // One refused tab (its container was removed, say) must not leave the
       // window without all the tabs after it.
       const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined)
-        .catch(err => { console.error("Tidier:", err); return null; });
+        .catch(err => { noteError(err); return null; });
       if (!tab) continue;
       reps.set(key, tab.id);
       created++;
@@ -294,7 +294,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   return (async () => {
     for (let i = 0; i < 20 && (orderQueries.size || pending.size); i++) await sleep(100);
     await serial(() => {});
-    return { ...work, sizes: Object.fromEntries(Object.entries(lists).map(([name, list]) => [name, list.size])) };
+    return { ...work, problems, sizes: Object.fromEntries(Object.entries(lists).map(([name, list]) => [name, list.size])) };
   })();
 });
 
@@ -333,8 +333,10 @@ async function reconcileAll() {
     }
     if (!all[key].group) {
       const live = reps.filter(t => syncRoleByTab.get(t.id) === "live");
-      // Exactly one live tab: prefer a loaded one.
-      const keep = live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
+      // Exactly one live tab: prefer a loaded one. A real page is yours, whatever
+      // its role says: a ghost selected before the roles were read has opened it.
+      const page = t => !t.discarded && !isGhostUrl(t.url);
+      const keep = live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
       // Keep title and icon current (older entries have no icon).
       if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keep.favIconUrl || all[key].icon });
@@ -354,7 +356,7 @@ async function reconcileAll() {
   noteSaved(all); // also gives tabs that were in folders before saved tabs existed their address
   saveSynced(all);
   // A window closed meanwhile must not keep the others from being filled.
-  for (const w of wins) await fillWindow(w.id).catch(err => console.error("Tidier:", err));
+  for (const w of wins) await fillWindow(w.id).catch(noteError);
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -451,6 +453,19 @@ async function unloadSaved(key, windowId, place) {
   await placeNextTo(windowId, ghost.id, place.before, place.after);
 }
 
+// Whether a tab can be closed without asking you. A page with unsaved input
+// makes Firefox select it and ask (and Tidier's queue waits for the answer),
+// which must not happen at a moment you did not choose: so a loaded tab is unloaded
+// first, which such a page refuses without asking. Its copy for Recently Closed
+// is kept either way.
+async function closesQuietly(key) {
+  const liveId = liveTabId(key);
+  const live = liveId === undefined ? null : await browser.tabs.get(liveId).catch(() => null);
+  if (!live || live.discarded || isGhostUrl(live.url)) return true;
+  await browser.tabs.discard(live.id).catch(() => {});
+  return !!(await browser.tabs.get(live.id).catch(() => null))?.discarded;
+}
+
 // The tab was closed by you (not by closing its window): close it everywhere.
 // Live folder tabs closed by you are remembered (see livefolders.js).
 async function closeEverywhere(key, { dismiss = true } = {}) {
@@ -463,6 +478,14 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   if (reps.length) await browser.tabs.remove(reps.map(t => t.id));
   await forgetClosedPlaceholders("ghost", [key]);
+}
+
+// Placeholders Firefox closed itself: it closes those loaded when Tidier updates.
+// In Recently Closed they would be reopened by ⌘⇧T instead of a tab you closed.
+async function forgetClosedGhosts() {
+  for (const { tab } of await browser.sessions.getRecentlyClosed()) {
+    if (tab && isGhostUrl(tab.url)) await browser.sessions.forgetClosedTab(tab.windowId, tab.sessionId).catch(() => {});
+  }
 }
 
 // Forget a synced entry once no window has a tab for it any more.
@@ -490,12 +513,15 @@ async function pull(ghostId) {
     liveId === undefined ? null : browser.tabs.get(liveId).catch(() => null),
   ]);
   if (!ghost) return;
+  // You may have moved on while this waited in the queue: it must not take the
+  // selection back.
+  if (!ghost.active || ghost.windowId !== focusedWindowId) return;
   if (!live || live.windowId === ghost.windowId) {
     // No live tab to pull: the ghost becomes the live tab and loads itself.
     await setRole(ghostId, key, "live");
     return;
   }
-  pulling = true;
+  pulling++;
   syncBusy.add(live.id); syncBusy.add(ghostId);
   try {
     const fromWindow = live.windowId, fromIndex = live.index, fromOpener = live.openerTabId;
@@ -532,7 +558,7 @@ async function pull(ghostId) {
       await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
     }
   } finally {
-    setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling = false; }, 600);
+    setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);
   }
 }
 
@@ -673,11 +699,13 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       const entry = all[key];
       if (!entry || !isWeb(tab.url)) return;
       const changed = entry.title !== tab.title || (tab.favIconUrl && entry.icon !== tab.favIconUrl);
+      const moved = entry.url !== tab.url;
+      if (!changed && !moved) return;
       Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
       // On its saved address, a saved tab's saved title and icon follow the page.
       if (entry.saved?.url === tab.url) Object.assign(entry.saved, { title: tab.title, icon: tab.favIconUrl || entry.saved.icon });
       noteSaved(all, [key]);
-      saveSynced(all);
+      saveSynced(all, { lazy: !moved });
       if (changed) refreshGhostsSoon(key);
     });
   }
@@ -786,7 +814,10 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   forget(tabId);
   if (info.isWindowClosing) lastOrder.delete(info.windowId); else noteOrder(info.windowId);
-  if (!started || !key || syncBusy.has(tabId)) { syncBusy.delete(tabId); return; }
+  // A tab Tidier closes itself has lost its key by now. A tab that is only marked
+  // busy (just pulled in, say) and has its key was closed by you.
+  syncBusy.delete(tabId);
+  if (!started || !key) return;
   if (info.isWindowClosing) {
     if (role === "live") serial(() => handOver(key, info.windowId));
     return;
@@ -831,25 +862,34 @@ function closedPlace(windowId, tabId) {
   return { unloaded: order[i].unloaded, before: keysOf(order.slice(0, i).reverse()), after: keysOf(order.slice(i + 1)) };
 }
 
-// Selecting a ghost in the window you are using pulls the live tab in.
+// Selecting a ghost in the window you are using pulls the live tab in. (A pull
+// selects tabs itself too, but never a ghost in the window you are using.)
 browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
-  if (!started || pulling || syncRoleByTab.get(tabId) !== "ghost" || windowId !== focusedWindowId) return;
+  if (!started || syncRoleByTab.get(tabId) !== "ghost" || windowId !== focusedWindowId) return;
   serial(() => pull(tabId));
 });
 
 // Switching to a window whose selected tab is a ghost pulls the live tab in.
-browser.windows.onFocusChanged.addListener(windowId => {
-  if (!started || pulling || windowId === browser.windows.WINDOW_ID_NONE) return;
-  serial(async () => {
+function pullSelected(windowId) {
+  return serial(async () => {
     const [active] = await browser.tabs.query({ windowId, active: true });
     if (active && syncRoleByTab.get(active.id) === "ghost") await pull(active.id);
   });
+}
+browser.windows.onFocusChanged.addListener(windowId => {
+  if (started && windowId !== browser.windows.WINDOW_ID_NONE) pullSelected(windowId);
 });
 
 // You dragged a tab to another window: fix up both windows.
 browser.tabs.onAttached.addListener(tabId => {
   if (!started || pulling || syncBusy.has(tabId) || !syncKeyByTab.has(tabId)) return;
-  serial(reconcileAll);
+  const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
+  serial(async () => {
+    // Firefox loses the sessions values of an unloaded tab moved to another window;
+    // after a restart it would be a stranger, and a duplicate of itself.
+    await setRole(tabId, key, role).catch(() => {});
+    await reconcileAll();
+  });
 });
 
 // A new window gets essentials and ghosts of every synced tab.
@@ -913,7 +953,7 @@ async function start(delayMs) {
   // Every listener waits for `started`, so an error here must not stop the rest:
   // with it false a selected ghost stays blank and nothing syncs until Firefox
   // restarts, with no sign of why. This runs at every update, in the middle of work.
-  const step = fn => Promise.resolve().then(fn).then(() => true, err => { console.error("Tidier:", err); return false; });
+  const step = fn => Promise.resolve().then(fn).then(() => true, err => { noteError(err); return false; });
   await serial(async () => {
     await step(initList);
     // Without the roles every tab looks unsynced, and reconcileAll would act on that.
@@ -923,9 +963,12 @@ async function start(delayMs) {
     }
     await step(foldersFirstAll); // folders.js
     await step(oneLoadedEach); // essentials.js: Firefox may have restored a page in several windows
+    await step(forgetClosedGhosts);
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
+  // A ghost selected while Tidier was starting was not pulled in, and waits blank.
+  if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
 }
 let startRequested = false;
 function requestStart(delayMs) {

@@ -2,22 +2,44 @@
 
 // All changes run one after another, so two events never race each other
 // into duplicate tabs. Both features share this one queue.
+//
+// One job that never ends would stop everything after it, until Firefox restarts
+// (a tab Firefox never finishes creating, say), so a job has a time limit. It is
+// far above any real job: past it the next job can overlap with this one.
+const JOB_LIMIT_MS = 5 * 60000;
 let queue = Promise.resolve();
 function serial(fn) {
   const run = queue.then(async () => {
     const t0 = performance.now();
     work.jobs++;
-    try { return await fn(); } finally { work.queueMs += performance.now() - t0; }
+    let limit;
+    try {
+      return await Promise.race([fn(), new Promise((_, reject) => {
+        limit = setTimeout(() => reject(new Error("a job did not finish within the time limit")), JOB_LIMIT_MS);
+      })]);
+    } finally { clearTimeout(limit); work.queueMs += performance.now() - t0; }
   });
-  queue = run.catch(err => console.error("Tidier:", err));
+  queue = run.catch(noteError);
   return run;
 }
+
+// Errors inside Tidier. Firefox only shows them in a console nobody looks at,
+// so they are also kept for the smoke test ("stats" in tabsync.js), which fails
+// on any: an error there is a tab that was not handled.
+const problems = [];
+function noteError(err) {
+  console.error("Tidier:", err);
+  work.errors++;
+  problems.push(String(err?.message ?? err));
+  if (problems.length > 20) problems.shift();
+}
+globalThis.addEventListener?.("unhandledrejection", event => noteError(event.reason));
 
 // How much Tidier does, for the smoke test (the "stats" message, tabsync.js):
 // jobs run in the queue and how long they held it (waits for Sidebery
 // included), tab lookups made outside it (noteOrder, tabsync.js), and the
 // timed checks (archiving, live folders), the only work with nothing happening.
-const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0 };
+const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0, errors: 0 };
 browser.alarms.onAlarm.addListener(() => { work.alarms++; });
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -220,17 +242,29 @@ browser.windows.onFocusChanged.addListener(id => { focusedWindowId = id; });
 
 // A value saved to storage.local a moment after the last change, so bursts of
 // changes become one write. Reads come from memory.
+//
+// A change that is only a title or an icon is `lazy`: a page whose title ticks (a
+// timer, an unread count) would otherwise rewrite everything at every tick, all day.
+// It is written at most once every LAZY_WRITE_MS; a title lost in a crash comes back
+// with the page. Any other change is written at once and takes the lazy one along.
+const WRITE_DELAY_MS = 300, LAZY_WRITE_MS = 30000;
 function storedValue(storageKey, empty) {
-  let value = null, timer = null;
+  let value = null, timer = null, lastWrite = 0;
+  const write = () => {
+    timer = null;
+    lastWrite = Date.now();
+    browser.storage.local.set({ [storageKey]: value });
+  };
   return {
     async get() {
       if (value === null) value = (await browser.storage.local.get(storageKey))[storageKey] ?? empty();
       return value;
     },
-    set(next) {
+    set(next, { lazy = false } = {}) {
       value = next;
+      if (lazy && timer !== null) return; // a write is on its way anyway
       clearTimeout(timer);
-      timer = setTimeout(() => browser.storage.local.set({ [storageKey]: value }), 300);
+      timer = setTimeout(write, lazy ? Math.max(WRITE_DELAY_MS, lastWrite + LAZY_WRITE_MS - Date.now()) : WRITE_DELAY_MS);
     },
   };
 }

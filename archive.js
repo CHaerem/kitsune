@@ -45,6 +45,7 @@ async function archiveIdleTabs({ now = Date.now(), onlyKeys, explain = false } =
   for (const key of onlyKeys || Object.keys(all)) {
     const why = keepReason(all, key, repsOf(key, tabs), tabsById, now, since, hours);
     if (why) { kept[key] = why; continue; }
+    if (!(await closesQuietly(key))) { kept[key] = "unsaved"; continue; }
     archived.push(all[key].url);
     await closeEverywhere(key, { dismiss: false });
   }

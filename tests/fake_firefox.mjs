@@ -120,7 +120,7 @@ export class FakeFirefox {
         return ff.snap(t);
       },
       remove: async ids => { ids = Array.isArray(ids) ? ids : [ids]; ids.forEach(need); for (const id of ids) { ff.log.push(["remove", id, ff.tabs.get(id).url]); ff.rm(id); } },
-      discard: async id => { const t = need(id); t.discarded = true; },
+      discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id)) t.discarded = true; },
     };
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),
@@ -134,7 +134,8 @@ export class FakeFirefox {
       setTabValue: async (id, k, v) => { need(id); const o = ff.values.get(id) || {}; o[k] = v; ff.values.set(id, o); },
       removeTabValue: async (id, k) => { need(id); const o = ff.values.get(id); if (o) delete o[k]; },
       getWindowValue: async () => undefined, setWindowValue: async () => {},
-      getRecentlyClosed: async () => [], forgetClosedTab: async () => {},
+      getRecentlyClosed: async () => ff.recentlyClosed || [],
+      forgetClosedTab: async (windowId, sessionId) => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.tab?.sessionId !== sessionId); },
     };
     b.storage = { local: {
       get: async k => { const ks = typeof k === "string" ? [k] : k; const o = {}; for (const x of ks) if (x in ff.store) o[x] = JSON.parse(JSON.stringify(ff.store[x])); return o; },

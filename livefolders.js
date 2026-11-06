@@ -109,7 +109,7 @@ async function refreshLiveFolder(folder, res) {
   // tab is no longer the selected tab in any window (merged while you read it).
   const tabs = await browser.tabs.query({});
   for (const [url, k] of have) {
-    if (!wanted.has(url) && !repsOf(k, tabs).some(t => t.active)) await closeEverywhere(k, { dismiss: false });
+    if (!wanted.has(url) && !repsOf(k, tabs).some(t => t.active) && await closesQuietly(k)) await closeEverywhere(k, { dismiss: false });
   }
   for (const item of res.items) {
     if (have.has(item.url)) await renameLiveItem(have.get(item.url), item);

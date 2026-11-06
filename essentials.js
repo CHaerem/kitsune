@@ -35,11 +35,11 @@ async function getList() {
   if (!spaceOrder) spaceOrder = [...new Set(list.map(e => e.cookieStoreId))];
   return list;
 }
-function setList(list) {
+function setList(list, options) {
   const order = [...new Set([...(spaceOrder || []), ...list.map(e => e.cookieStoreId)])];
   const grouped = [...list].sort((a, b) => order.indexOf(a.cookieStoreId) - order.indexOf(b.cookieStoreId));
   spaceOrder = [...new Set(grouped.map(e => e.cookieStoreId))];
-  essentialsList.set(grouped);
+  essentialsList.set(grouped, options);
 }
 
 function tagTab(tabId, key) {
@@ -88,7 +88,7 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
     const tab = await browser.tabs.create({
       windowId, url: ghostUrl("essential", entry.key), active: false,
       cookieStoreId: entry.cookieStoreId, index,
-    }).catch(err => { console.error("Tidier:", err); return null; });
+    }).catch(err => { noteError(err); return null; });
     if (!tab) continue;
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
@@ -273,9 +273,10 @@ async function updateFromCopy(key, tab) {
   const list = await getList();
   const entry = list.find(e => e.key === key);
   if (!entry || !sameSite(tab.url, entry.url)) return;
+  if ((!tab.title || tab.title === entry.title) && (!tab.favIconUrl || tab.favIconUrl === entry.icon)) return;
   if (tab.title) entry.title = tab.title;
   if (tab.favIconUrl) entry.icon = tab.favIconUrl;
-  setList([...list]);
+  setList([...list], { lazy: true });
 }
 
 // An essential with no icon saved yet (not opened since it became one) takes

@@ -256,3 +256,179 @@ test("a placeholder waits for its icon, but not for ever", async () => {
   assert.equal(never.discarded, true);
   x.kill();
 });
+
+// --- In daily use -----------------------------------------------------------
+// Two windows and two tabs live in the first, with ghosts in the second, which you use.
+async function twoWindows(ff) {
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  const home = ff.addWindow();
+  const liveA = ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const liveB = ff.addTab(home.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:home", active: true });
+  const ghostA = ff.addTab(here.id, { url: GHOST("ghost", "a"), cookieStoreId: C1, discarded: true }, { syncKey: "a", syncRole: "ghost" });
+  const ghostB = ff.addTab(here.id, { url: GHOST("ghost", "b"), cookieStoreId: C1, discarded: true }, { syncKey: "b", syncRole: "ghost" });
+  const x = await run(ff);
+  return { x, home, here, liveA, liveB, ghostA, ghostB };
+}
+
+test("a ghost selected right after another is pulled in too", async () => {
+  const ff = new FakeFirefox();
+  const { x, here, liveA, liveB, ghostA, ghostB } = await twoWindows(ff);
+  ff.select(ghostA.id);
+  await wait(150);
+  ff.select(ghostB.id);
+  await wait(2000);
+  assert.equal(ff.tabs.get(liveB.id).windowId, here.id, "the second live tab came");
+  assert.equal(ff.tabs.get(liveB.id).active, true);
+  assert.equal(ff.tabs.get(liveA.id).windowId, here.id, "the first one too");
+  x.kill();
+});
+
+test("a pull that waited in the queue does not take the selection back", async () => {
+  const ff = new FakeFirefox();
+  const { x, home, liveA, ghostA } = await twoWindows(ff);
+  const other = ff.addTab(ghostA.windowId, { url: "about:blank", cookieStoreId: C1 });
+  x.js("serial(() => sleep(500))");
+  ff.select(ghostA.id);
+  ff.select(other.id);
+  await wait(1500);
+  assert.equal(ff.tabs.get(other.id).active, true);
+  assert.equal(ff.tabs.get(liveA.id).windowId, home.id);
+  x.kill();
+});
+
+test("a tab closed right after it was pulled in closes everywhere", async () => {
+  const ff = new FakeFirefox();
+  const { x, liveA, ghostA } = await twoWindows(ff);
+  ff.select(ghostA.id);
+  await wait(100);
+  ff.rm(liveA.id);
+  await wait(1500);
+  assert.ok(!("a" in ff.synced), "gone from the record");
+  assert.ok(![...ff.values.values()].some(v => v.syncKey === "a"), "gone from every window");
+  x.kill();
+});
+
+test("a title that ticks does not rewrite the record at every tick", async () => {
+  const ff = new FakeFirefox();
+  const { x, liveA } = await twoWindows(ff);
+  await wait(1000);
+  const before = ff.storeWrites || 0;
+  for (let i = 0; i < 15; i++) {
+    liveA.title = `(${i}) A`;
+    x.b.tabs.onUpdated.fire(liveA.id, { title: liveA.title }, ff.snap(liveA));
+    await wait(1000);
+  }
+  assert.ok((ff.storeWrites || 0) - before <= 2, `${(ff.storeWrites || 0) - before} writes`);
+  // Anything that matters is still written at once.
+  liveA.title = "(x) A";
+  x.b.tabs.onUpdated.fire(liveA.id, { title: liveA.title }, ff.snap(liveA));
+  x.js(`getSynced().then(all => { delete all.b; saveSynced(all); })`);
+  await wait(600);
+  assert.ok(!("b" in ff.synced));
+  assert.equal(ff.synced.a.title, "(x) A");
+  x.kill();
+});
+
+test("a page load that changes nothing writes nothing", async () => {
+  const ff = new FakeFirefox();
+  const { x, liveA } = await twoWindows(ff);
+  liveA.title = ff.store.syncedTabs.a.title;
+  await wait(1000);
+  const before = ff.storeWrites || 0;
+  x.b.tabs.onUpdated.fire(liveA.id, { status: "complete" }, ff.snap(liveA));
+  await wait(1000);
+  assert.equal((ff.storeWrites || 0) - before, 0);
+  x.kill();
+});
+
+test("a loaded page with unsaved input is kept when archiving, and the others go", async () => {
+  const ff = new FakeFirefox();
+  ff.store.archiveSince = 1;
+  ff.store.syncedTabs = { typed: entry("https://a.example/"), plain: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const typed = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1, lastAccessed: 1 }, { syncKey: "typed", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1, lastAccessed: 1 }, { syncKey: "plain", syncRole: "live" });
+  const x = await run(ff);
+  ff.refuseDiscard = new Set([typed.id]);
+  const r = await x.send({ type: "archiveNow", now: Date.now() + 13 * 3600e3, keys: ["typed", "plain"], explain: true });
+  assert.equal(r.kept.typed, "unsaved");
+  assert.deepEqual([...r.archived], ["https://b.example/"]);
+  assert.ok(ff.tabs.has(typed.id));
+  x.kill();
+});
+
+test("a job that never ends does not stop the queue for good", async () => {
+  const ff = new FakeFirefox();
+  emptySession(ff);
+  const x = await run(ff);
+  x.js("serial(() => new Promise(() => {}))");
+  x.js(`globalThis.ranAfter = false; serial(() => { globalThis.ranAfter = true; })`);
+  await wait(1000);
+  assert.equal(x.js("ranAfter"), false);
+  await wait(5 * 60000 + 500);
+  assert.equal(x.js("ranAfter"), true);
+  assert.match(x.js("problems.join()"), /time limit/);
+  x.kill();
+});
+
+test("errors inside Tidier are kept for the tests to see", async () => {
+  const ff = new FakeFirefox();
+  emptySession(ff);
+  const x = await run(ff);
+  x.js(`serial(() => { throw new Error("on purpose"); })`);
+  await wait(100);
+  assert.match(x.js("problems.join()"), /on purpose/);
+  assert.equal(x.js("work.errors"), 1);
+  x.kill();
+});
+
+test("an unloaded tab moved to another window keeps its values", async () => {
+  const ff = new FakeFirefox();
+  const { x, home, here, liveB } = await twoWindows(ff);
+  ff.tabs.get(liveB.id).discarded = true;
+  ff.values.delete(liveB.id); // as Firefox does for an unloaded tab
+  await x.b.tabs.move(liveB.id, { windowId: here.id, index: 0 });
+  await wait(1500);
+  assert.equal(ff.values.get(liveB.id)?.syncKey, "b");
+  assert.equal(ff.values.get(liveB.id)?.syncRole, "live");
+  assert.ok(ff.list(home.id).some(t => ff.values.get(t.id)?.syncKey === "b"), "the window it left has its ghost");
+  x.kill();
+});
+
+test("a ghost selected before a start is done opens its tab then", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow();
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1, active: true }, { syncKey: "a", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  const ghost = ff.addTab(here.id, { url: GHOST("ghost", "a"), cookieStoreId: C1, active: true }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  assert.equal(ff.tabs.get(live.id).windowId, here.id);
+  assert.ok(!ff.tabs.has(ghost.id));
+  x.kill();
+});
+
+test("a real page counts as the live tab, whatever its role says", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w1 = ff.addWindow({ focused: true });
+  const loaded = ff.addTab(w1.id, { url: "https://a.example/", cookieStoreId: C1, active: true }, { syncKey: "a", syncRole: "ghost" });
+  const w2 = ff.addWindow();
+  const old = ff.addTab(w2.id, { url: "https://a.example/", cookieStoreId: C1, discarded: true }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  assert.equal(ff.values.get(loaded.id).syncRole, "live");
+  assert.equal(ff.values.get(old.id).syncRole, "ghost");
+  x.kill();
+});
+
+test("placeholders Firefox closed at an update are not left in Recently Closed", async () => {
+  const ff = new FakeFirefox();
+  emptySession(ff);
+  ff.recentlyClosed = [{ tab: { url: GHOST("ghost", "x"), windowId: 1, sessionId: "1" } }, { tab: { url: "https://real.example/", windowId: 1, sessionId: "2" } }];
+  const x = await run(ff);
+  assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["2"]);
+  x.kill();
+});
