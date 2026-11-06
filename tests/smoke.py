@@ -1745,9 +1745,9 @@ def alone_safe_moves(m):
           return {active, on: on.cookieStoreId, left: (await page.browser.tabs.query({cookieStoreId: args[0]})).length,
                   hiddenHere: tabs.filter(t => t.cookieStoreId === active && t.hidden).length,
                   shownElsewhere: tabs.filter(t => t.cookieStoreId !== active && t.cookieStoreId !== "firefox-default" && !t.hidden && !t.active).length};""", made)
-        return {**state, "done": state["left"] == 0 and state["active"] not in (None, made) and state["on"] == state["active"]}
+        return {**state, "done": state["left"] == 0 and state["active"] not in (None, made) and state["on"] == state["active"] and state["hiddenHere"] == 0 and state["shownElsewhere"] == 0}
     r = until(fell_back)
-    check("the space you are in removed: you are in another space, on one of its tabs, with only its tabs shown", r["done"] and r["hiddenHere"] == 0 and r["shownElsewhere"] == 0, str(r))
+    check("the space you are in removed: you are in another space, on one of its tabs, with only its tabs shown", r["done"], str(r))
     sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", here)
 
     # The same from Firefox's settings page, as that page does it: it closes the tabs, then removes
@@ -1767,9 +1767,9 @@ def alone_safe_moves(m):
           const [on] = await page.browser.tabs.query({active: true, windowId}), tabs = await page.browser.tabs.query({windowId, pinned: false});
           return {active, on: on.url, left: (await page.browser.tabs.query({cookieStoreId: args[0]})).length, record: Object.values((await page.browser.storage.local.get("syncedTabs")).syncedTabs).filter(e => e.cookieStoreId === args[0]).length,
                   hiddenHere: tabs.filter(t => t.cookieStoreId === active && t.hidden).length};""", made)
-        return {**state, "done": state["left"] == 0 and state["record"] == 0 and state["active"] not in (None, made)}
+        return {**state, "done": state["left"] == 0 and state["record"] == 0 and state["active"] not in (None, made) and state["hiddenHere"] == 0}
     r = until(left_settings)
-    check("a space removed from Firefox's settings page: the page stays selected, and the window is in another space, its tabs shown", r["done"] and r["on"].startswith("about:preferences") and r["hiddenHere"] == 0, str(r))
+    check("a space removed from Firefox's settings page: the page stays selected, and the window is in another space, its tabs shown", r["done"] and r["on"].startswith("about:preferences"), str(r))
     m.js(H + """await removeWhere((w, t) => url(t).startsWith("about:preferences")); return 1;""")
     sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", here)
     no_problems(m, "after moves and a removed container")

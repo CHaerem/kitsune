@@ -35,6 +35,19 @@ function aWindow(ff, { selected = false, url = SITE } = {}) {
   return { w, other, tab };
 }
 
+// The sidebar's side of the connection, as sidebar.js has it.
+function aPort(x, windowId) {
+  const ls = { message: [], disconnect: [] }, views = [];
+  const port = { name: "sidebar", sender: { id: "tidier" }, postMessage: v => views.push(v),
+    onMessage: { addListener: f => ls.message.push(f) }, onDisconnect: { addListener: f => ls.disconnect.push(f) } };
+  x.b.runtime.onConnect.fire(port);
+  const send = msg => ls.message.forEach(f => f(msg));
+  send({ type: "hello", windowId });
+  return { views, send };
+}
+const realWait = ms => new Promise(r => setTimeout(r, ms));
+const until = async test => { for (let i = 0; i < 500 && !test(); i++) await realWait(2); assert.ok(test()); };
+
 // --- A move by hand is not undone by a rule ---------------------------------------
 for (const blankFirst of [true, "early"]) {
   test(`a tab moved by hand stays, with a rule for its site in the space it left (address ${blankFirst === "early" ? "before" : "after"} the answer)`, async () => {
@@ -550,6 +563,31 @@ test("the space you are in is removed from Firefox's settings page: you stay on 
   x.kill();
 });
 
+test("a view drawn before the queue gets to a removed space: the window's new space still has its tabs shown", async () => {
+  const ff = new FakeFirefox();
+  const { w, a, b, b2 } = inRemovedSpace(ff);
+  ff.tabs.get(b.id).active = false;
+  const settings = ff.addTab(w.id, { url: "about:preferences#containers", active: true });
+  const x = await alone(ff);
+  x.js("activeSpace").set(w.id, B);
+  aPort(x, w.id);
+  await realWait(5);
+  ff.tabs.get(a.id).hidden = true;
+  // The queue is busy (Tidier's own stay-in-the-space, say), and the view is not in it.
+  let free;
+  x.js("serial")(() => new Promise(r => { free = r; }));
+  ff.containers.delete(B);
+  ff.rm(b.id); ff.rm(b2.id);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await until(() => x.js("activeSpace").get(w.id) === A); // the view has decided
+  free();
+  await settled(x);
+  assert.equal(ff.tabs.get(a.id).hidden, false);
+  assert.equal(ff.tabs.get(settings.id).active, true);
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
+
 test("a new link without a container, after the space you were in is removed, lands in a space that exists", async () => {
   const ff = new FakeFirefox();
   const { w, b, b2 } = inRemovedSpace(ff);
@@ -636,19 +674,6 @@ test("a live folder set up for a removed space does not come back in the record,
 });
 
 // --- A sidebar open while Tidier starts -------------------------------------------
-// The sidebar's side of the connection, as sidebar.js has it.
-function aPort(x, windowId) {
-  const ls = { message: [], disconnect: [] }, views = [];
-  const port = { name: "sidebar", sender: { id: "tidier" }, postMessage: v => views.push(v),
-    onMessage: { addListener: f => ls.message.push(f) }, onDisconnect: { addListener: f => ls.disconnect.push(f) } };
-  x.b.runtime.onConnect.fire(port);
-  const send = msg => ls.message.forEach(f => f(msg));
-  send({ type: "hello", windowId });
-  return { views, send };
-}
-const realWait = ms => new Promise(r => setTimeout(r, ms));
-const until = async test => { for (let i = 0; i < 500 && !test(); i++) await realWait(2); assert.ok(test()); };
-
 // Boots the real scripts with Tidier's start held back, as in the seconds after Firefox starts.
 function bootHeld(ff) {
   ff.managed = { tidierAlone: true };

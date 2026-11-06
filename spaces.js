@@ -40,6 +40,9 @@ async function spaceOf(windowId, tabs, spaces) {
   if (!spaces.some(s => s.id === space)) {
     const selected = tabs.find(t => t.active);
     space = spaces.some(s => s.id === selected?.cookieStoreId) ? selected.cookieStoreId : spaces[0]?.id;
+    // A space removed lands here first if a view comes before the queue gets to it
+    // (spaceRemoved, safemoves.js), and then nothing else would show this space's tabs.
+    showSpaceSoon(windowId);
   }
   activeSpace.set(windowId, space);
   return space;
