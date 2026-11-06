@@ -261,7 +261,9 @@ def essentials(m):
       other().gBrowser.adoptTab(t, {tabIndex: 0}); await wait(5000);
       const after = count();
       return {k, before: before.map(b => b[k]), after: after.map(a => a[k]), same: JSON.stringify(before.map(b => Object.keys(b).sort())) === JSON.stringify(after.map(a => Object.keys(a).sort())),
-              doubled: after.flatMap(a => Object.entries(a).filter(([, n]) => n > 1)), misplaced: [...await misplaced(w), ...await misplaced(other())]};""")
+              doubled: after.flatMap(a => Object.entries(a).filter(([, n]) => n > 1)), misplaced: [...await misplaced(w), ...await misplaced(other())],
+              moved: t.closing ? "closed" : [wins().indexOf(t.ownerGlobal), t.pinned, ek(t.ownerGlobal, t)],
+              pinnedThere: wins().map(x => x.gBrowser.tabs.filter(y => y.pinned && (ek(x, y) === k || !ek(x, y))).map(y => [y.label, ek(x, y), url(y).slice(-40)]))};""")
     check("an essential dragged to the other window is there once, and comes back in the window it left",
           r["after"] == [1, 1] and r["same"] and not r["doubled"] and not r["misplaced"], str(r))
     r = m.js(H + """
@@ -591,7 +593,7 @@ def many_tabs(m):
         const loaded = () => n.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html"));
         for (let i = 0; i < 60 && (i < 16 || loaded().length); i++) await wait(250);
         return {ms, essentials: [pinned0, n.gBrowser.tabs.filter(t => t.pinned).length], tabs: [want, n.gBrowser.tabs.filter(t => !t.pinned && role(n, t)).length],
-                stillLoaded: loaded().length, misplaced: [...await misplaced(w), ...await misplaced(other()), ...await misplaced(n)]};
+                stillLoaded: loaded().length, misplaced: {main: await misplaced(w), other: await misplaced(other()), new: await misplaced(n)}};
       } finally {
         await close(n);
         // Unpinning one copy removes an essential everywhere; then the tabs go.
@@ -602,7 +604,7 @@ def many_tabs(m):
     check(f"with {r['essentials'][0]} essentials and {r['tabs'][0]} tabs, a new window gets them all ({r['ms']} ms)",
           r["ms"] is not None and r["essentials"][0] == r["essentials"][1] and r["tabs"][0] == r["tabs"][1], str(r))
     check("with that many, every tab is in its container's space in every window, and the placeholders unload",
-          not r["misplaced"] and not r["stillLoaded"], str(r), sidebery_bug="pin race")
+          not any(r["misplaced"].values()) and not r["stillLoaded"], str(r), sidebery_bug="pin race")
     left = m.js(H + """await wait(2000); return wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("smoke-many") || (t.pinned && !ek(w, t))).map(t => t.label));""")
     check("and they are all gone again once closed", all(not x for x in left), str(left))
 
