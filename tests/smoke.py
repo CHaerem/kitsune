@@ -1474,7 +1474,7 @@ def alone_live_folders(m):
 
 
 def sidebar_press(m, find):
-    """Press the real mouse button on what the expression `find` gives in the sidebar page, and leave it down. Returns how to let go: there, or at x, y. Until then nothing else may be sent to Firefox: Marionette forgets the press when it changes context."""
+    """Press the real mouse button on what the expression `find` gives in the sidebar page, and leave it down. Returns how to let go: there, or at x, y. Let go before doing anything else with Marionette: its mouse belongs to this page's context."""
     at = sidebar_page(m, f"""const e = {find}; if (!e) return null;
       const box = e.getBoundingClientRect(); return {{x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2)}};""")
     if not at:
@@ -1630,6 +1630,14 @@ def alone_sound(m):
       return {active: dot(args[0]).classList.contains("active"), row: !!row("sound away")?.querySelector(".sound"), selected: !!row("sound away")?.classList.contains("active"), dot: !!dot(args[0]).querySelector(".sound"), bar: doc.documentElement.dataset.barClicked ?? null};""", away)
     check("a click on a dot's mark goes to the tab that plays, and pulls it into this window", ok and s2["selected"][0] == "sound away" and s2["windows"]["sound away"] == "main" and r["bar"] is None, str((s2, r)))
     check("and to its space, where its row shows it", r["active"] and r["row"] and r["selected"] and r["dot"], str(r))
+    # An essential in another space comes over another way (essentialShown, essentials.js).
+    m.js(H + SOUND + """play(real("sound tile"), true); return 1;""")
+    sidebar_page(m, FIND + """await until(() => dot(args[0]).querySelector(".sound")); return 1;""", here)
+    ok = sidebar_click(m, f"""doc.querySelector('#spaces .space[data-space="{here}"] .sound')""")
+    s3 = state_until(lambda s: s["selected"][0] == "sound tile" and s["windows"]["sound tile"] == "main")
+    r = sidebar_page(m, FIND + """await until(() => tile("sound tile")?.classList.contains("active"));
+      return {active: !!tile("sound tile")?.classList.contains("active"), mark: !!tile("sound tile")?.querySelector(".sound:not(.muted)"), loaded: !tile("sound tile")?.classList.contains("unloaded")};""")
+    check("a dot's mark also brings an essential from another space and window, still playing", ok and s3["selected"][0] == "sound tile" and s3["windows"]["sound tile"] == "main" and r["active"] and r["mark"] and r["loaded"], str((s3, r)))
 
     # All quiet again, and gone.
     m.js(H + SOUND + """for (const w of wins()) for (const t of w.gBrowser.tabs) { if (t.soundPlaying) play(t, false); if (t.muted) t.toggleMuteAudio(); } return 1;""")
