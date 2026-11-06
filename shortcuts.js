@@ -55,7 +55,7 @@ const COMMANDS = [
   // Without a sidebar a window has no list of tabs at all: a key to bring it back. ⌘S, Arc's, is compact mode in the dotfiles.
   { name: "_execute_sidebar_action", label: "Show or hide Tidier's sidebar", key: "MacCtrl+Shift+S", action: () => browser.sidebarAction.toggle() },
   { name: "copy-url", label: "Copy the address of the current tab", key: "Ctrl+Shift+C", action: copyUrl, always: true },
-  ...ORDINAL.slice(0, 5).map((nth, i) => ({ name: `space-${i + 1}`, label: `Go to the ${nth} space`, key: `MacCtrl+${i + 1}`, action: inQueue(() => switchToNth(i)) })),
+  ...ORDINAL.slice(0, 5).map((nth, i) => ({ name: `space-${i + 1}`, label: `Go to the ${nth} space`, key: `MacCtrl+${i + 1}`, action: inQueue(w => switchToNth(w, i)) })),
   ...ORDINAL.map((nth, i) => ({ name: `tab-${i + 1}`, label: `Go to the ${nth} tab of this space`, key: `Ctrl+${i + 1}`, action: inQueue(w => nthTab(w, i + 1)) })),
 ];
 

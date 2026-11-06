@@ -122,6 +122,20 @@ test("next and previous space go along the bar and round the ends, and back to t
   x.kill();
 });
 
+test("the key for a space acts in the window it was pressed in, whichever has the focus by the time it runs", async () => {
+  const { x, ff, w, tab } = await aWindow();
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "https://o.example/", active: true, cookieStoreId: C1 });
+  await wait(100);
+  x.js("activeSpace").set(other.id, C1);
+  ff.focused = other.id;
+  x.b.commands.onCommand.fire("space-1", ff.snap(tab.t1));
+  await wait(300);
+  assert.equal(x.js("activeSpace").get(w.id), C2);
+  assert.equal(x.js("activeSpace").get(other.id), C1);
+  x.kill();
+});
+
 test("the essential key pins a page and unpins it, and leaves a page without an address alone", async () => {
   const { x, ff, w, selected, press, tab, keyPause } = await aWindow();
   await press("toggle-essential");
@@ -415,6 +429,7 @@ test("choosing a key: another command's is refused, Firefox's tab keys are refus
   assert.match((await set("next-tab", "Command+L")).note, /comes first until you clear it/);
   assert.equal(ff.commandsSet["next-tab"], "Command+L");
   assert.match((await set("next-tab", "Command+Left")).note, /both happen until you clear it/);
+  assert.match((await set("next-tab", "Alt+Command+I")).note, /⌥⌘I for the developer tools, and comes first/);
   assert.deepEqual({ ...(await set("next-tab", "Alt+Shift+J")) }, {});
   assert.deepEqual({ ...(await set("next-tab", "")) }, {}, "removed");
   assert.equal(ff.commandsSet["next-tab"], "");

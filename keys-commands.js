@@ -141,6 +141,9 @@ const FIREFOX_KEYS = {
   "Command+1": "going to a tab", "Command+2": "going to a tab", "Command+3": "going to a tab", "Command+4": "going to a tab", "Command+5": "going to a tab",
   "Command+6": "going to a tab", "Command+7": "going to a tab", "Command+8": "going to a tab", "Command+9": "going to a tab", "Command+0": "zoom", "Command+Comma": "settings", "Command+Shift+T": "reopening a tab", "Command+Shift+N": "reopening a window", "Command+Shift+X": "text direction", "Command+M": "minimizing the window",
   "Command+H": "hiding Firefox", "Alt+Command+H": "hiding other apps", "MacCtrl+X": "the chat sidebar", "MacCtrl+U": "the open tabs sidebar", "MacCtrl+Z": "the sidebar",
+  "Command+B": "bookmarks", "Command+Shift+B": "the bookmarks toolbar", "Command+Shift+H": "history", "Command+Shift+Delete": "clearing history", "Alt+Home": "the home page", "Alt+Command+R": "reader view", "Alt+Command+U": "the page's source",
+  "Alt+Command+C": "the developer tools", "Alt+Command+E": "the developer tools", "Alt+Command+I": "the developer tools", "Alt+Command+K": "the developer tools", "Alt+Command+M": "the developer tools", "Alt+Command+W": "the developer tools", "Alt+Command+Z": "the developer tools", "Command+Shift+J": "the developer tools",
+  "F3": "find again", "Shift+F3": "find again", "F5": "reload", "F11": "full screen", "F12": "the developer tools", "Shift+F5": "the developer tools", "Shift+F7": "the developer tools", "Shift+F9": "the developer tools", "Shift+F12": "the developer tools",
 };
 
 // What the settings page lists: every command with a key to give, and that key now.

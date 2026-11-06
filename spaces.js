@@ -87,13 +87,11 @@ async function switchSpace(windowId, space) {
 }
 
 // The n-th space on the bar (⌃1, ⌃2, ...).
-async function switchToNth(n) {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  const tabs = await browser.tabs.query({ windowId: tab.windowId });
+async function switchToNth(windowId, n) {
+  const tabs = await browser.tabs.query({ windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
   const space = (await spaceList(used))[n];
-  if (space) await switchSpace(tab.windowId, space.id);
+  if (space) await switchSpace(windowId, space.id);
 }
 
 // The selected tab decides the space: a tab in another space (a link, an essential,
