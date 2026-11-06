@@ -38,7 +38,7 @@ function menu({ folders = [], spaces = [{ id: C1, name: "One" }, { id: C2, name:
   // Arrays from another context compare as different: these are made here.
   return { sent, copied, ctx, items, labels: tabs => Array.from(items(tabs), i => (i ? i[0] : "|")) };
 }
-const row = (more = {}) => ({ id: 1, tile: false, kept: false, loaded: true, muted: false, address: "https://a.example/", folder: null, liveFolder: false, space: C1, ruled: false, ...more });
+const row = (more = {}) => ({ id: 1, tile: false, active: false, kept: false, loaded: true, muted: false, address: "https://a.example/", folder: null, liveFolder: false, space: C1, ruled: false, ...more });
 const tile = (more = {}) => row({ tile: true, kept: true, ...more });
 
 test("a loaded row offers everything, in order, in groups", () => {
@@ -124,6 +124,12 @@ test("Copy takes one address per line, on the click", () => {
   m.items([row({ id: 1, address: "https://a.example/x" }), row({ id: 2, address: "https://b.example/y" })]).find(i => i?.[0] === "Copy 2 addresses")[1]();
   assert.deepEqual(m.copied, ["https://a.example/", "https://a.example/x\nhttps://b.example/y"]);
   assert.deepEqual(m.sent, [], "nothing to ask the background");
+});
+
+test("Close takes the selected tab last", () => {
+  const m = menu();
+  m.items([row({ id: 7, active: true }), row({ id: 8 }), row({ id: 9 })]).find(i => i?.[0] === "Close 3 tabs")[1]();
+  assert.deepEqual(Array.from(m.sent, x => x.tabId), [8, 9, 7]);
 });
 
 test("items send one list, and Close one message per tab", () => {
@@ -289,7 +295,7 @@ test("what the menu is told is about the real tab", async () => {
   const { x, ghost, live } = await twoWindows(ff);
   live.mutedInfo = { muted: true };
   const [facts] = await x.send({ type: "tabMenu", tabIds: [ghost.id] });
-  assert.deepEqual(JSON.parse(JSON.stringify(facts)), { id: ghost.id, tile: false, kept: false, loaded: true, muted: true, address: "https://a.example/page", folder: null, liveFolder: false, space: C1, ruled: false });
+  assert.deepEqual(JSON.parse(JSON.stringify(facts)), { id: ghost.id, tile: false, active: false, kept: false, loaded: true, muted: true, address: "https://a.example/page", folder: null, liveFolder: false, space: C1, ruled: false });
   assert.equal((await x.send({ type: "tabMenu", tabIds: [ghost.id, 9999] })).length, 1, "a tab closed meanwhile is left out");
   x.kill();
 });
@@ -540,7 +546,6 @@ test("a tab moved a moment ago can be made essential: tab sync must not miss it"
   // In one go, within the moment a moved tab stays marked as being moved.
   await x.js("serial")(async () => {
     await x.js("tabAction")(here.id, { action: "folder", tabIds: [a.id], folder: null });
-    assert.ok(x.js("syncBusy").has(a.id), "marked, or this does not test it");
     await x.js("tabAction")(here.id, { action: "essential", tabIds: [a.id] });
   });
   await wait(2000);

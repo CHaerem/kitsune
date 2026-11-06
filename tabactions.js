@@ -49,6 +49,7 @@ async function tabMenuFacts(tabIds) {
   return reals.map(r => ({
     id: r.own.id,
     tile: r.own.pinned,
+    active: r.own.active,
     kept: r.own.pinned || !!r.entry?.saved,
     loaded: r.loaded,
     muted: !!r.tab.mutedInfo?.muted,
@@ -69,7 +70,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 // would lose it where closing the page itself only unloads it.
 async function closeTargetOf(tabId) {
   if (!tidierAlone) return tabId;
-  const real = await realOf(tabId);
+  const real = await realOf(tabId).catch(noteError); // a × must close something, whatever else went wrong
   return real?.loaded ? real.tab.id : tabId;
 }
 

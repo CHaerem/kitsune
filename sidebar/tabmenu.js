@@ -57,9 +57,11 @@ const TAB_MENU = [
   { id: "rule", group: 4, label: () => "Always open this site here",
     when: eachTab(t => !t.tile && !!t.address && !t.ruled && t.space !== "firefox-default"), run: tabs => tabAct("rule", tabs) },
 
-  // Closing a tile that is not loaded would only draw the same placeholder again.
+  // Closing a tile that is not loaded would only draw the same placeholder again. The selected
+  // tab goes last: closed first, Firefox would select another, perhaps a placeholder in this
+  // list, whose real tab is then pulled in under another id while its close is on the way.
   { id: "close", group: 5, many: true, label: n => tabsWord(n, "Close", "Close # tabs"),
-    when: eachTab(t => !t.tile || t.loaded), run: tabs => tabs.forEach(t => send({ type: "close", tabId: t.id })) },
+    when: eachTab(t => !t.tile || t.loaded), run: tabs => [...tabs].sort((a, b) => a.active - b.active).forEach(t => send({ type: "close", tabId: t.id })) },
 ];
 
 // The menu for these tabs, as openMenu takes it (null: a line).
