@@ -1469,9 +1469,8 @@ def alone_new_tab(m):
     # from another app. Each tab's row is read from the real sidebar, once it has settled.
     settled = """const settled = async (test, ms = 10000) => { const t0 = Date.now(); for (;;) { const v = test(); if (v || Date.now() - t0 > ms) return v; await wait(50); } };"""
     rows = settled + """const ids = () => plainTabs().map(r => Number(r.dataset.tab));"""
-    # Waits for a tab to be first among today's, and for no other change (⌘T's tab comes
-    # in at the end first, and is opened again at the top a moment later).
-    # Every view the sidebar is sent meanwhile is kept: a new row anywhere but first is a jump.
+    # Waits for a tab to be first among today's, with the others as they were. Every view the
+    # sidebar is sent meanwhile is kept: a new row anywhere but first is a jump.
     new_first = rows + """const before = args[0], known = [...doc.querySelectorAll("#tabs > .tab")].map(r => Number(r.dataset.tab)), views = [];
       port.onMessage.addListener(v => views.push(v.tabs.map(t => t.id)));
       await settled(() => !before.includes(ids()[0]) && ids().length === before.length + 1);
@@ -1490,10 +1489,10 @@ def alone_new_tab(m):
       a.focus(); await wait(500); return true;""")
     more_tabs_here(m, "newtab")
 
-    # The button, with a folder drawn above. Its tab has moved to the end of the window; another folder could be anywhere.
+    # The button, with a folder drawn above. (moveTab puts the folder's tab last in the window; the unit test has one before.)
     r = sidebar_page(m, rows + """
-      send({type: "newFolder", space: spaces().find(s => s.active).id, name: "Kept"});
-      const head = await settled(() => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Kept"));
+      send({type: "newFolder", space: spaces().find(s => s.active).id, name: "Above the new tabs"});
+      const head = await settled(() => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Above the new tabs"));
       send({type: "moveTab", tabId: ids()[0], folder: head.dataset.folderHead, before: null});
       await settled(() => head.parentElement.querySelector(".tab"));
       const before = ids();
