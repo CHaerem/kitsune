@@ -1560,6 +1560,30 @@ def alone_archived(m):
       return {tips: rowsHere().map(x => x.title), open: open(), reply: await page.browser.runtime.sendMessage({type: "archivedTabs", space: args[0]}).then(l => JSON.parse(JSON.stringify(l)))};""", space)
     check("the × forgets it, and the view stays", r["open"] and len(r["tips"]) == 1 and [x["url"] for x in r["reply"]] == [back_url], str(r))
 
+    # A tab you close while it is open comes in by itself, marked as closed, not archived.
+    closing = m.js(H + settled + """const w = main(), t = w.gBrowser.addTrustedTab(args[0] + "/titled?smoke-archived-closing", {userContextId: args[1], inBackground: true});
+      await settled(() => key(w, t) && t.label === %s && other().gBrowser.tabs.some(x => key(other(), x) === key(w, t)));
+      const u = url(t); w.gBrowser.removeTab(t); return u;""" % json.dumps(TITLE), m.pages, ctx)
+    r = sidebar_page(m, box + """await settled(() => rowsHere().length === 2);
+      const tip = rowsHere()[0].title, older = rowsHere()[1].title;
+      await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "forgetArchived", item: {space: args[0], url: args[1]}})));
+      await settled(() => rowsHere().length === 1);
+      return {tip, older, left: rowsHere().length};""", space, closing)
+    check("a tab you close while the view is open comes in by itself, as closed", closing in r.get("tip", "") and "\nClosed " in r["tip"] and "\nArchived " in r["older"] and r["left"] == 1, str(r))
+
+    # A click outside the view closes it, and still does what it does.
+    r = sidebar_page(m, box + """
+      const dot = doc.querySelector("#spaces .space:not(.active)"), to = dot.dataset.space;
+      dot.click();
+      const closed = !open();
+      await settled(() => spaces().find(s => s.active).id === to);
+      const then = spaces().find(s => s.active).id;
+      send({type: "space", space: args[0]});
+      await settled(() => spaces().find(s => s.active).id === args[0]);
+      return {closed, went: then === to};""", space)
+    check("a click on a space closes the view, and goes there", r.get("closed") and r.get("went"), str(r))
+    r = sidebar_page(m, box + """page.openArchived(); await settled(() => open() && rowsHere().length); await settled(() => box.getBoundingClientRect().left === 0); return rowsHere().length;""")
+
     # A click brings it back: with its title from the very first view, selected, in its space,
     # also with a rule for its address: it is coming back to where it was, not a new tab.
     extension_message(m, {"type": "settings:rules", "rules": [{"url": "smoke-archived-back", "space": s["away"]}]})

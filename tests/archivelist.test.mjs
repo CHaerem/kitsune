@@ -316,3 +316,17 @@ test("a list that cannot be read does not stop a close", async () => {
   assert.ok(w);
   x.kill();
 });
+
+test("a space you switch to is kept with the window, also after one opened from the list", async () => {
+  const { x, w } = await session([["a", "https://a.example/", { cookieStoreId: C2 }]]);
+  const kept = {};
+  x.b.sessions.setWindowValue = async (id, name, value) => { kept[name] = value; };
+  await archive(x, ["a"]);
+  await wait(1000); // closing a tab: for a moment after it, Firefox's next selection does not take you away (closedIn, spaces.js)
+  await x.send({ type: "reopenArchived", item: { space: C2, url: "https://a.example/" }, windowId: w.id });
+  await x.js("serial(() => {})");
+  assert.equal(kept.space, C2, "the selected tab takes you to its space");
+  await x.js("(win, s) => serial(() => switchSpace(win, s))")(w.id, C1);
+  assert.equal(kept.space, C1, "an older space would come back after a restart");
+  x.kill();
+});
