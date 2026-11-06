@@ -59,12 +59,14 @@ async function ensureFolderGroup(folder, state) {
   return state.groupKey;
 }
 
+const liveTitle = item => `${item.repo}#${item.number} ${item.title}`;
+
 // A tab for one pull request: live in the home window, ghosts elsewhere.
 async function createLiveItem(folder, groupKey, item) {
   const all = await getSynced();
   const key = crypto.randomUUID();
   const entry = {
-    url: item.url, liveUrl: item.url, title: `${item.repo}#${item.number} ${item.title}`, icon: GITHUB_ICON,
+    url: item.url, liveUrl: item.url, title: liveTitle(item), icon: GITHUB_ICON,
     cookieStoreId: folder.cookieStoreId, parentKey: groupKey, group: false, liveFolder: folder.id,
   };
   all[key] = entry;
@@ -83,10 +85,14 @@ async function createLiveItem(folder, groupKey, item) {
   }
 }
 
-async function refreshLiveFolder(folder) {
-  const res = await browser.runtime.sendNativeMessage(NATIVE_HOST, { folder: folder.id })
-    .catch(err => ({ error: String(err) }));
-  if (!res || res.error) { console.warn("Kitsune: live folder", folder.id, res?.error); return; }
+// The search, outside the queue: it can take up to the host's 30 s timeout,
+// and tab sync (selecting a ghost, closing a tab) must not wait for it.
+function searchLiveFolder(folder) {
+  return browser.runtime.sendNativeMessage(NATIVE_HOST, { folder: folder.id }).catch(err => ({ error: String(err) }));
+}
+
+async function refreshLiveFolder(folder, res) {
+  if (!res || res.error || !Array.isArray(res.items)) { console.warn("Kitsune: live folder", folder.id, res?.error); return; }
   const state = await folderState(folder.id);
   const groupKey = await ensureFolderGroup(folder, state);
   if (!groupKey) return;
@@ -100,7 +106,25 @@ async function refreshLiveFolder(folder) {
   for (const [k, e] of Object.entries(all)) if (e.liveFolder === folder.id) have.set(e.liveUrl, k);
   for (const [url, k] of have) if (!wanted.has(url)) await closeEverywhere(k, { dismiss: false });
   for (const item of res.items) {
-    if (!have.has(item.url) && !state.dismissed.includes(item.url)) await createLiveItem(folder, groupKey, item);
+    if (have.has(item.url)) await renameLiveItem(have.get(item.url), item);
+    else if (!state.dismissed.includes(item.url)) await createLiveItem(folder, groupKey, item);
+  }
+}
+
+// A pull request renamed on GitHub: its tabs take the new title while none of
+// them has been opened. (An opened one shows GitHub's own title, which tab
+// sync keeps.)
+async function renameLiveItem(key, item) {
+  const all = await getSynced();
+  const entry = all[key], title = liveTitle(item);
+  if (!entry || entry.title === title) return;
+  const reps = repsOf(key, await browser.tabs.query({}));
+  if (!reps.length || !reps.every(t => isGhostUrl(t.url))) return;
+  entry.title = title;
+  saveSynced(all);
+  for (const t of reps) {
+    const kind = syncRoleByTab.get(t.id) === "live" ? "lazy" : "ghost";
+    await browser.tabs.update(t.id, { url: ghostUrl(kind, key) }).catch(() => {});
   }
 }
 
@@ -119,8 +143,11 @@ async function liveFolders() {
   return Array.isArray(res?.folders) ? res.folders.map(f => ({ id: f.id, name: f.name, cookieStoreId: f.container })) : [];
 }
 
-function refreshAllLiveFolders() {
-  return serial(async () => { for (const f of await liveFolders()) await refreshLiveFolder(f); });
+async function refreshAllLiveFolders() {
+  for (const f of await liveFolders()) {
+    const res = await searchLiveFolder(f);
+    await serial(() => refreshLiveFolder(f, res)).catch(() => {}); // logged by serial()
+  }
 }
 
 browser.alarms.create("liveFolders", { periodInMinutes: LIVE_REFRESH_MINUTES });

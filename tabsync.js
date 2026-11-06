@@ -241,10 +241,15 @@ async function reconcileAll() {
   const tabs = (await browser.tabs.query({})).filter(t => winIds.has(t.windowId));
 
   // Drop tabs whose key is no longer synced (e.g. state from an old install).
+  // A placeholder of such a tab has nothing to show, so it is closed.
+  const gone = [];
   for (const t of tabs) {
     const key = syncKeyByTab.get(t.id);
-    if (key && !all[key]) await clearRole(t.id);
+    if (!key || all[key]) continue;
+    if (isGhostUrl(t.url)) { gone.push(key); syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id).catch(() => {}); }
+    else await clearRole(t.id);
   }
+  if (gone.length) await forgetClosedPlaceholders("ghost", gone);
 
   for (const key of Object.keys(all)) {
     const reps = repsOf(key, tabs);
@@ -266,6 +271,7 @@ async function reconcileAll() {
       const ghosts = here.filter(t => syncRoleByTab.get(t.id) === "ghost");
       const extra = here.length > ghosts.length ? ghosts : ghosts.slice(1);
       for (const t of extra) { syncBusy.add(t.id); forget(t.id); await browser.tabs.remove(t.id); }
+      if (extra.length) await forgetClosedPlaceholders("ghost", [key]);
     }
   }
   saveSynced(all);
@@ -276,6 +282,10 @@ async function reconcileAll() {
 async function register(tabId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || syncKeyByTab.has(tab.id) || !syncable(tab)) return;
+  // Only tabs in ordinary windows: a sign-in popup (window.open) is not a tab
+  // you keep, and pulling its tab into another window would break the sign-in.
+  const win = await browser.windows.get(tab.windowId).catch(() => null);
+  if (!win || win.type !== "normal" || win.incognito) return;
   const all = await getSynced();
   const key = crypto.randomUUID();
   const parentKey = tab.openerTabId ? syncKeyByTab.get(tab.openerTabId) || null : null;
@@ -297,21 +307,12 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   const all = await getSynced();
   if (dismiss) await noteLiveFolderDismissed(all[key]);
   delete all[key];
+  lastRefresh.delete(key);
   saveSynced(all);
   const reps = repsOf(key, await browser.tabs.query({}));
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   if (reps.length) await browser.tabs.remove(reps.map(t => t.id));
-  await forgetClosedGhosts(key);
-}
-
-// Closed ghosts would show up in Recently Closed Tabs, and reopen as an
-// empty placeholder. Only the real tab should be there.
-async function forgetClosedGhosts(key) {
-  const ghost = ghostUrl("ghost", key);
-  for (const item of await browser.sessions.getRecentlyClosed()) {
-    const t = item.tab;
-    if (t?.url === ghost) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
-  }
+  await forgetClosedPlaceholders("ghost", [key]);
 }
 
 // Forget a synced entry once no window has a tab for it any more.
@@ -369,6 +370,7 @@ async function pull(ghostId) {
       browser.tabs.remove(ghostId),
       parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
     ]);
+    await forgetClosedPlaceholders("ghost", [key]);
     if (entry) {
       // A never-loaded live tab is still a placeholder page; keep the real URL then.
       if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: live.favIconUrl || entry.icon });
@@ -407,10 +409,11 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
     // Pinned tabs are essentials; they leave tab sync.
     serial(async () => {
       const all = await getSynced(); delete all[key]; saveSynced(all);
-      forget(tabId);
+      await clearRole(tabId);
       const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
       if (others.length) await browser.tabs.remove(others.map(t => t.id));
+      await forgetClosedPlaceholders("ghost", [key]);
     });
     return;
   }
@@ -429,15 +432,22 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
 
 // The live tab's title or icon changed: reload its ghosts so they show it.
 // Reloading a ghost only loads the local placeholder page, which unloads itself.
-const refreshTimers = new Map();
+// The first change is shown after REFRESH_DELAY_MS; a page whose title keeps
+// changing (a timer, an unread count) refreshes its ghosts at most once every
+// REFRESH_GAP_MS, with the newest title, so the ghosts neither churn nor go
+// stale while it changes.
+const REFRESH_DELAY_MS = 3000, REFRESH_GAP_MS = 60000;
+const refreshTimers = new Map(), lastRefresh = new Map();
 function refreshGhostsSoon(key) {
-  clearTimeout(refreshTimers.get(key));
+  if (refreshTimers.has(key)) return; // the pending refresh will show the newest title
+  const wait = Math.max(REFRESH_DELAY_MS, (lastRefresh.get(key) || 0) + REFRESH_GAP_MS - Date.now());
   refreshTimers.set(key, setTimeout(() => serial(async () => {
     refreshTimers.delete(key);
+    lastRefresh.set(key, Date.now());
     for (const t of repsOf(key, await browser.tabs.query({ discarded: true }))) {
       if (syncRoleByTab.get(t.id) === "ghost") await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
     }
-  }), 3000));
+  }), wait));
 }
 
 // --- Placeholder pages (ghost.js) ----------------------------------------
@@ -447,6 +457,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   if (!tab || sender.id !== browser.runtime.id) return;
   if (msg.type === "ghostInfo") return ghostInfo(msg.kind, msg.key);
   if (msg.type === "ghostReady") { unloadWhenIconShown(tab.id, sender.url, msg.icon); return; }
+  if (msg.type === "ghostOrphan") return serial(() => closeOrphan(tab.id, msg.kind, msg.key));
   // A ghost is being shown. It loads the real page itself only when there is
   // no live tab to pull in (the pull runs from onActivated, in the queue).
   if (msg.type === "ghostShown") {
@@ -485,6 +496,17 @@ function unloadGhost(tabId, tries = 0) {
 browser.tabs.onUpdated.addListener(tabId => {
   if (awaitingIcon.has(tabId)) unloadGhost(tabId);
 }, { properties: ["favIconUrl"] });
+
+// A placeholder whose tab or essential no longer exists (left from before a
+// restart, or by an older version) has nothing to show or open: it is closed.
+async function closeOrphan(tabId, kind, key) {
+  if (!["ghost", "essential", "lazy"].includes(kind) || (await ghostInfo(kind, key))) return;
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || !isGhostUrl(tab.url)) return;
+  syncBusy.add(tabId); busy.add(tabId); forget(tabId);
+  await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPlaceholders(kind, [key]);
+}
 
 async function ghostInfo(kind, key) {
   const entry = kind === "essential"
@@ -531,10 +553,40 @@ browser.tabs.onAttached.addListener(tabId => {
 });
 
 // A new window gets essentials and ghosts of every synced tab.
+// A window you reopened (History → Recently Closed Windows, ⌘⇧N) comes back
+// with its tabs' Kitsune values: its tabs are taken back instead, so nothing
+// is doubled (see adoptRestored).
 browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
-  setTimeout(() => serial(() => fillWindow(win.id, { fresh: true })), NEW_WINDOW_DELAY_MS);
+  setTimeout(() => serial(async () => {
+    if (await adoptRestored(win.id)) await reconcileAll();
+    else await fillWindow(win.id, { fresh: true });
+  }), NEW_WINDOW_DELAY_MS);
 });
+
+// Tabs restored with their Kitsune values: a tab still synced is taken back
+// as what it was (reconcileAll then keeps one live tab and one tab per window);
+// a placeholder of a tab closed since is removed; any other tab is left to be
+// registered as new. Returns whether the window had any.
+async function adoptRestored(windowId) {
+  const all = await getSynced();
+  let found = false;
+  const removed = [];
+  for (const t of await browser.tabs.query({ windowId })) {
+    if (syncKeyByTab.has(t.id)) continue;
+    const [key, role] = await Promise.all([
+      browser.sessions.getTabValue(t.id, SYNC_KEY),
+      browser.sessions.getTabValue(t.id, SYNC_ROLE),
+    ]);
+    if (!key || !role) continue;
+    found = true;
+    if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
+    if (isGhostUrl(t.url)) { syncBusy.add(t.id); removed.push(key); await browser.tabs.remove(t.id).catch(() => {}); }
+    else await clearRole(t.id);
+  }
+  if (removed.length) await forgetClosedPlaceholders("ghost", removed);
+  return found;
+}
 
 // --- Startup --------------------------------------------------------------
 

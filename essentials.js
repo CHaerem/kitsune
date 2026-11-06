@@ -142,28 +142,57 @@ async function ensureAllWindows() {
   for (const w of await normalWindows()) await ensureWindow(w.id);
 }
 
-// New essential (the tab was pinned).
+// New essential (the tab was pinned). A placeholder that is pinned (a ghost,
+// or a live folder tab never opened) stands for its synced tab's page; tab
+// sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
-  if (!isWeb(tab.url)) return;
+  let { url, title, favIconUrl: icon } = tab;
+  if (isGhostUrl(url)) {
+    const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
+    if (!entry || !isWeb(entry.url)) return;
+    ({ url, title, icon } = entry);
+  }
+  if (!isWeb(url)) return;
   const list = await getList();
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
-  setList([...list, { key, url: tab.url, cookieStoreId: tab.cookieStoreId, title: tab.title, icon: tab.favIconUrl }]);
+  setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon }]);
+  // The pinned placeholder becomes this essential's copy, still unloaded.
+  if (isGhostUrl(tab.url)) {
+    busy.add(tab.id);
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", key) }).catch(() => {});
+    setTimeout(() => busy.delete(tab.id), 1500);
+  }
   for (const w of await normalWindows()) if (w.id !== tab.windowId) await ensureWindow(w.id);
 }
 
 // Essential removed (the tab was unpinned): remove the copies in other windows.
+// An unloaded copy you unpin is still the placeholder page, which has nothing
+// to show once the essential is gone, so it opens the real page and becomes
+// an ordinary tab.
 async function onUnpinned(tab) {
   const key = await keyOf(tab);
   if (!key) return;
   keyByTab.delete(tab.id);
   await browser.sessions.removeTabValue(tab.id, TAB_KEY);
-  setList((await getList()).filter(e => e.key !== key));
+  const list = await getList();
+  const entry = list.find(e => e.key === key);
+  setList(list.filter(e => e.key !== key));
+  if (isGhostUrl(tab.url)) {
+    if (entry) await browser.tabs.update(tab.id, { url: entry.url }).catch(() => {});
+    else {
+      // Unpinned while the essential was being removed from another window
+      // (its copies are removed then): it goes the same way.
+      busy.add(tab.id);
+      await browser.tabs.remove(tab.id).catch(() => {});
+    }
+  }
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
   copies.forEach(id => busy.add(id));
   await browser.tabs.remove(copies);
+  await forgetClosedPlaceholders("essential", [key]);
 }
 
 // Essential closed: add it back, unloaded, in the same window.

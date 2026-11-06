@@ -22,6 +22,29 @@ const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/
 const ghostUrl = (kind, key) => browser.runtime.getURL(`ghost.html?kind=${kind}&key=${encodeURIComponent(key)}`);
 const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.html"));
 
+// Placeholders we close ourselves would show up in Recently Closed Tabs, and
+// ⌘⇧T would bring one back instead of the tab you closed. Only real pages
+// should be there, so they are forgotten. A loaded tab reaches Recently Closed
+// a moment after it is closed (Firefox saves its state first), so each is
+// looked for again whenever that list changes, for FORGET_MS. (An essential
+// copy's address may end in "&placed=N", see essentials.js.)
+const FORGET_MS = 10000;
+const toForget = new Map(); // placeholder URL -> until when to look for it
+async function forgetClosedPlaceholders(kind, keys) {
+  for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
+  await forgetClosedNow();
+}
+async function forgetClosedNow() {
+  for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
+  if (!toForget.size) return;
+  const ours = url => [...toForget.keys()].some(p => url === p || url?.startsWith(p + "&"));
+  const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
+  for (const t of closed.map(item => item.tab).filter(Boolean)) {
+    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+  }
+}
+browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
+
 async function normalWindows() {
   return (await browser.windows.getAll({ windowTypes: ["normal"] })).filter(w => !w.incognito);
 }

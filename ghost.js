@@ -37,7 +37,7 @@ async function findIcon(info) {
 }
 
 browser.runtime.sendMessage({ type: "ghostInfo", kind, key }).then(async info => {
-  if (!info) return;
+  if (!info) { browser.runtime.sendMessage({ type: "ghostOrphan", kind, key }); return; }
   document.title = info.title || info.url;
   if (document.visibilityState === "visible") { shown(info); return; }
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") shown(info); });
