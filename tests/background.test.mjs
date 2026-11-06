@@ -906,3 +906,18 @@ test("an unloaded tab moved to another window gets its title back", async () => 
   assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === ghost.id), "its placeholder is loaded again");
   x.kill();
 });
+
+test("a tab reopened pinned whose essential has been removed is an ordinary tab", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const t = ff.addTab(w.id, { url: "https://gone.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "removed" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  await wait(3000);
+  assert.equal(ff.tabs.get(t.id).pinned, false, "it is not pinned");
+  assert.equal(ff.values.get(t.id).essentialKey, undefined, "no longer tagged");
+  assert.ok(ff.synced[ff.values.get(t.id).syncKey], "and it is synced");
+  assert.deepEqual(ff.store.essentials ?? [], [], "and the essential stays removed");
+  x.kill();
+});

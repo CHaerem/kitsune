@@ -373,7 +373,11 @@ browser.tabs.onCreated.addListener(tab => {
 
 async function reopenedEssential(tab) {
   const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
-  if (!key || busy.has(tab.id) || !(await getList()).some(e => e.key === key)) return;
+  if (!key || busy.has(tab.id)) return;
+  // The essential has been removed since. Firefox brings the tab back pinned all the same,
+  // in this window only, and pinned is what an essential is: so it comes back as an ordinary
+  // tab, without bringing an essential you removed back to every window (see onUnpinned).
+  if (!(await getList()).some(e => e.key === key)) { await browser.tabs.update(tab.id, { pinned: false }).catch(() => {}); return; }
   keyByTab.set(tab.id, key);
   await dropDoubleCopies(tab.id, tab.windowId);
 }
@@ -442,7 +446,8 @@ async function essentialShown(tab) {
   }
   // Moved into the placeholder's place; onAttached then removes the
   // placeholder, and onDetached gives the old window one.
-  await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index });
+  // Refused if you have just closed it: this placeholder then opens the page itself.
+  if (await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index }).then(() => false, () => true)) return true;
   await browser.tabs.update(loaded.id, { active: true }).catch(() => {});
   return false;
 }
