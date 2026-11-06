@@ -1238,3 +1238,17 @@ test("a window opened while Tidier is starting gets its tabs when it has started
   assert.ok(ff.list(fresh.id).some(t => ff.values.get(t.id)?.syncKey === "a"));
   x.kill();
 });
+
+test("a placeholder reopened before Recently Closed forgets it is no double", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  const ghost = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key);
+  // As SessionStore brings it back: a new tab, with the values it had.
+  const reopened = ff.openTab(b.id, { url: ghost.url, active: false, cookieStoreId: ghost.cookieStoreId, restored: { tab: { url: ghost.url, title: ghost.title }, values: ff.values.get(ghost.id) } });
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(b.id).filter(y => y.url === ghost.url).length, 1);
+  assert.equal(x.js("syncKeyByTab").has(reopened.id) === ff.tabs.has(reopened.id), true);
+  x.kill();
+});

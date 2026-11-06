@@ -387,6 +387,13 @@ async function fillIfOpen(windowId, options) {
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
 async function register(tabId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
+  // A placeholder Tidier closed, reopened (⌘⇧T) in the moment before Recently Closed forgets
+  // it: not a tab of its own. Taken back, so that the look over the tabs removes the double.
+  if (tab && !syncKeyByTab.has(tab.id) && !tab.pinned && placeholderOf(tab.url).kind === "ghost") {
+    await setRole(tab.id, placeholderOf(tab.url).key, "ghost");
+    await reconcileAll();
+    return;
+  }
   if (!tab || syncKeyByTab.has(tab.id) || !syncable(tab)) return;
   // Only tabs in ordinary windows: a sign-in popup (window.open) is not a tab
   // you keep, and pulling its tab into another window would break the sign-in.
