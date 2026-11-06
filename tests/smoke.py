@@ -1485,6 +1485,13 @@ def alone_shortcuts(m):
         m.js(H + "main().focus(); await wait(100); return 1;")
         press(m, *keys)
 
+    # ⌘1 to ⌘9 and ⌘D are Firefox's too until they are cleared in about:keyboard (customKeys.json
+    # in the dotfiles, reported to the owner), and with the keyboard in a page both would act.
+    firefox_keys = ["addBookmarkAsKb", "key_selectLastTab"] + [f"key_selectTab{n}" for n in range(1, 9)]
+    custom_keys = """const {CustomKeys} = ChromeUtils.importESModule("moz-src:///browser/components/customkeys/CustomKeys.sys.mjs");
+      for (const id of args[0]) CustomKeys[args[1]](id); return 1;"""
+    m.js(custom_keys, firefox_keys, "clearKey")
+
     # In the second space, with a tab of that space in a folder: Firefox's own keys would go to
     # the first space's essentials, and to the tabs in the window's order.
     press(m, "2", CTRL)
@@ -1509,6 +1516,12 @@ def alone_shortcuts(m):
     check("⌃⌘↓ goes to the next tab as shown, and round the end", all(walked), f"{walked} on {order}")
     go(UP, CMD, CTRL)
     check("⌃⌘↑ goes to the previous tab as shown", selects(order[(start - 1) % len(order)]), str(order))
+    # Held down: each press goes on from where the one before it got to, with placeholders being pulled in.
+    go("1", CMD)
+    selects(order[0])
+    for _ in range(3):
+        press(m, DOWN, CMD, CTRL)
+    check("⌃⌘↓ pressed quickly goes just as far", selects(order[3]), str(order))
 
     go("1", CMD)
     check("⌘1 goes to this space's first essential", selects(order[0]), str(order))
@@ -1543,8 +1556,6 @@ def alone_shortcuts(m):
     go(RIGHT, CMD, CTRL)
     check("⌃⌘→ goes to the next space on the bar", m.js(space_now, here), f"{here} on {bar}")
 
-    # ⌘D is Firefox's until it is cleared in about:keyboard (customKeys.json in the dotfiles).
-    m.js("""const {CustomKeys} = ChromeUtils.importESModule("moz-src:///browser/components/customkeys/CustomKeys.sys.mjs"); CustomKeys.clearKey("addBookmarkAsKb"); return 1;""")
     go(str(len(closed)), CMD)
     selects(closed[-1])
     r0 = m.js(ident + "const w = main(); return {who: selected(), pinned: w.gBrowser.selectedTab.pinned};")
@@ -1556,7 +1567,6 @@ def alone_shortcuts(m):
     go("d", CMD)
     unpinned = m.js(H + "for (let i = 0; i < 50 && main().gBrowser.selectedTab.pinned; i++) await wait(100); await wait(500); return !main().gBrowser.selectedTab.pinned;")
     check("⌘D again makes it an ordinary tab", unpinned, "")
-    m.js("""const {CustomKeys} = ChromeUtils.importESModule("moz-src:///browser/components/customkeys/CustomKeys.sys.mjs"); CustomKeys.resetKey("addBookmarkAsKb"); return 1;""")
 
     # New folder. With the keyboard on the page it is simply there: Firefox lets no frame take the
     # keyboard from another, so nothing can ask for its name. With the keyboard in the sidebar it can.
@@ -1612,6 +1622,12 @@ def alone_shortcuts(m):
     check("a key another command has is refused, and said", "already" in r["note"] and r["key"] == "⌥⇧J" and m.js(stored, EXT_ID, "next-tab") == "Alt+Shift+J", str(r))
     r = record("previous-tab", "l", CMD)
     check("a letter Firefox uses is said", "about:keyboard" in r["note"] and r["key"] == "⌘L", str(r))
+    r = record("previous-tab", "j", ALT, SHIFT, CMD)
+    check("a key Firefox cannot take is refused, and said", "cannot be used" in r["note"] and r["key"] == "⌘L", str(r))
+    r = record("previous-tab", "j")
+    check("a letter alone is no key, and said, and it waits for a real one", "needs" in r["note"] and r["key"] == "Press a key…" and m.js(stored, EXT_ID, "previous-tab") == "Command+L", str(r))
+    r = record("previous-tab", LEFT, CMD)
+    check("a key on an arrow Firefox uses is said", "both happen" in r["note"] and r["key"] == "⌘←", str(r))
     r = record("previous-tab", BACKSPACE)
     check("⌫ removes a key", r["key"] == "none" and m.js(stored, EXT_ID, "previous-tab") == "", str(r))
     r = record("previous-tab", "")  # Esc
@@ -1647,6 +1663,7 @@ def alone_shortcuts(m):
       await wait(800); return 1;""")
     m.js(H + """await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html")); return 1;""")
     extension_message(m, {"type": "settings:keysBack"})
+    m.js(custom_keys, firefox_keys, "resetKey")
 
 
 def alone_idle(m):

@@ -75,6 +75,7 @@ function keyButton(c, note) {
     if (plain && (e.key === "Backspace" || e.key === "Delete")) { chooseKey(c.name, ""); return; }
     const shortcut = shortcutOf(e, keysMac);
     if (shortcut) chooseKey(c.name, shortcut);
+    else if (keyName(e)) { note.textContent = keysMac ? "A key needs ⌘, ⌃ or ⌥ with it." : "A key needs Ctrl or Alt with it."; note.hidden = false; }
   };
   return key;
 }

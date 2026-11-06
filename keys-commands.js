@@ -44,7 +44,9 @@ async function toggleEssential(windowId) {
 // The view that draws the new folder also names it, so that the sidebar can start
 // renaming it once it is there, if it has the keyboard (sidebar/keyrename.js).
 async function newFolderHere(windowId) {
-  const key = await createFolder("New folder", (await viewFor(windowId)).space);
+  const { space } = await viewFor(windowId);
+  if (!space) return; // no containers at all: no space for it to be in
+  const key = await createFolder("New folder", space);
   const view = await viewFor(windowId);
   for (const port of sidebarPorts.get(windowId) || []) port.postMessage({ ...view, renameFolder: key });
 }
@@ -124,7 +126,8 @@ const FIREFOX_KEYS = {
   "Command+Left": "back", "Command+Right": "forward", "Command+Y": "history", "Command+MacCtrl+F": "full screen", "Command+Shift+F": "full screen", "Command+R": "reload", "Command+Shift+R": "reload",
   "Command+U": "the page's source", "Command+I": "page info", "Command+F": "find", "Command+G": "find again", "Command+Shift+G": "find again", "Command+E": "find the selection",
   "Command+D": "bookmarking a page", "Command+Shift+D": "bookmarking all tabs", "Command+Shift+O": "bookmarks", "Command+S": "saving a page", "Command+Shift+S": "screenshots", "Command+Period": "stop",
-  "Command+0": "zoom", "Command+Comma": "settings", "Command+Shift+T": "reopening a tab", "Command+Shift+N": "reopening a window", "Command+Shift+X": "text direction", "Command+M": "minimizing the window",
+  "Command+1": "going to a tab", "Command+2": "going to a tab", "Command+3": "going to a tab", "Command+4": "going to a tab", "Command+5": "going to a tab",
+  "Command+6": "going to a tab", "Command+7": "going to a tab", "Command+8": "going to a tab", "Command+9": "going to a tab", "Command+0": "zoom", "Command+Comma": "settings", "Command+Shift+T": "reopening a tab", "Command+Shift+N": "reopening a window", "Command+Shift+X": "text direction", "Command+M": "minimizing the window",
   "Command+H": "hiding Firefox", "Alt+Command+H": "hiding other apps", "MacCtrl+X": "the chat sidebar", "MacCtrl+U": "the open tabs sidebar", "MacCtrl+Z": "the sidebar",
 };
 
@@ -139,8 +142,7 @@ async function commandKeys() {
 }
 
 // A key you chose. Refused if it could not work or another command has it, and said if
-// Firefox uses it: either Firefox still comes first (a letter: see shortcuts.js) or you
-// lose what it does. { refused } or { note }.
+// Firefox uses it too (shortcuts.js says what that does). { refused } or { note }.
 async function setCommandKey(name, shortcut) {
   const { os } = await browser.runtime.getPlatformInfo();
   const id = keyId(shortcut, os), pretty = prettyKey(shortcut, os);
@@ -154,7 +156,7 @@ async function setCommandKey(name, shortcut) {
   if (!use) return {};
   return { note: /\+[A-Z]$/.test(id)
     ? `Firefox uses ${pretty} for ${use}, and comes first until you clear it in about:keyboard.`
-    : `Firefox uses ${pretty} for ${use}. Now it is Tidier's instead.` };
+    : `Firefox uses ${pretty} for ${use} too, and both happen until you clear it in about:keyboard.` };
 }
 
 // Every key as it was given. All together, so that keys you swapped cannot be in each

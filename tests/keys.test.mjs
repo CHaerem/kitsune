@@ -151,6 +151,27 @@ test("the folder key makes a folder in the space you are in, and its view asks f
   x.kill();
 });
 
+test("in a small window the keys do nothing, and copying the address still does", async () => {
+  const { x, ff, w, selected, tab, press } = await aWindow();
+  const small = ff.addWindow({ type: "popup" });
+  const page = ff.addTab(small.id, { url: "https://small.example/", active: true });
+  const copied = [];
+  x.ctx.navigator.clipboard = { writeText: async t => { copied.push(t); } };
+  const before = ff.ids().length;
+  for (const name of ["next-tab", "next-space", "toggle-essential", "new-folder", "copy-url"]) x.b.commands.onCommand.fire(name, ff.snap(page));
+  await wait(500);
+  assert.equal(ff.tabs.get(page.id).pinned, false);
+  assert.equal(ff.ids().length, before, "nothing opened");
+  assert.equal(selected(), "t1");
+  assert.equal(x.js("activeSpace").get(w.id), C1);
+  assert.ok(!Object.values(ff.synced).some(e => e.group && e.name === "New folder"));
+  assert.deepEqual(copied, ["https://small.example/"]);
+  assert.ok(tab);
+  await press("next-tab");
+  assert.equal(selected(), "t2", "the normal window's keys still work");
+  x.kill();
+});
+
 test("with the setting off, the new keys do nothing, and copying the address still does", async () => {
   const ff = new FakeFirefox();
   const w = ff.addWindow({ focused: true });
@@ -269,7 +290,7 @@ test("choosing a key: another command's is refused, Firefox's tab keys are refus
   assert.deepEqual(ff.commandsSet, {}, "neither was set");
   assert.match((await set("next-tab", "Command+L")).note, /comes first until you clear it/);
   assert.equal(ff.commandsSet["next-tab"], "Command+L");
-  assert.match((await set("next-tab", "Command+Left")).note, /Now it is Tidier's/);
+  assert.match((await set("next-tab", "Command+Left")).note, /both happen until you clear it/);
   assert.deepEqual({ ...(await set("next-tab", "Alt+Shift+J")) }, {});
   assert.deepEqual({ ...(await set("next-tab", "")) }, {}, "removed");
   assert.equal(ff.commandsSet["next-tab"], "");

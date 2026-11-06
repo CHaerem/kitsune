@@ -10,12 +10,13 @@
 //
 // - ⌘⌥ and an arrow, Arc's next and previous tab and space, cannot be had: Firefox's
 //   tab box takes them first (ShortcutUtils.getSystemActionForEvent), and about:keyboard
-//   has no say over it. So ⌘⌃ and an arrow, one finger along.
-// - ⌘1 to ⌘9 can be had: an extension's key on a digit acts on keydown, Firefox's own on
-//   keypress, which never comes then.
-// - ⌘D cannot be had until it is cleared in about:keyboard: an extension's key on a letter
-//   acts on keypress too, and Firefox's keys come first (customKeys.json in the dotfiles).
-//   So does ⌘⇧C (copy-url), which is the one key that works without Tidier alone too.
+//   has no say over it. So ⌃⌘ and an arrow, one finger along.
+// - ⌘1 to ⌘9, ⌘D and ⌘⇧C work once Firefox's own keys are cleared in about:keyboard
+//   (customKeys.json in the dotfiles). Firefox's key on a letter comes first, and an
+//   extension's never acts. On a digit both act when the keyboard is in a page: an
+//   extension's key acts on keydown, but the page's process has by then also been sent the
+//   keypress, and Firefox's key acts when that comes back.
+// - Copying the address is the one command that works without Tidier alone too.
 
 async function copyUrl(windowId) {
   const [tab] = await browser.tabs.query({ active: true, windowId });
@@ -45,5 +46,7 @@ browser.commands.onCommand.addListener(async (name, tab) => {
   const command = COMMANDS.find(c => c.name === name);
   if (!command || !(tidierAlone || command.always)) return;
   const windowId = tab?.windowId ?? (await browser.tabs.query({ active: true, currentWindow: true }))[0]?.windowId;
-  if (windowId !== undefined) await command.action(windowId).catch(err => console.error("Tidier:", name, err));
+  const win = windowId !== undefined && await browser.windows.get(windowId).catch(() => null);
+  // The keys work in any window of Firefox's, but a small window has no list and no spaces.
+  if (win && (win.type === "normal" || command.always)) await command.action(windowId).catch(err => console.error("Tidier:", name, err));
 });
