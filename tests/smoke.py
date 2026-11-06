@@ -1742,7 +1742,7 @@ def alone_space_menu(m):
         time.sleep(0.1)
     state = m.js(STATE, here)
     check("unloading the space you are in dims its rows", before.count("loaded") >= 2 and rows.count("loaded") == 1 and "selected" in rows, f"{before} -> {rows}")
-    check("and leaves the selected tab, its essentials and a page with unsaved input", any("smoke-menu-here-1" in u for u in state["loaded"]) and any("smoke-menu-here-2" in u for u in state["loaded"]) and state["essentials"] == essentials, str(state))
+    check("and leaves the selected tab, its essentials and a page with unsaved input, without asking", "smoke-menu-here-1" in state["selected"] and any("smoke-menu-here-1" in u for u in state["loaded"]) and any("smoke-menu-here-2" in u for u in state["loaded"]) and state["essentials"] == essentials, str(state))
     # (Closed here, or the page would ask later.) A dim row's page comes back when selected.
     m.js(H + """const w = main(), t = w.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-2")); w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(1000); return 1;""")
     sidebar_mouse(m, """doc.querySelector("#tabs .tab.unloaded")""")
@@ -1754,6 +1754,34 @@ def alone_space_menu(m):
     check("an unloaded row's page comes back when you select it", not back["was"] and back["loaded"], str(back))
     # Back on a tab of this test, for the checks below.
     m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-1")); await wait(800); return 1;""")
+
+    # A page loaded in another window: the row here is a placeholder, and the page goes too.
+    # Selecting the placeholder then brings the page here, once.
+    other = m.js(SPACE_TABS + """const a = main(), w = a.OpenBrowserWindow(); w.__extra = true;
+      for (let i = 0; i < 100 && !(w.gBrowser?.tabs.some(t => t.pinned)); i++) await wait(100);
+      const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-menu-other-window", {userContextId: ctxOfId(args[0]), inBackground: true});
+      const placeholder = () => a.gBrowser.tabs.find(g => key(w, t) && key(a, g) === key(w, t));
+      for (let i = 0; i < 200 && !(t.linkedPanel && url(t).includes("smoke-menu") && placeholder()); i++) await wait(100);
+      a.focus(); await wait(500);
+      return {role: role(w, t), key: key(w, t), placeholder: !!placeholder()};""", here)
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Unload this space")
+    GONE = H + """const t = wins().find(w => w.__extra).gBrowser.tabs.find(t => url(t).includes("smoke-menu-other-window")); return {loaded: !!t?.linkedPanel, kept: !!t};"""
+    for _ in range(100):
+        gone = m.js(GONE)
+        if not gone["loaded"]:
+            break
+        time.sleep(0.1)
+    check("unloading reaches a page loaded in another window", other["role"] == "live" and other["placeholder"] and gone == {"loaded": False, "kept": True}, f"{other} -> {gone}")
+    m.js(H + """const a = main(); a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => key(a, t) === args[0]); return 1;""", other["key"])
+    settled = lambda b: "smoke-menu-other-window" in b["page"] and b["loaded"] and sorted(s for w in b["everywhere"] for s in w) == ["ghost/unloaded", "live/loaded"]
+    for _ in range(300):  # the pull has steps: only its end says anything
+        back = m.js(H + """const a = main(), t = a.gBrowser.selectedTab; return {page: url(t), loaded: !!t.linkedPanel, everywhere: find(args[0])};""", other["key"])
+        if settled(back):
+            break
+        time.sleep(0.1)
+    check("and its placeholder brings it here, once", settled(back), str(back))
+    m.js(H + """const w = wins().find(w => w.__extra), a = main(); await close(w); a.focus(); a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-1")); await wait(800); return 1;""")
 
     # Rename, with real typing. Reading the container's name is reading what Firefox has.
     NAME = H + """return main().ContextualIdentityService.getPublicIdentityFromId(Number(args[0].split("-").pop())).name;"""
@@ -1769,6 +1797,20 @@ def alone_space_menu(m):
     press(m, ENTER)
     r = sidebar_until(m, """() => !box() && doc.querySelector("#spaces .space.active").title === "Smoked" ? {name: doc.getElementById("space-name").textContent, hidden: doc.getElementById("space-name").hidden} : {wait: 1}""")
     check("typing and Enter rename the space: the line, the dot and the container", r.get("name") == "Smoked" and r.get("hidden") is False and m.js(NAME, here) == "Smoked", f"{r}, {m.js(NAME, here)}")
+    # The list stays put whatever the name is called and whatever the font: a long name
+    # stays on one line, and the box takes the height of the line it replaces.
+    r = in_sidebar(m, """() => { const line = doc.getElementById("space-name"), name = line.textContent, before = top("actions");
+      line.textContent = name + " and a very long name that goes on".repeat(9); const after = top("actions"); line.textContent = name; return {before, after}; }""")
+    check("a long name stays on one line, and the list does not move", r["before"] == r["after"], str(r))
+    in_sidebar(m, """() => { doc.getElementById("space-name").style.fontSize = "19px"; return 1; }""")
+    line = in_sidebar(m, """() => top("actions")""")
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Rename")
+    r = sidebar_until(m, """() => box() ? {actions: top("actions")} : {wait: 1}""")
+    check("with another font too", r.get("actions") == line, f"{line} -> {r}")
+    press(m, ESC)
+    sidebar_until(m, "() => !box()")
+    in_sidebar(m, """() => { doc.getElementById("space-name").style.fontSize = ""; return 1; }""")
     # Esc leaves it as it was; leaving the box saves.
     menu_on(m, f"dot({json.dumps(here)})")
     choose(m, "Rename")

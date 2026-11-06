@@ -105,6 +105,16 @@ test("one tab closed meanwhile does not stop the others from unloading", async (
   x.kill();
 });
 
+test("no space given unloads nothing: a query without a container is every space's tabs", async () => {
+  const ff = new FakeFirefox();
+  const { a, tabs } = session(ff);
+  const x = await alone(ff);
+  await x.js(`sidebarAction(${a.id}, { type: "unloadSpace" })`);
+  await x.js(`unloadSpace(null)`);
+  for (const name of ["here", "there", "elsewhere"]) assert.equal(tabs[name].discarded, false, name);
+  x.kill();
+});
+
 test("renaming a space changes its container, and an empty name does nothing", async () => {
   const ff = new FakeFirefox();
   const { a } = session(ff);
@@ -173,6 +183,16 @@ test("the items send what the background knows, and Settings needs no message", 
   assert.deepEqual(s.sent.map(m => ({ ...m })), [{ type: "unloadSpace", space: C1 }, { type: "clearSpace", space: C1 }]);
   item("Settings")();
   assert.equal(s.options.length, 1);
+});
+
+test("Clear acts on the space it was offered for, wherever the window is by the time of the click", () => {
+  const s = sidebar();
+  s.rightClick("#spaces .space", { space: C1 });
+  const fromDot = s.menus.at(-1).find(i => i[0] === "Clear today's tabs")[1], fromList = s.list()[1][1];
+  vm.runInContext(`view.space = ${JSON.stringify(C2)}`, s.ctx);
+  fromDot();
+  fromList();
+  assert.deepEqual(s.sent.map(m => m.space), [C1, C1]);
 });
 
 test("the list's menu is New folder, Clear today's tabs, Settings, and stays that short", () => {

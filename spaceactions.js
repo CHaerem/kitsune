@@ -15,7 +15,10 @@
 // screen (unloading would end a call, and one with everybody quiet plays no sound). A
 // page with unsaved input refuses without asking (closesQuietly, tabsync.js), and stays.
 // One call per tab, since Firefox refuses a whole list for one tab closed meanwhile.
+//
+// No space, nothing to do: a query without a container is every space's tabs.
 async function unloadSpace(space) {
+  if (!space) return;
   const tabs = await browser.tabs.query({ cookieStoreId: space, pinned: false });
   const selected = new Set(tabs.filter(t => t.active && syncKeyByTab.has(t.id)).map(t => syncKeyByTab.get(t.id)));
   const inUse = t => t.active || t.audible || selected.has(syncKeyByTab.get(t.id)) || Object.values(t.sharingState ?? {}).some(Boolean);
