@@ -672,3 +672,23 @@ test("an essential unpinned while loaded is an ordinary synced tab again", async
   x.kill();
 });
 
+
+test("a new tab dragged in the sidebar and given an address at once is synced", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await alone(ff);
+  const fresh = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(fresh));
+  await wait(2000); // long after a new tab is looked at for the first time
+  await x.js(`moveTab(${w.id}, ${fresh.id}, ${ff.list(w.id)[0].id}, undefined)`);
+  ff.navigate(fresh.id, "https://typed.example/");
+  await wait(3000);
+  const key = ff.values.get(fresh.id)?.syncKey;
+  assert.ok(key, "it has a key");
+  assert.ok(ff.list(other.id).some(t => t.url === GHOST("ghost", key)), "and a ghost in the other window");
+  x.kill();
+});

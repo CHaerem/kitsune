@@ -91,9 +91,10 @@ async function moveInWindow(tabs, tabId, beforeId) {
   let index = before ? before.index : -1;
   if (before && tab.index < before.index) index--;
   if (index === tab.index) return;
-  syncBusy.add(tabId);
+  // Not marked as Tidier's own (syncBusy): with Tidier alone tab sync does not listen
+  // to moves at all, and the mark would hide what happens to the tab meanwhile. A new
+  // tab dragged and given an address within a second and a half was never synced.
   await browser.tabs.move(tabId, { index }).catch(() => {});
-  setTimeout(() => syncBusy.delete(tabId), SETTLE_MS);
 }
 
 // A tab moved to another space: Firefox cannot change a tab's container, so it is
