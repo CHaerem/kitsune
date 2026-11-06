@@ -192,6 +192,7 @@ function addIsolationApis(ff, b) {
   apis();
   ff.grant = (...names) => { names.forEach(n => ff.granted.add(n)); apis(); b.permissions.onAdded.fire({ permissions: names, origins: [] }); };
   b.permissions.contains = async ({ permissions = [], origins = [] }) => [...permissions, ...origins].every(p => ff.granted.has(p));
+  b.contentScripts ??= { register: async () => ({ unregister: async () => {} }) }; // what else access to all websites starts (littlewindow.js)
   // Answers a top-level request as Firefox would ask it: undefined if nothing listens.
   ff.request = async ({ tabId, url, requestId = "r" + (ff.nextRequest = (ff.nextRequest || 0) + 1), originUrl, type = "main_frame", method = "GET" }) => {
     const t = ff.tabs.get(tabId);

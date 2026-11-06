@@ -316,10 +316,10 @@ that). Everything works without them, as it says here:
 
 - `tabHide`, when Tidier alone is turned on: other spaces' tabs hidden.
 - `webRequest`, `webRequestBlocking` and access to all websites, in the same click:
-  a page stopped before it loads in the wrong space (below, Isolation). Tidier reads no
-  page and keeps no record of where you go; all it looks at is the address of a tab's
-  next page and the container it is in. Clearing a site's cookies is offered once this
-  is given, since the cookies API shows nothing without it.
+  a page stopped before it loads in the wrong space (below, Isolation). For this Tidier
+  reads no page and keeps no record of where you go; all it looks at is the address of a
+  tab's next page and the container it is in. Clearing a site's cookies is offered once
+  this is given, since the cookies API shows nothing without it.
 - `proxy` (with access to all websites), when a space is first given a proxy, and
   `browsingData`, when you first sign out of everything in a space.
 
