@@ -30,14 +30,16 @@ async function moveOver() {
   const copy = await makeCopy();
   if (!copy?.saved) await browser.storage.local.set({ copyBeforeMove: await theCopy() }); // no helper here: at least inside Firefox's storage
   const all = await getSynced();
+  const closed = new Set(listIn((await browser.storage.local.get("importedFolds")).importedFolds)); // importSidebery
   let rank = 0;
   for (const e of Object.values(all)) {
     if (!e.group || e.own) continue;
     Object.assign(e, { own: true, name: groupName(e.url), oldUrl: e.url, rank: ++rank });
+    if (closed.has(foldKey(e.cookieStoreId, e.url))) e.collapsed = true;
   }
   saveSynced(all);
   await flushWrites();
-  await browser.storage.local.set({ tidierAlone: true });
+  await browser.storage.local.set({ tidierAlone: true, importedFolds: [] });
   browser.runtime.reload();
 }
 
@@ -79,20 +81,105 @@ async function moveBack() {
   browser.runtime.reload();
 }
 
-// The rules and order of spaces from Sidebery's export: the only place they can be read.
-async function importSidebery(backup) {
-  const rules = [];
-  for (const c of Object.values(backup?.containers || {})) {
-    if (!c.reopenRulesActive) continue;
-    for (const r of c.reopenRules || []) if (r.active && r.url) rules.push({ url: r.url, space: c.id });
+// --- Sidebery's export -----------------------------------------------------------
+// Its rules, order of spaces and closed folders are stored where only Sidebery can read
+// them, so its export is the only place they can be read from. It may come from another
+// machine, so its containers are matched by name here too, as with a copy (copies.js).
+const isSideberyExport = x => !!x && typeof x === "object" && !x.tidier && !!(x.ver || x.sidebar?.panels || x.containers);
+const SIDEBERY_EXCLUDE_RULE = 2; // reopenRules' type: "reopen in no container", the opposite of a rule here
+const panelContainer = p => p?.newTabCtx && p.newTabCtx !== "none" && p.newTabCtx !== NO_CONTAINER ? p.newTabCtx : null;
+
+// A snapshot keeps only what changed: a tab that did not is -1, to be looked up at the
+// same place (window, panel, tab) in the snapshots before it. null if it cannot be.
+function snapshotTabs(snapshots, n) {
+  const windows = snapshots[n]?.tabs, tabs = [];
+  if (!Array.isArray(windows)) return null;
+  for (const [w, panels] of windows.entries()) for (const [p, panel] of listIn(panels).entries()) for (const [t, tab] of listIn(panel).entries()) {
+    let found = tab;
+    for (let older = n - 1; found === -1 && older >= 0; older--) found = snapshots[older]?.tabs?.[w]?.[p]?.[t] ?? -1;
+    if (!found || found === -1) return null;
+    tabs.push(found);
   }
+  return tabs;
+}
+
+// An address without what differs per install or per load: Sidebery's own extension
+// address, and the channel suffix it adds to a page it has open (groupBaseUrl). The
+// same name in two spaces gives one address, so the space is part of the key.
+const foldKey = (space, url) => `${space}|${(url || "").split("/sidebery/")[1]?.replace(/~!.*!~$/, "")}`;
+
+// Which folders the newest readable snapshot has closed, as foldKeys; null if the export
+// has no snapshot. Each window has its own page of a folder and may show it otherwise.
+// A folder here is the same in every window and a closed one rests, so it comes over
+// closed only if it was closed in all of them. `here` gives a container's id on this machine.
+function closedFolders(backup, here) {
+  const snapshots = listIn(backup?.snapshots);
+  let tabs = null;
+  for (let n = snapshots.length - 1; n >= 0 && !tabs; n--) tabs = snapshotTabs(snapshots, n);
+  if (!tabs) return null;
+  const pages = new Map();
+  for (const t of tabs) {
+    const space = here(t.containerId ?? NO_CONTAINER);
+    if (!isSideberyGroup(t.url) || !space) continue;
+    const key = foldKey(space, t.url);
+    pages.set(key, (pages.get(key) ?? true) && !!t.folded);
+  }
+  return [...pages].filter(([, closed]) => closed).map(([key]) => key);
+}
+
+// Null for a file that is not Sidebery's export. Folds are applied at once if this
+// browser has moved over, else kept in storage until moveOver applies them: until then
+// the folders are Sidebery's, and Tidier's mark on them would mean nothing.
+async function importSidebery(backup) {
+  if (!isSideberyExport(backup)) return null;
+  const containers = Object.values(backup.containers || {});
+  const panels = backup.sidebar?.panels || {};
+  const local = await containerSpaces();
+  const named = containers.filter(c => c?.name).map(c => ({ id: c.id, name: c.name, color: c.color, icon: c.icon }));
+  const map = mapSpaces({ spaces: named }, local);
+  // (With no names, as with a copy that has none, an id counts as it is if it exists here.)
+  const here = id => id === NO_CONTAINER ? id : map ? map[id] : local.some(s => s.id === id) ? id : undefined;
+
+  const found = [];
+  for (const c of containers) {
+    if (!c?.reopenRulesActive) continue;
+    for (const r of listIn(c.reopenRules)) if (r.active && r.url && r.type !== SIDEBERY_EXCLUDE_RULE) found.push({ url: r.url, space: c.id });
+  }
+  // A panel's rules move a tab to it. Here the panel is its container's space, so a rule
+  // with an address opens it there; one with only a container needs nothing, since the
+  // container already decides the space. A panel with no container is no space here.
+  let panelsLeftOut = 0;
+  for (const p of Object.values(panels)) {
+    const urls = listIn(p?.moveRules).filter(r => r.active && r.url).map(r => r.url);
+    if (!urls.length) continue;
+    const space = panelContainer(p);
+    if (space && here(space) !== undefined) found.push(...urls.map(url => ({ url, space })));
+    else panelsLeftOut++;
+  }
+  const order = listIn(backup.sidebar?.nav).map(id => panelContainer(panels[id])).filter(id => id && here(id) !== undefined);
+  const needed = new Set([...found.map(r => r.space), ...order]);
+  const newSpaces = map ? await makeMissingSpaces(named, map, id => needed.has(id)) : [];
+
   const have = await rulesList.get();
-  const added = rules.filter(r => !have.some(x => x.url === r.url && x.space === r.space));
-  rulesList.set([...have, ...added]);
-  const panels = backup?.sidebar?.panels || {};
-  const order = (backup?.sidebar?.nav || []).map(id => panels[id]?.newTabCtx).filter(c => c && c !== "none");
-  if (order.length) await browser.storage.local.set({ spaceOrder: order });
-  return { rules: added.length, order: order.length };
+  const added = [];
+  for (const { url, space } of found) {
+    const rule = { url, space: here(space) };
+    if (rule.space && ![...have, ...added].some(x => x.url === url && x.space === rule.space)) added.push(rule);
+  }
+  if (added.length) rulesList.set([...have, ...added]);
+  const localOrder = order.map(here).filter(Boolean);
+  if (localOrder.length) await browser.storage.local.set({ spaceOrder: localOrder });
+
+  const closed = closedFolders(backup, here);
+  let folds = null;
+  if (closed) {
+    const all = await getSynced(), keys = new Set(closed);
+    const matched = Object.keys(all).filter(k => all[k].group && keys.has(foldKey(all[k].cookieStoreId, all[k].oldUrl ?? all[k].url)));
+    if (tidierAlone) for (const k of matched) await foldFolder(k, true); // ownfolders.js
+    else await browser.storage.local.set({ importedFolds: closed });
+    folds = matched.length;
+  }
+  return { rules: added.length, order: localOrder.length, panelsLeftOut, newSpaces, folds };
 }
 
 // --- The settings page -------------------------------------------------------------

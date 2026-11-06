@@ -474,7 +474,7 @@ test("a copy is taken in by merging: only the chosen spaces, and nothing removed
     },
   } };
   const r = await x.js("mergeCopy")(copy, [C1]);
-  assert.deepEqual({ ...r }, { essentials: 1, folders: 1, tabs: 1 });
+  assert.deepEqual({ ...r }, { essentials: 1, folders: 1, tabs: 1, rules: 0, spaces: 0 });
   await wait(1000);
   assert.deepEqual(ff.store.essentials.map(e => e.key).sort(), ["e1", "here"]);
   assert.deepEqual(Object.keys(ff.synced).sort(), ["F", "kept", "mine"]);
@@ -629,7 +629,7 @@ test("Sidebery's rules and order of spaces come from its export", async () => {
     },
     sidebar: { nav: ["p2", "p1", "settings"], panels: { p1: { newTabCtx: "firefox-container-1" }, p2: { newTabCtx: "firefox-container-2" } } },
   });
-  assert.deepEqual({ ...r }, { rules: 1, order: 2 });
+  assert.deepEqual([r.rules, r.order, r.panelsLeftOut, r.folds], [1, 2, 0, null]);
   await wait(500);
   assert.deepEqual(ff.store.rules, [{ url: "/^https:\\/\\/a\\//", space: "firefox-container-1" }]);
   assert.deepEqual(ff.store.spaceOrder, ["firefox-container-2", "firefox-container-1"]);

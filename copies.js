@@ -5,13 +5,22 @@
 //
 // A copy is taken back in by merging: nothing here is ever deleted by it, so it can
 // also bring one machine's spaces to another (settings page).
+//
+// Firefox numbers containers per profile, so "firefox-container-2" can be your work
+// logins on one machine and your private ones on the next. A copy therefore also says
+// what each of its ids is called, and everything is taken in by name (mapSpaces).
 
-const COPY_KEYS = ["essentials", "syncedTabs", "liveFolders", "archiveAfterHours", "rules"];
+const COPY_KEYS = ["essentials", "syncedTabs", "liveFolders", "archiveAfterHours", "rules", "spaceOrder"];
 const COPY_EVERY_MS = 24 * 3600e3, COPY_CHECK_MINUTES = 6 * 60;
 
 async function theCopy() {
   await flushWrites();
-  return { tidier: browser.runtime.getManifest().version, when: Date.now(), data: await browser.storage.local.get(COPY_KEYS) };
+  const containers = await browser.contextualIdentities.query({}).catch(() => []);
+  return {
+    tidier: browser.runtime.getManifest().version, when: Date.now(),
+    spaces: containers.map(c => ({ id: c.cookieStoreId, name: c.name, colorCode: c.colorCode, color: c.color, icon: c.icon })),
+    data: await browser.storage.local.get(COPY_KEYS),
+  };
 }
 
 async function makeCopy() {
@@ -35,55 +44,150 @@ browser.alarms.onAlarm.addListener(alarm => { if (alarm.name === "copy" && start
 const COPY_AFTER_START_MS = 2 * 60000;
 setTimeout(() => { if (started) copyIfDue(); }, COPY_AFTER_START_MS);
 
-// What a copy holds, per space, for choosing what to take in.
-function copySummary(copy) {
-  const spaces = {};
-  const of = id => (spaces[id] ??= { essentials: 0, folders: 0, savedTabs: 0 });
-  for (const e of copy?.data?.essentials || []) of(e.cookieStoreId).essentials++;
-  for (const e of Object.values(copy?.data?.syncedTabs || {})) {
-    if (e.group) of(e.cookieStoreId).folders++;
-    else if (e.saved) of(e.cookieStoreId).savedTabs++;
+// --- Taking a copy in ---------------------------------------------------------------
+const isTidierCopy = x => typeof x?.tidier === "string" && !!x.data && typeof x.data === "object" && !Array.isArray(x.data);
+const listIn = x => Array.isArray(x) ? x : [];
+
+// A copy's space ids to this machine's, by name: { old id: local id, or null if no
+// space here has that name }. Each local space is used once, so two spaces with one
+// name stay two, and their logins apart. A copy with no spaces (one made before
+// copies said what their ids are called) gives null: its ids are taken as they are.
+function mapSpaces(copy, local) {
+  if (!Array.isArray(copy?.spaces) || !copy.spaces.length) return null;
+  const free = [...local], map = {};
+  for (const s of copy.spaces) {
+    const at = free.findIndex(l => l.name === s.name);
+    map[s.id] = at < 0 ? null : free.splice(at, 1)[0].id;
   }
+  return map;
+}
+
+// An id in a copy, here: a local id, null for a space still to be made, undefined for
+// one the copy has no name for (its container was removed where the copy was made).
+// That one stays out: taking its id as it is could put it among the wrong logins.
+const localSpace = (map, id) => !map || id === NO_CONTAINER ? id : map[id];
+
+// Spaces of the copy that are not here yet, made with their name, colour and icon; the
+// map then has their ids. Returns their names. A colour or icon this Firefox does not
+// know must not stop the rest, and one that cannot be made at all keeps its null, so
+// what is in it stays out rather than landing somewhere else.
+async function makeMissingSpaces(spaces, map, wanted) {
+  const made = [];
+  for (const s of spaces) {
+    if (map[s.id] !== null || !wanted(s.id)) continue;
+    const create = props => browser.contextualIdentities.create({ name: s.name, ...props });
+    const c = await create({ color: s.color || "blue", icon: s.icon || "circle" }).catch(() => create({ color: "blue", icon: "circle" })).catch(noteError);
+    if (c) { map[s.id] = c.cookieStoreId; made.push(s.name); }
+  }
+  return made;
+}
+
+// What of a copy is not here yet, each thing still with the copy's own space id. The
+// settings page and taking in both ask this, so what is promised is what comes.
+// Rules only from a copy that names its spaces: a rule with a wrong id would send
+// every tab it matches to the wrong logins, and older copies' rules were never taken.
+function whatComes(copy, map, { list, all, rules }) {
+  const here = id => localSpace(map, id);
+  const known = id => here(id) !== undefined;
+  const keys = new Set(list.map(e => e.key));
+  const essentials = listIn(copy.data.essentials).filter(e => e && known(e.cookieStoreId) && !keys.has(e.key)
+    && !list.some(x => x.url === e.url && x.cookieStoreId === here(e.cookieStoreId)));
+  const entries = Object.entries(copy.data.syncedTabs || {}).filter(([key, e]) => e && !all[key] && known(e.cookieStoreId) && !e.liveFolder);
+  const seen = new Set();
+  const newRule = r => {
+    const id = `${r?.space}|${r?.url}`;
+    if (!r?.url || !known(r.space) || seen.has(id) || rules.some(x => x.url === r.url && x.space === here(r.space))) return false;
+    seen.add(id);
+    return true;
+  };
+  return {
+    essentials,
+    folders: entries.filter(([, e]) => e.group),
+    tabs: entries.filter(([, e]) => !e.group && e.saved),
+    rules: map ? listIn(copy.data.rules).filter(newRule) : [],
+  };
+}
+
+const whatIsHere = async () => ({ list: await getList(), all: await getSynced(), rules: await rulesList.get() });
+
+// One line per space of the copy, for the settings page, before anything is written:
+// what it is called here, what would come, and whether it would be a new space. null
+// for a file that is not a copy.
+async function copySummary(copy) {
+  if (!isTidierCopy(copy)) return null;
+  const local = await containerSpaces();
+  const map = mapSpaces(copy, local);
+  const coming = whatComes(copy, map, await whatIsHere());
+  const spaces = {};
+  const line = id => {
+    if (spaces[id]) return spaces[id];
+    const theirs = listIn(copy.spaces).find(s => s.id === id), ours = local.find(s => s.id === localSpace(map, id));
+    return spaces[id] = {
+      name: ours?.name ?? theirs?.name ?? (id === NO_CONTAINER ? "No container" : id), color: ours?.color ?? theirs?.colorCode ?? "",
+      isNew: map?.[id] === null, essentials: 0, folders: 0, savedTabs: 0, rules: 0,
+    };
+  };
+  for (const s of listIn(copy.spaces)) line(s.id);
+  for (const e of coming.essentials) line(e.cookieStoreId).essentials++;
+  for (const [, e] of coming.folders) line(e.cookieStoreId).folders++;
+  for (const [, e] of coming.tabs) line(e.cookieStoreId).savedTabs++;
+  for (const r of coming.rules) line(r.space).rules++;
   return spaces;
 }
 
-// Take in the essentials, folders and saved tabs of the given spaces (all, if none is
-// given) that are not here yet. Ordinary tabs are not kept: they would have been
-// archived by now anyway. With Tidier alone, Sidebery's folder pages become folders.
+// Take in the essentials, folders, saved tabs and rules of the given spaces (all, if
+// none is given) that are not here yet, making the spaces that are missing. Ordinary
+// tabs are not kept: they would have been archived by now anyway. With Tidier alone,
+// Sidebery's folder pages become folders.
 async function mergeCopy(copy, spaces) {
   const wanted = id => !spaces || spaces.includes(id);
+  const map = mapSpaces(copy, await containerSpaces());
+  const made = map ? await makeMissingSpaces(copy.spaces, map, wanted) : [];
+  const here = id => localSpace(map, id);
+  const takes = e => wanted(e.cookieStoreId) && here(e.cookieStoreId);
+  const coming = whatComes(copy, map, await whatIsHere());
+
   const list = await getList();
-  const haveEssential = new Set(list.map(e => e.key));
-  const sameEssential = e => list.some(x => x.url === e.url && x.cookieStoreId === e.cookieStoreId);
-  const newEssentials = (copy.data.essentials || []).filter(e => wanted(e.cookieStoreId) && !haveEssential.has(e.key) && !sameEssential(e));
+  const newEssentials = coming.essentials.filter(takes).map(e => ({ ...e, cookieStoreId: here(e.cookieStoreId) }));
   if (newEssentials.length) setList([...list, ...newEssentials]);
 
   const all = await getSynced();
-  const incoming = copy.data.syncedTabs || {};
   const pageBase = tidierAlone ? null : await sideberyGroupBase(); // Sidebery's address differs per machine
   const wins = await normalWindows();
   let folders = 0, tabs = 0;
-  for (const [key, e] of Object.entries(incoming)) {
-    if (all[key] || !wanted(e.cookieStoreId) || !e.group || e.liveFolder) continue;
+  for (const [key, theirs] of coming.folders.filter(([, e]) => takes(e))) {
+    const e = { ...theirs, cookieStoreId: here(theirs.cookieStoreId) };
     if (tidierAlone) {
-      all[key] = e.own ? e : { ...e, own: true, name: groupName(e.url), oldUrl: e.url, rank: folders + 1 };
+      // Only moveOver sets oldUrl: it is what going back to Sidebery restores, and Sidebery
+      // here has no page for a folder from elsewhere. Its address stays, for folds (foldKey).
+      const { oldUrl, ...rest } = e;
+      all[key] = { ...rest, url: oldUrl ?? e.url, own: true, name: e.own ? e.name : groupName(e.url), rank: e.own ? e.rank : folders + 1 };
     } else {
       // A folder needs its page in each window, or reconcileAll would see a folder that was closed.
       const name = e.own ? e.name : groupName(e.url);
-      all[key] = { ...e, url: pageBase ? `${pageBase}#${encodeURIComponent(name)}` : e.oldUrl ?? e.url };
+      const url = pageBase ? `${pageBase}#${encodeURIComponent(name)}` : e.oldUrl ?? e.url;
+      if (!url) continue; // made since a move, and no Sidebery folder here to take the address from
+      all[key] = { ...e, url };
       delete all[key].own;
       for (const w of wins) await createRep(w.id, key, all[key]);
     }
     folders++;
   }
-  for (const [key, e] of Object.entries(incoming)) {
-    if (all[key] || !wanted(e.cookieStoreId) || e.group || e.liveFolder || !e.saved) continue;
-    all[key] = { ...e, url: e.saved.url, title: e.saved.title ?? e.title, icon: e.saved.icon ?? e.icon };
+  for (const [key, e] of coming.tabs.filter(([, e]) => takes(e))) {
+    all[key] = { ...e, cookieStoreId: here(e.cookieStoreId), url: e.saved.url, title: e.saved.title ?? e.title, icon: e.saved.icon ?? e.icon };
     tabs++;
   }
   noteSaved(all);
   saveSynced(all);
+
+  const newRules = coming.rules.filter(r => wanted(r.space) && here(r.space)).map(r => ({ url: r.url, space: here(r.space) }));
+  if (newRules.length) rulesList.set([...await rulesList.get(), ...newRules]);
+
+  // The order of the bar is yours once you have one, so only a machine with none takes it.
+  const order = map ? listIn(copy.data.spaceOrder).map(here).filter(Boolean) : [];
+  if (order.length && !listIn((await browser.storage.local.get("spaceOrder")).spaceOrder).length) await browser.storage.local.set({ spaceOrder: order });
+
   await reconcileAll();
   await ensureAllWindows();
-  return { essentials: newEssentials.length, folders, tabs };
+  return { essentials: newEssentials.length, folders, tabs, rules: newRules.length, spaces: made.length };
 }

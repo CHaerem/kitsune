@@ -72,6 +72,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 
@@ -1187,6 +1188,26 @@ def restart(m):
     check("after a restart, a new window gets all essentials and tabs", r["want"] == r["got"], str(r))
 
 
+def real_sidebery_export(m):
+    """What Sidebery's export of this browser holds, with a snapshot Sidebery itself made (its Create snapshot button)."""
+    m.js(H + """const w = main(); w.focus();
+      w.gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]] + "/page.setup/setup.html#settings_snapshots", {inBackground: true});
+      await wait(4000); return 1;""", SIDEBERY_ID)
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+        if "page.setup" in m.cmd("WebDriver:GetCurrentURL"):
+            break
+    clicked = m.cmd("WebDriver:ExecuteScript", {"script": """
+      const button = [...document.querySelectorAll(".btn")].find(b => b.textContent.trim() === "Create snapshot");
+      if (button) button.click();
+      return !!button;"""})
+    m.chrome()
+    return clicked, m.js(H + """for (let i = 0; i < 40 && !(await storage(args[0], ["snapshots"])).snapshots?.length; i++) await wait(250);
+      await removeWhere((w, t) => url(t).includes("page.setup"));
+      return {ver: "5.6.1", ...(await storage(args[0], ["containers", "sidebar", "snapshots"]))};""", SIDEBERY_ID)
+
+
 def move_over(m):
     # Moving this browser from Sidebery to Tidier alone, and back (PLAN.md, part D): every
     # folder and tab stays, folder pages go, and the record is what carries it.
@@ -1200,6 +1221,21 @@ def move_over(m):
     before, tabs0 = m.js(record), m.js(tabs_here)
     report = extension_message(m, {"type": "settings:get"})["report"]
     check("the report before moving names the folders and their tabs", len(report["folders"]) == len(before["folders"]) and not report["alone"] and report["tabs"] == len(before["tabs"]), str(report))
+    # Sidebery's real export, with one folder closed in its snapshot: the record has an address
+    # with a suffix Sidebery adds, the snapshot one without. (Closing it in Sidebery's sidebar for
+    # real is out of reach here: the sidebar's page cannot be scripted, so `folded` is set here.)
+    clicked, export = real_sidebery_export(m)
+    closed_folder = sorted(before["folders"])[0]
+    in_snapshot = 0
+    for window in export.get("snapshots", [{}])[-1].get("tabs", []):
+        for panel in window:
+            for tab in panel:
+                if isinstance(tab, dict) and "group.html#" + closed_folder.replace(" ", "%20") in tab["url"]:
+                    tab["folded"] = True
+                    in_snapshot += 1
+    imported = extension_message(m, {"type": "settings:importSidebery", "backup": export})
+    check("Sidebery's own export and snapshot are understood, and a closed folder is found by its address", clicked and in_snapshot == len(before["pages"]) and imported["folds"] == 1 and imported["order"] == 3, f"{clicked}, {in_snapshot}, {imported}")
+    check("taking its folds in changes nothing until the move", m.js(tabs_here) == tabs0 and m.js(record) == before, str(m.js(record)))
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       await (await AddonManager.getAddonByID("%s")).disable(); await wait(1500); return 1;""" % SIDEBERY_ID)
     still = m.js(tabs_here)
@@ -1211,6 +1247,8 @@ def move_over(m):
     check("after moving over, every folder has its tabs, and the pages are gone",
           after["folders"] == before["folders"] and after["tabs"] == before["tabs"] and after["saved"] == before["saved"] and after["pages"] == [0, 0], f"{before} -> {after}")
     check("after moving over, every window has its tabs", m.js(tabs_here) == tabs0, f"{tabs0} -> {m.js(tabs_here)}")
+    folds = m.js(H + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs; return Object.values(all).filter(e => e.group && e.collapsed).map(e => e.name);""" % EXT_ID)
+    check("after moving over, the folder closed in Sidebery's snapshot is closed, and no other", folds == [closed_folder], f"{folds}, {closed_folder}")
     r = m.js(H + "await wait(1500); return wins().map(w => [...new Set(w.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && t.userContextId).map(t => t.userContextId))].length);")
     check("after moving over, each window shows one space", all(x == 1 for x in r), str(r))
     no_problems(m, "after moving over")
@@ -1593,9 +1631,118 @@ def alone_copy(m):
     check("Tidier keeps a copy of its essentials and folders through the helper", r == {"saved": "copy"} and len(copy.get("data", {}).get("essentials", [])) >= 6 and copy["data"].get("syncedTabs"), f"{r}, {list(copy.get('data', {}))}")
     # What a copy holds, for choosing what to take in on another machine.
     summary = extension_message(m, {"type": "settings:copySummary", "copy": copy})
-    check("a copy says what it holds per space", summary.get("firefox-container-1", {}).get("essentials") == 2, str(summary))
+    check("a copy of what is here says, per space, that nothing would come", summary.get("firefox-container-1", {}).get("name") == "Space 1" and summary["firefox-container-1"]["essentials"] == 0, str(summary))
     merged = extension_message(m, {"type": "settings:merge", "copy": copy, "spaces": ["firefox-container-1"]})
-    check("taking in a copy of what is already here adds nothing", merged == {"essentials": 0, "folders": 0, "tabs": 0}, str(merged))
+    check("taking in a copy of what is already here adds nothing", merged == {"essentials": 0, "folders": 0, "tabs": 0, "rules": 0, "spaces": 0}, str(merged))
+
+
+def choose_file(m, input_id, contents):
+    """Give a file input on the settings page a file, the way the file picker does: it fires `change`."""
+    ext_page(m, "/settings/settings.html", "return 1;")
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, "chosen.json")
+        with open(path, "w") as out:
+            out.write(contents if isinstance(contents, str) else json.dumps(contents))
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/settings/settings.html" in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": "#" + input_id})
+        m.cmd("WebDriver:ElementSendKeys", {"id": next(iter(found.values())), "text": path})
+        m.chrome()
+        time.sleep(1.5)  # the page reads the file while it is still there
+
+
+def alone_copy_and_import(m):
+    # A copy from a machine where Space 1 and Space 2 have each other's ids, with a space
+    # that is not here: everything must land under the right names.
+    one, two = "firefox-container-1", "firefox-container-2"
+    gone = "firefox-container-77"
+    copy = {
+        "tidier": "1.6", "when": 1,
+        "spaces": [{"id": one, "name": "Space 2", "colorCode": "#ff9f00", "color": "orange", "icon": "briefcase"},
+                   {"id": two, "name": "Space 1", "colorCode": "#37adff", "color": "blue", "icon": "fingerprint"},
+                   {"id": gone, "name": "Brought along", "colorCode": "#af51f5", "color": "purple", "icon": "gift"}],
+        "data": {
+            "essentials": [{"key": "smoke-two", "url": "https://example.org/?in-space-2", "cookieStoreId": one, "title": "In Space 2"},
+                           {"key": "smoke-new", "url": "https://example.org/?in-new", "cookieStoreId": gone, "title": "In the new space"}],
+            "syncedTabs": {
+                "smoke-folder": {"group": True, "url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Reading", "title": "Reading",
+                                 "cookieStoreId": two, "parentKey": None, "added": 1},
+                "smoke-saved": {"url": "https://example.org/?saved", "title": "Saved", "cookieStoreId": two, "parentKey": "smoke-folder", "added": 1,
+                                "saved": {"url": "https://example.org/?saved", "title": "Saved"}},
+            },
+            "rules": [{"url": "copy-rule.example.org", "space": one}],
+            "spaceOrder": [gone, two, one],
+        },
+    }
+    named = H + """const ids = main().ContextualIdentityService;
+      const nameOf = c => ids.getPublicIdentities().find(i => i.userContextId === c)?.name;
+      const stored = await storage("%s", ["essentials", "syncedTabs", "rules", "spaceOrder"]);
+      const tabs = k => wins().map(w => w.gBrowser.tabs.filter(t => t.pinned && ek(w, t) === k).map(t => nameOf(t.userContextId)));
+      const spaceName = id => nameOf(Number(id.split("-").pop()));
+      return {two: tabs("smoke-two"), fresh: tabs("smoke-new"), folder: stored.syncedTabs["smoke-folder"], saved: stored.syncedTabs["smoke-saved"],
+              folderIn: stored.syncedTabs["smoke-folder"] && spaceName(stored.syncedTabs["smoke-folder"].cookieStoreId),
+              rules: (stored.rules || []).map(r => [r.url, spaceName(r.space)]), order: (stored.spaceOrder || []).map(spaceName),
+              made: ids.getPublicIdentities().filter(i => i.name === "Brought along").map(i => [i.color, i.icon])};""" % EXT_ID
+    before = m.js(named)
+    choose_file(m, "copy-file", copy)
+    lines = ext_page(m, "/settings/settings.html", """return {lines: [...doc.querySelectorAll("#merge-spaces .line")].map(l => l.textContent.trim()), shown: !doc.getElementById("merge").hidden};""")
+    check("a copy shows, per space, its name here and what would come, and which is new",
+          lines["shown"] and lines["lines"] == ["●Space 2: 1 essential, 1 rule", "●Space 1: 1 folder, 1 saved tab", "●Brought along: 1 essential, a new space"], str(lines))
+    check("nothing is written before you say so", m.js(named) == before, str(m.js(named)))
+    done = ext_page(m, "/settings/settings.html", """doc.getElementById("merge-go").click();
+      for (let i = 0; i < 60 && !doc.getElementById("merge-result").textContent; i++) await wait(200);
+      return {result: doc.getElementById("merge-result").textContent, shown: !doc.getElementById("merge").hidden, ruleLines: doc.querySelectorAll("#rules .line").length, back: !doc.getElementById("move-back").hidden};""")
+    check("taking it in says what came", done["result"] == "Took in 2 essentials, 1 folder, 1 saved tab, 1 rule and 1 new space. Nothing here was removed." and not done["shown"], str(done))
+    check("and the page's rules follow, and no way back to a Sidebery this browser never had appears", done["ruleLines"] >= 1 and not done["back"], str(done))
+    time.sleep(2)
+    after = m.js(named)
+    check("an essential whose ids are swapped lands under the right space's name, in every window", after["two"] and all(x == ["Space 2"] for x in after["two"]), str(after))
+    check("a space not here is made, with its colour and icon, and its essential is in it", after["made"] == [["purple", "gift"]] and all(x == ["Brought along"] for x in after["fresh"]), str(after))
+    check("a folder and its saved tab land under the right space's name", after["folderIn"] == "Space 1" and after["saved"] and after["saved"]["cookieStoreId"] == after["folder"]["cookieStoreId"] and after["folder"]["own"], str(after))
+    check("rules come, in the right space, and the order of spaces where there was none", ["copy-rule.example.org", "Space 2"] in after["rules"] and after["order"][:3] == ["Brought along", "Space 1", "Space 2"], str(after))
+    # A wrong file says so, in one line, and offers nothing to take in.
+    choose_file(m, "copy-file", {"hello": 1})
+    r = ext_page(m, "/settings/settings.html", """return {line: doc.getElementById("merge-result").textContent, offered: !doc.getElementById("merge").hidden};""")
+    check("a file that is no copy says so", r == {"line": "This is not a Tidier copy.", "offered": False}, str(r))
+    choose_file(m, "copy-file", "not json at all")
+    r = ext_page(m, "/settings/settings.html", """return doc.getElementById("merge-result").textContent;""")
+    check("a file that is not even JSON says so", r == "This is not a Tidier copy.", str(r))
+    choose_file(m, "sidebery-file", copy)
+    r = ext_page(m, "/settings/settings.html", """return doc.getElementById("sidebery-result").textContent;""")
+    check("a Tidier copy is not taken for Sidebery's export", r == "This is not Sidebery's export.", str(r))
+    # Sidebery's export: address rules from panels, and the folder it had closed closes at once.
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sidebery_export.json")) as f:
+        choose_file(m, "sidebery-file", f.read())
+    r = ext_page(m, "/settings/settings.html", """return doc.getElementById("sidebery-result").textContent;""")
+    check("Sidebery's export says what came, and what it left out", r == "Imported 3 rules, the order of 2 spaces and 1 closed folder. Left out the rules of 1 panel with no container.", str(r))
+    s = m.js(named)
+    check("its address rules go to their panel's space", ["two.example.org", "Space 2"] in s["rules"] and ["reopen.example.org", "Space 1"] in s["rules"] and not [x for x in s["rules"] if "nowhere" in x[0] or "excluded" in x[0]], str(s))
+    shown = sidebar_page(m, """doc.querySelector('#spaces .space[data-space="firefox-container-1"]').click();
+      for (let i = 0; i < 40 && !folders().some(f => f.name === "Reading"); i++) await wait(200);
+      return folders().filter(f => f.name === "Reading");""")
+    check("the folder Sidebery had closed is closed in the sidebar", [f["collapsed"] for f in shown] == [True], str(shown))
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "sidebery_export.json")) as f:
+        choose_file(m, "sidebery-file", {k: v for k, v in json.load(f).items() if k != "snapshots"})
+    r = ext_page(m, "/settings/settings.html", """return doc.getElementById("sidebery-result").textContent;""")
+    check("an export with no snapshot says folders start open", "no snapshot in this export, so folders start open" in r, str(r))
+    no_problems(m, "taking in a copy and an export")
+    # Leave no trace for the groups after this one.
+    extension_message(m, {"type": "settings:rules", "rules": []})
+    sidebar_page(m, """send({type: "deleteFolder", key: "smoke-folder"}); await wait(1000); return 1;""")
+    ext_page(m, "/settings/settings.html", """const all = await page.browser.contextualIdentities.query(page.JSON.parse('{"name": "Brought along"}'));
+      for (const c of all) await page.browser.contextualIdentities.remove(c.cookieStoreId);
+      await wait(1000); return 1;""")
+    m.js(H + """for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (t.pinned && ek(w, t) === "smoke-two") { w.gBrowser.unpinTab(t); break; }
+      await wait(2000);
+      await removeWhere((w, t) => key(w, t) === '"smoke-saved"' || url(t).includes("?in-space-2") || url(t).includes("?saved"));
+      const db = await ExtensionStorageIDB.open(ExtensionStorageIDB.getStoragePrincipal(WebExtensionPolicy.getByID("%s").extension));
+      await db.remove(["spaceOrder"]);
+      return 1;""" % EXT_ID)
+    left = m.js(named)
+    check("what was taken in can be taken away again", left["two"] and not any(left["two"]) and not left["made"] and not left["folder"] and not left["saved"], str(left))
 
 
 def alone_archive(m):
@@ -1632,7 +1779,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_copy_and_import, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
