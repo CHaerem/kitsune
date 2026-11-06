@@ -64,6 +64,7 @@ function loadCommon(model) {
       onMoved: { addListener() {} }, onRemoved: { addListener() {} },
     },
     sessions: { onChanged: { addListener() {} } },
+    alarms: { onAlarm: { addListener() {} } },
     storage: { local: { get: async () => ({}), set: async () => {} } },
     runtime: { getURL: p => "moz-extension://kitsune/" + p },
   };
@@ -146,4 +147,54 @@ test("a folder's tab that ended up below another folder is moved back to its fol
   await common.placeInOrder(1, ["A1", "a1", "a2", "B1", "b1"], () => {});
   assert.deepEqual(model.order(), ["A1", "a1", "a2", "B1", "b1"]);
   assert.deepEqual(model.tree(), before);
+});
+
+// --- The background scripts share one scope --------------------------------
+test("no two background scripts define the same top-level name", () => {
+  // They are plain scripts (manifest.json, background.scripts): a function
+  // defined again in a later script silently replaces the earlier one.
+  const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+  const seen = new Map(), twice = [];
+  for (const file of manifest.background.scripts) {
+    const src = readFileSync(new URL("../" + file, import.meta.url), "utf8");
+    for (const [, name] of src.matchAll(/^(?:async\s+)?(?:function\*?|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)) {
+      if (seen.has(name)) twice.push(`${name} (${seen.get(name)}, ${file})`);
+      else seen.set(name, file);
+    }
+  }
+  assert.deepEqual(twice, []);
+});
+
+// --- Saved tabs -----------------------------------------------------------
+test("closing a tab: saved tabs are unloaded, unloaded ones and ordinary tabs closed", () => {
+  const { closeAction } = loadCommon(sidebery([]));
+  const close = o => closeAction({ role: "live", inFolder: true, liveFolder: false, unloaded: false, folderHere: true, ...o });
+  assert.equal(close({}), "unload");                           // ⌘W on a loaded tab in a folder
+  assert.equal(close({ unloaded: true }), "close");            // × on its placeholder: removed for good
+  assert.equal(close({ role: "ghost", unloaded: true }), "close");
+  assert.equal(close({ inFolder: false }), "close");           // an ordinary tab, or one dragged out of its folder
+  assert.equal(close({ liveFolder: true }), "close");          // a pull request: the search decides
+  assert.equal(close({ folderHere: false }), "leave");         // closed with its folder: only that window
+  assert.equal(close({ liveFolder: true, folderHere: false }), "leave");
+  assert.equal(close({ role: "copy" }), "copy");               // a folder copy: only its own window
+});
+
+test("a tab gets its saved address when it comes into a folder, and loses it when it leaves", () => {
+  const { noteSaved, storedInFolder } = loadCommon(sidebery([]));
+  const all = {
+    F: { group: true, url: "moz-extension://sb/sidebery/group.html#F" },
+    a: { parentKey: "F", url: "https://example.org/board", title: "Board" },
+    b: { parentKey: "a", url: "https://example.org/b", title: "B" },      // below a tab in the folder
+    p: { parentKey: "F", url: "https://github.com/x/pull/1", liveFolder: "prs" },
+    o: { parentKey: null, url: "https://example.org/o", title: "O" },
+  };
+  noteSaved(all);
+  assert.deepEqual(plain(all.a.saved), { url: "https://example.org/board", title: "Board" });
+  assert.ok(all.b.saved && !all.p.saved && !all.o.saved && !all.F.saved);
+  all.a.url = "https://example.org/issue-1";                         // browsing on keeps the saved address
+  noteSaved(all);
+  assert.equal(all.a.saved.url, "https://example.org/board");
+  all.a.parentKey = null;                                            // dragged out
+  noteSaved(all);
+  assert.ok(!all.a.saved && !all.b.saved && !storedInFolder(all, "b"));
 });

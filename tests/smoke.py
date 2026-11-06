@@ -29,6 +29,10 @@ is reported as failed. It checks that:
     Recently Closed; a ghost takes its live tab's new title; closing a tab
     closes it everywhere; closing a window hands its tabs over, and reopening
     it doubles nothing;
+  - a tab in a folder is saved: closing it while loaded unloads it in its
+    place in every window, back to the address it had when it came into the
+    folder; ⌘⇧T takes its placeholder's place; closing it unloaded, or after
+    dragging it out of the folder, closes it everywhere;
   - pinning a tab makes it an essential everywhere, also when the tab is a
     ghost; unpinning a copy removes it everywhere, and the copy you unpinned
     opens its page; an essential copy opens the real page in its container;
@@ -387,14 +391,27 @@ def trees(m):
         // Until the tree has stayed the same for 2 s (at most 12 s): Kitsune sorts 1.5 s after filling.
         let now = tree(w), same = 0;
         for (let i = 0; i < 24 && same < 4; i++) { await wait(500); const t = tree(w); same = JSON.stringify(t) === JSON.stringify(now) ? same + 1 : 0; now = t; }
-        const folder = k => name[k] || k || "no folder";
-        wrong = Object.keys(before).filter(k => now[k] !== before[k]).map(k => name[k] + " in " + folder(now[k]) + ", not " + folder(before[k]));
+        // Named by their stored address (a ghost's own address is its placeholder's).
+        const nm = k => (synced[k]?.url?.match(/fixture-[a-z-]+[0-9-]+|#[^~]+|smoke-[a-z-]+/) || [synced[k]?.title || name[k] || k])[0];
+        const folder = k => k ? nm(k) : "no folder";
+        wrong = Object.keys(before).filter(k => now[k] !== before[k]).map(k => nm(k) + " in " + folder(now[k]) + ", not " + folder(before[k]));
+        if (wrong.length) {
+          // For finding out why: each window's tabs in the spaces concerned,
+          // indented by Sidebery's tree, with their role, and Kitsune's record.
+          const ctxs = new Set(Object.keys(before).filter(k => now[k] !== before[k]).map(k => synced[k]?.cookieStoreId));
+          const strip = x => { const ts = x.gBrowser.tabs.filter(t => !t.pinned && ctxs.has(ctxOf(t))), byId = new Map(ts.map(t => [sbData(x, t).id, t]));
+            const depth = t => { let d = 0; for (let p = byId.get(sbData(x, t).parentId); p && d < 9; p = byId.get(sbData(x, p).parentId)) d++; return d; };
+            return ts.map(t => "  ".repeat(depth(t)) + (value(x, t, "syncKey") ? nm(value(x, t, "syncKey")) : t.label) + " [" + (role(x, t) || "-") + "]"); };
+          wrong.push({main: strip(m0), other: strip(other()), new: strip(w),
+            stored: Object.keys(synced).filter(k => ctxs.has(synced[k].cookieStoreId)).map(k => nm(k) + " < " + folder(synced[k].parentKey))});
+        }
       } finally { await close(w); }
       gB.moveTabBefore(dragged, home);  // put it back for the checks after this one
       await wait(4000);
       return {tabs: Object.keys(before).length, wrong};""" % (SIDEBERY_ID, EXT_ID))
-    check("a tab dragged into another space's folder leaves new windows' folders alone",
-          r["tabs"] > 0 and not r["wrong"], f"{len(r['wrong'])} of {r['tabs']} tabs in the wrong folder: {r['wrong'][:6]}")
+    wrong = [x for x in r["wrong"] if isinstance(x, str)]
+    check("a tab dragged into another space's folder leaves new windows' folders alone", r["tabs"] > 0 and not wrong,
+          f"{len(wrong)} of {r['tabs']} tabs in the wrong folder: {wrong[:6]}; " + json.dumps([x for x in r["wrong"] if not isinstance(x, str)]))
 
 
 def tab_sync(m):
@@ -486,6 +503,69 @@ def tab_moves(m):
           into and into["a"] and into["a"]["inFolder"] and into["b"] and into["b"]["inFolder"] and into["b"]["next"] == into["a"]["next"] and into["stored"], str(into))
     check("a tab moved out of a folder leaves it in the other window too, in the same place",
           out and out["a"] and out["a"]["root"] and out["b"] and out["b"]["root"] and out["b"]["next"] == out["a"]["next"] and out["stored"] is None, str(out))
+
+
+def saved_tabs(m):
+    # A tab in a folder is saved: closing it while it is loaded (⌘W) unloads it
+    # back to the address it had when it came into the folder, in the same
+    # place and in every window; ⌘⇧T takes its placeholder's place; selecting
+    # the placeholder opens the saved address. Dragged out of the folder it is
+    # an ordinary tab again, which closing closes everywhere; closing a saved
+    # tab that is unloaded removes it everywhere too.
+    r = m.js(H + """
+      const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const id = t => ExtensionParent.apiManager.global.tabTracker.getId(t);
+      const sbParent = (w, t) => { try { return JSON.parse(w.SessionStore.getCustomTabValue(t, "extension:%s:data") || "{}").parentId; } catch (e) { return undefined; } };
+      const folderOf = w => w.gBrowser.tabs.find(t => url(t).includes("group.html#Fixture%%20folder%%202"));
+      const entry = async k => (await storage("%s", ["syncedTabs"])).syncedTabs?.[JSON.parse(k)] ?? null;
+      const a = main(), b = other(), gB = a.gBrowser, SAVED = "https://example.org/?smoke-saved";
+      const tabOf = (w, k) => w.gBrowser.tabs.find(t => key(w, t) === k);
+      // The tab's folder in this window and the synced tab right after it.
+      const place = (w, k) => { const ts = [...w.gBrowser.tabs], x = tabOf(w, k); if (!x) return null;
+        const next = ts.slice(ts.indexOf(x) + 1).find(y => key(w, y)); return {inFolder: sbParent(w, x) === id(folderOf(w)), next: next ? key(w, next) : null}; };
+      const intoFolder = async address => {
+        const t = gB.addTrustedTab(address, {userContextId: 2, inBackground: true});
+        await wait(6000);  // moves of a tab in its first seconds are Sidebery placing it
+        gB.moveTabBefore(t, gB.tabs[gB.tabs.indexOf(folderOf(a)) + 1]); await wait(5000);
+        return t;
+      };
+      a.focus(); await wait(500);
+      const out = {};
+      let t = await intoFolder(SAVED);
+      const k = key(a, t);
+      t.linkedBrowser.loadURI(Services.io.newURI(SAVED + "-later"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()});
+      await wait(3000);
+      out.before = {place: place(a, k), url: (await entry(k))?.url, saved: (await entry(k))?.saved?.url};
+      gB.selectedTab = t; await wait(500); gB.removeTab(t); await wait(3500);
+      out.closed = {tabs: find(k), place: place(a, k), url: (await entry(k))?.url};
+      a.SessionStore.undoCloseTab(a, 0); await wait(4500);
+      out.reopened = find(k);
+      gB.removeTab(tabOf(a, k)); await wait(3500);
+      gB.selectedTab = tabOf(a, k); await wait(4000);
+      out.opened = {tabs: find(k), url: url(tabOf(a, k))};
+      gB.moveTabBefore(tabOf(a, k), folderOf(a)); await wait(6000);  // dragged out of the folder
+      out.out = {saved: (await entry(k))?.saved ?? null, parent: (await entry(k))?.parentKey ?? null};
+      gB.removeTab(tabOf(a, k)); await wait(3500);
+      out.outClosed = {tabs: find(k), stored: await entry(k)};
+      t = await intoFolder(SAVED + "-unloaded");
+      const k2 = key(a, t);
+      gB.selectedTab = folderOf(a); await wait(500); gB.discardBrowser(t); await wait(500);
+      gB.removeTab(t); await wait(3500);
+      out.unloadedClosed = {tabs: find(k2), stored: await entry(k2)};
+      return out;""" % (SIDEBERY_ID, EXT_ID))
+    b, c = r["before"], r["closed"]
+    check("a tab moved into a folder keeps the address it had then as its saved address",
+          b["place"] and b["place"]["inFolder"] and b["url"].endswith("-later") and b["saved"] == "https://example.org/?smoke-saved", str(b))
+    check("closing a loaded saved tab unloads it in every window, in its folder and place, back to its saved address",
+          c["tabs"] in ([["ghost/unloaded"], ["ghost/unloaded"]], [["live/unloaded"], ["ghost/unloaded"]]) and c["place"]
+          and c["place"]["inFolder"] and c["place"]["next"] == b["place"]["next"] and c["url"] == "https://example.org/?smoke-saved", f"before {b}, after {c}")
+    check("reopening a closed saved tab (⌘⇧T) takes its placeholder's place", r["reopened"] == [["live/loaded"], ["ghost/unloaded"]], str(r["reopened"]))
+    check("selecting a saved tab's placeholder opens its saved address",
+          r["opened"]["tabs"] == [["live/loaded"], ["ghost/unloaded"]] and r["opened"]["url"] == "https://example.org/?smoke-saved", str(r["opened"]))
+    check("a saved tab dragged out of its folder is an ordinary tab, which closing closes everywhere",
+          r["out"] == {"saved": None, "parent": None} and r["outClosed"] == {"tabs": [[], []], "stored": None}, f"{r['out']}, {r['outClosed']}")
+    check("closing a saved tab while it is unloaded removes it everywhere",
+          r["unloadedClosed"] == {"tabs": [[], []], "stored": None}, str(r["unloadedClosed"]))
 
 
 def ghost_title(m):
@@ -755,10 +835,18 @@ def live_folders(m):
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
 
+# The extension process's memory and CPU time so far (Kitsune shares it with
+# Sidebery and Firefox's own extensions).
+PROC_INFO = """const info = await ChromeUtils.requestProcInfo();
+  const ext = info.children.filter(c => c.type === "extension");
+  return {mb: Math.round(ext.reduce((s, c) => s + (c.memory || 0), 0) / 1048576), cpuS: ext.reduce((s, c) => s + (c.cpuTime || 0), 0) / 1e9};"""
+
+
 def many_tabs(m):
     # Closer to a real setup (yours has about 30 essentials and 50 tabs): ten
     # more essentials and thirty more tabs over the three spaces, then a new
     # window, which must get them all, in their spaces, unloaded.
+    before, proc0 = extension_message(m, {"type": "stats"}), m.js(PROC_INFO)
     r = m.js(H + """
       const w = main();
       for (let i = 0; i < 30; i++) { w.gBrowser.addTrustedTab("https://example.org/?smoke-many-" + i, {userContextId: 1 + i % 3, inBackground: true}); await wait(150); }
@@ -799,6 +887,24 @@ def many_tabs(m):
           not any(r["misplaced"].values()) and not r["stillLoaded"], str(r), sidebery_bug="pin race")
     left = m.js(H + """await wait(2000); return wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("smoke-many") || (t.pinned && !ek(w, t))).map(t => t.label));""")
     check("and they are all gone again once closed", all(not x for x in left), str(left))
+    # Memory and work. Kitsune's lists of tabs and windows are back to their
+    # size once the tabs and the window are gone (after the 10 s in which
+    # closed placeholders are looked for in Recently Closed), and with nothing
+    # happening Kitsune does nothing (unless a timed check came by).
+    time.sleep(12)
+    after = extension_message(m, {"type": "stats"})
+    grown = {k: (before["sizes"][k], n) for k, n in after["sizes"].items() if n > before["sizes"].get(k, 0)}
+    check("Kitsune's lists in memory are back to their size once the tabs and the window are closed", not grown, f"grown (before, after): {grown}")
+    idle = extension_message(m, {"type": "idle", "ms": 15000})
+    if idle["alarms"]:
+        print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)
+    else:
+        check("with nothing happening, Kitsune does nothing (15 s)", idle["jobs"] == 0 and idle["lookups"] == 0, str(idle))
+    proc = m.js(PROC_INFO)
+    print(f"INFO  for 30 tabs and 10 essentials, a new window and closing them all: {after['jobs'] - before['jobs']} jobs, "
+          f"queue busy {round((after['queueMs'] - before['queueMs']) / 1000, 1)} s (Sidebery waits included), "
+          f"{after['lookups'] - before['lookups']} tab lookups; extension process (Kitsune and Sidebery) "
+          f"{proc['mb']} MB, {round(proc['cpuS'] - proc0['cpuS'], 1)} s CPU", flush=True)
 
 
 def handover(m):
@@ -911,18 +1017,18 @@ PINS_APART = """
 apart_after = []
 
 
-GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, ghost_title, pinned_ghost,
-          orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, trees, handover, reopened_window, restart)
+GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
+          pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, trees, handover, reopened_window, restart)
 # What a group needs run before it (as setup, reported only if it fails) when
 # it runs without it: the second window new_window opens, and the window
 # handover closes, which reopened_window reopens.
-NEEDS = {g: [new_window] for g in (essentials, folders, tab_sync, folder_pull, tab_moves, ghost_title, pinned_ghost,
+NEEDS = {g: [new_window] for g in (essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title, pinned_ghost,
                                    archiving, live_folders, many_tabs, handover)}
 NEEDS[reopened_window] = [new_window, handover]
 # By default the groups run in these parallel runs, each in its own test
 # Firefox, about equally long (the whole test in about a third of the time).
-SHARDS = (  # measured: about 120, 145 and 140 s on a Mac
-    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title),
+SHARDS = (  # measured: about 120, 145 and 140 s on a Mac, before saved_tabs (about 60 s)
+    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title, saved_tabs),
     (essentials, folders, tab_sync, folder_pull, tab_moves, trees, pinned_ghost),
     (archiving, live_folders, many_tabs, handover, reopened_window, restart),
 )

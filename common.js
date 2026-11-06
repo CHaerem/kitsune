@@ -4,10 +4,21 @@
 // into duplicate tabs. Both features share this one queue.
 let queue = Promise.resolve();
 function serial(fn) {
-  const run = queue.then(fn);
+  const run = queue.then(async () => {
+    const t0 = performance.now();
+    work.jobs++;
+    try { return await fn(); } finally { work.queueMs += performance.now() - t0; }
+  });
   queue = run.catch(err => console.error("Kitsune:", err));
   return run;
 }
+
+// How much Kitsune does, for the smoke test (the "stats" message, tabsync.js):
+// jobs run in the queue and how long they held it (waits for Sidebery
+// included), tab lookups made outside it (noteOrder, tabsync.js), and the
+// timed checks (archiving, live folders), the only work with nothing happening.
+const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0 };
+browser.alarms.onAlarm.addListener(() => { work.alarms++; });
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const isWeb = url => /^https?:/i.test(url || "");
@@ -32,6 +43,7 @@ const FORGET_MS = 10000;
 const toForget = new Map(); // placeholder URL -> until when to look for it
 async function forgetClosedPlaceholders(kind, keys) {
   for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
+  setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
   await forgetClosedNow();
 }
 async function forgetClosedNow() {
@@ -153,6 +165,52 @@ const NEW_TAB_QUIET_MS = 5000;
 // Folders are moved first in their space FOLDERS_SETTLE_MS after a change
 // (see folders.js), before the move is copied to the other windows.
 const FOLDERS_SETTLE_MS = 400;
+// A saved tab you closed is handled FOLDER_CLOSE_SETTLE_MS later, once a
+// folder closed with it is gone too (see onSyncedClosed in tabsync.js).
+const FOLDER_CLOSE_SETTLE_MS = 300;
+
+// --- Saved tabs --------------------------------------------------------------
+// A tab in a Sidebery folder (at any depth) is *saved*, like a tab in Arc's
+// pinned section: ⌘W unloads it instead of closing it, and it goes back to the
+// address it had when it came into the folder (`saved` in its synced entry).
+// Closing it while it is unloaded removes it; so does dragging it out of the
+// folder, which makes it an ordinary tab again. A live folder's pull requests
+// are not saved: the search decides what is in them (livefolders.js).
+
+// The nearest folder above the stored entry `key`, by the stored parents.
+function folderKeyOf(all, key) {
+  for (let k = all[key]?.parentKey, seen = new Set(); k && all[k] && !seen.has(k); k = all[k].parentKey) {
+    seen.add(k);
+    if (all[k].group) return k;
+  }
+  return null;
+}
+function storedInFolder(all, key) { return folderKeyOf(all, key) !== null; }
+
+// Keep each entry's `saved` address current: set it when a tab is first seen
+// in a folder (from its address then), remove it when the tab leaves. Only
+// `keys` when given (a page load concerns its own tab only).
+function noteSaved(all, keys = Object.keys(all)) {
+  for (const key of keys) {
+    const e = all[key];
+    if (!e) continue;
+    if (e.group || e.liveFolder || !storedInFolder(all, key)) delete e.saved;
+    else if (!e.saved && isWeb(e.url)) e.saved = { url: e.url, title: e.title, icon: e.icon };
+  }
+}
+
+// What closing a synced tab (not by closing its window) means:
+//   "copy"   a folder copy: only its own window (tabsync.js)
+//   "leave"  a tab in a folder that was closed in that window with it: the
+//            other windows keep it (Sidebery closes a folded folder's tabs)
+//   "unload" a saved tab you closed while it was loaded
+//   "close"  everything else: closed in every window
+function closeAction({ role, inFolder, liveFolder, unloaded, folderHere }) {
+  if (role === "copy") return "copy";
+  if (inFolder && !folderHere) return "leave";
+  if (inFolder && !liveFolder && !unloaded) return "unload";
+  return "close";
+}
 
 // The focused window, tracked here so tab events need no round trip to ask.
 // Registered before the other scripts' listeners, so it is current when they run.

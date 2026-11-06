@@ -13,6 +13,11 @@
 // - New tab / navigating a new tab to a page -> ghosts appear in other windows.
 // - Closing a tab (live or ghost)            -> closed in every window.
 //   Closing a folder copy only affects its own window.
+// - Closing a saved tab (in a folder) while
+//   it is loaded                             -> unloaded, back to its saved
+//                                               address, in every window
+//                                               (see closeAction, common.js).
+// - Reopening it (⌘⇧T)                       -> it takes its placeholder's place.
 // - Moving a tab into or out of a folder     -> the same in the other windows.
 // - Selecting a ghost, or focusing a window
 //   whose selected tab is a ghost            -> the live tab is pulled in.
@@ -27,7 +32,7 @@
 // Tree structure is read from `openerTabId`, which Sidebery keeps equal to
 // the parent in its tree.
 
-const syncedList = storedValue("syncedTabs", () => ({})); // { [key]: { url, title, cookieStoreId, parentKey, group, added } }
+const syncedList = storedValue("syncedTabs", () => ({})); // { [key]: { url, title, icon, cookieStoreId, parentKey, group, added, saved: { url, title, icon } } }
 const SYNC_KEY = "syncKey";   // sessions value: key of the logical tab
 const SYNC_ROLE = "syncRole"; // sessions value: "live" | "ghost" | "copy"
 const SETTLE_MS = 1500;       // wait for redirects / container reopen before registering
@@ -257,6 +262,30 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   return Promise.resolve(sidebarWaits);
 });
 
+// For the smoke test: how much Kitsune has done (work, common.js) and how big
+// each list it keeps in memory is, so that idle work and lists that only grow
+// show up there. A list kept per tab or window must shrink again when tabs
+// and windows close.
+// "idle" counts the work done in `ms` with nothing happening, after
+// IDLE_SETTLE_MS for the work caused by the smoke test's own helper page.
+const IDLE_SETTLE_MS = 3000;
+browser.runtime.onMessage.addListener((msg, sender) => {
+  if (!["stats", "idle"].includes(msg?.type) || sender.id !== browser.runtime.id || !sender.url?.startsWith(browser.runtime.getURL(""))) return;
+  if (msg.type === "idle") {
+    return (async () => {
+      await sleep(IDLE_SETTLE_MS);
+      const before = { ...work };
+      await sleep(msg.ms);
+      return Object.fromEntries(Object.keys(work).map(k => [k, Math.round(work[k] - before[k])]));
+    })();
+  }
+  const lists = {
+    toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
+    syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
+  };
+  return Promise.resolve({ ...work, sizes: Object.fromEntries(Object.entries(lists).map(([name, list]) => [name, list.size])) });
+});
+
 // Make sure every synced tab has exactly one live tab and every window exactly
 // one representation of it, then fill in what is missing. Safe to run repeatedly.
 async function reconcileAll() {
@@ -299,6 +328,7 @@ async function reconcileAll() {
       if (extra.length) await forgetClosedPlaceholders("ghost", [key]);
     }
   }
+  noteSaved(all); // also gives tabs that were in folders before saved tabs existed their address
   saveSynced(all);
   for (const w of wins) await fillWindow(w.id);
 }
@@ -312,10 +342,12 @@ async function register(tabId) {
   const win = await browser.windows.get(tab.windowId).catch(() => null);
   if (!win || win.type !== "normal" || win.incognito) return;
   const all = await getSynced();
+  if (await reopenedSaved(tab, all)) return;
   const key = crypto.randomUUID();
   const parentKey = tab.openerTabId ? syncKeyByTab.get(tab.openerTabId) || null : null;
   const entry = { url: tab.url, title: tab.title, icon: tab.favIconUrl, cookieStoreId: tab.cookieStoreId, parentKey, group: isSideberyGroup(tab.url), added: Date.now() };
   all[key] = entry;
+  noteSaved(all);
   saveSynced(all);
   await setRole(tab.id, key, entry.group ? "copy" : "live");
   const tabs = await browser.tabs.query({});
@@ -324,6 +356,75 @@ async function register(tabId) {
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
     await createRep(w.id, key, entry, parentId);
   }
+}
+
+// A saved tab you closed and reopened (⌘⇧T, History → Recently Closed Tabs):
+// Firefox brings it back with its Kitsune values, while its placeholder is
+// still there, unloaded. The reopened tab becomes the live tab, and its
+// placeholder in this window is removed, so it is not there twice.
+async function reopenedSaved(tab, all) {
+  const key = await browser.sessions.getTabValue(tab.id, SYNC_KEY).catch(() => undefined);
+  const entry = key && all[key];
+  if (!entry || entry.group) return false;
+  const tabs = await browser.tabs.query({});
+  const reps = repsOf(key, tabs);
+  if (reps.some(t => syncRoleByTab.get(t.id) === "live" && !t.discarded && !isGhostUrl(t.url))) return false; // open already: a copy
+  await setRole(tab.id, key, "live");
+  for (const t of reps) {
+    if (t.windowId !== tab.windowId) { if (syncRoleByTab.get(t.id) === "live") await setRole(t.id, key, "ghost"); continue; }
+    syncBusy.add(t.id); forget(t.id);
+    await browser.tabs.remove(t.id).catch(() => {});
+  }
+  await forgetClosedPlaceholders("ghost", [key]);
+  if (isWeb(tab.url)) Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
+  saveSynced(all);
+  return true;
+}
+
+// A tab you closed (not by closing its window). `place` is where it was (see
+// closedPlace). Waits a moment, so that a folder closed with it is gone too.
+async function onSyncedClosed(key, role, windowId, place) {
+  const all = await getSynced();
+  const entry = all[key];
+  if (!entry) return;
+  const inFolder = storedInFolder(all, key);
+  if (inFolder) await sleep(FOLDER_CLOSE_SETTLE_MS);
+  const reps = repMap(await browser.tabs.query({ windowId }).catch(() => []));
+  const action = closeAction({
+    role, inFolder, liveFolder: !!entry.liveFolder, folderHere: reps.has(folderKeyOf(all, key)),
+    // Not seen yet (just created): a live tab counts as loaded, so it is kept.
+    unloaded: place ? place.unloaded : role !== "live",
+  });
+  if (action === "unload") await unloadSaved(key, windowId, place);
+  else if (action === "close") await closeEverywhere(key);
+  // "copy" and "leave": the other windows keep it (this one gets it back with
+  // its folder when it is filled again); forgotten if no window has it.
+  else await dropIfUnused(key);
+}
+
+// A saved tab you closed while it was loaded: it goes back to its saved
+// address, unloaded, in every window. Its window gets a placeholder where it
+// was, under its parent (or the nearest one still there); the other windows'
+// placeholders are reloaded to show the saved page. There is no live tab
+// until you select one of them (pull makes that one live and loads it).
+async function unloadSaved(key, windowId, place) {
+  const all = await getSynced();
+  const entry = all[key];
+  if (!entry) return;
+  if (entry.saved) Object.assign(entry, entry.saved);
+  saveSynced(all);
+  const tabs = await browser.tabs.query({});
+  for (const t of repsOf(key, tabs)) {
+    if (!t.active && isGhostUrl(t.url)) await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
+  }
+  const here = repMap(tabs.filter(t => t.windowId === windowId));
+  if (here.has(key)) return;
+  let parentKey = entry.parentKey;
+  while (parentKey && !here.has(parentKey)) parentKey = all[parentKey]?.parentKey;
+  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined);
+  if (!place) return;
+  await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
+  await placeNextTo(windowId, ghost.id, place.before, place.after);
 }
 
 // The tab was closed by you (not by closing its window): close it everywhere.
@@ -451,7 +552,7 @@ async function applyMoves(windowId, ids) {
       await placeNextTo(w.id, ghost.id, before, after);
     }
   }
-  if (changed) saveSynced(all);
+  if (changed) { noteSaved(all); saveSynced(all); } // into a folder: saved from here; out of it: not
   if (gone.length) await forgetClosedPlaceholders("ghost", gone);
 }
 
@@ -549,6 +650,9 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       if (!entry || !isWeb(tab.url)) return;
       const changed = entry.title !== tab.title || (tab.favIconUrl && entry.icon !== tab.favIconUrl);
       Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
+      // On its saved address, a saved tab's saved title and icon follow the page.
+      if (entry.saved?.url === tab.url) Object.assign(entry.saved, { title: tab.title, icon: tab.favIconUrl || entry.saved.icon });
+      noteSaved(all, [key]);
       saveSynced(all);
       if (changed) refreshGhostsSoon(key);
     });
@@ -643,18 +747,54 @@ async function ghostInfo(kind, key) {
 browser.tabs.onRemoved.addListener((tabId, info) => {
   clearTimeout(pending.get(tabId)); pending.delete(tabId);
   awaitingIcon.delete(tabId);
+  const place = info.isWindowClosing ? null : closedPlace(info.windowId, tabId);
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   forget(tabId);
+  if (info.isWindowClosing) lastOrder.delete(info.windowId); else noteOrder(info.windowId);
   if (!started || !key || syncBusy.has(tabId)) { syncBusy.delete(tabId); return; }
   if (info.isWindowClosing) {
     if (role === "live") serial(() => handOver(key, info.windowId));
     return;
   }
   // Folder copies belong to their window: closing one leaves the others alone
-  // (Sidebery itself may close a group page, and that must not spread).
-  if (role === "copy") { serial(() => dropIfUnused(key)); return; }
-  serial(() => closeEverywhere(key));
+  // (Sidebery itself may close a group page, and that must not spread). Saved
+  // tabs are unloaded instead of closed (see onSyncedClosed).
+  serial(() => onSyncedClosed(key, role, info.windowId, place));
 });
+
+// Each window's tabs as last seen, in order, so that a tab you close can be
+// put back where it was: Firefox reports a closed tab by its ID only.
+const lastOrder = new Map(); // windowId -> [{ id, cookieStoreId, unloaded }]
+const orderQueries = new Map(); // windowId -> whether to look again when the query in progress is done
+function noteOrder(windowId) {
+  if (orderQueries.has(windowId)) { orderQueries.set(windowId, true); return; }
+  orderQueries.set(windowId, false);
+  work.lookups++;
+  browser.tabs.query({ windowId }).then(tabs => {
+    lastOrder.set(windowId, tabs.sort((a, b) => a.index - b.index)
+      .map(t => ({ id: t.id, cookieStoreId: t.cookieStoreId, unloaded: t.discarded || isGhostUrl(t.url) })));
+  }, () => lastOrder.delete(windowId)).finally(() => {
+    const again = orderQueries.get(windowId);
+    orderQueries.delete(windowId);
+    if (again) noteOrder(windowId);
+  });
+}
+browser.tabs.onCreated.addListener(tab => noteOrder(tab.windowId));
+browser.tabs.onMoved.addListener((tabId, { windowId }) => noteOrder(windowId));
+browser.tabs.onAttached.addListener((tabId, { newWindowId }) => noteOrder(newWindowId));
+browser.tabs.onDetached.addListener((tabId, { oldWindowId }) => noteOrder(oldWindowId));
+browser.tabs.onUpdated.addListener((tabId, change, tab) => noteOrder(tab.windowId), { properties: ["discarded", "url"] });
+browser.windows.onRemoved.addListener(windowId => lastOrder.delete(windowId));
+
+// Where a closed tab was: whether it was unloaded, and the synced tabs of its
+// space before and after it (nearest first), for placeNextTo.
+function closedPlace(windowId, tabId) {
+  const order = lastOrder.get(windowId) || [];
+  const i = order.findIndex(t => t.id === tabId);
+  if (i < 0) return null;
+  const keysOf = list => list.filter(t => t.cookieStoreId === order[i].cookieStoreId && syncKeyByTab.has(t.id)).map(t => syncKeyByTab.get(t.id));
+  return { unloaded: order[i].unloaded, before: keysOf(order.slice(0, i).reverse()), after: keysOf(order.slice(i + 1)) };
+}
 
 // Selecting a ghost in the window you are using pulls the live tab in.
 browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
@@ -742,6 +882,7 @@ async function start(delayMs) {
     await reconcileAll(); // also adds missing essentials, via fillWindow
     await foldersFirstAll(); // folders.js
   });
+  for (const w of await normalWindows()) noteOrder(w.id);
   started = true;
 }
 let startRequested = false;

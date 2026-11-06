@@ -31,7 +31,9 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    the tabs in them, come before the ordinary tabs, like the pinned part of a
    space in Zen and Arc. Sidebery has no setting for it, and reordering with
    CSS would only change the picture, so Kitsune keeps the real tab order:
-   when a space does not start with its folders, they are moved up in one go.
+   when a space does not start with its folders, the ordinary tabs above them
+   are moved below them, one at a time (moving a folder would make Sidebery
+   put the tabs it passes into it).
 4. **Live folders** (`livefolders.js`): Sidebery folders filled from a GitHub
    pull request search, such as open pull requests in your company's
    organisation or your own repositories where you are author, assignee or
@@ -50,6 +52,19 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    and tabs playing sound are kept. The time never counts from before
    archiving was first turned on. Change it with `archiveAfterHours` in the
    extension storage (0 = off).
+7. **Saved tabs**, like Arc's pinned section and Zen's pinned tabs (in
+   `tabsync.js`, the rules in `closeAction` in `common.js`): a tab in a
+   folder is *saved*. Closing it while it is loaded (⌘W, or Sidebery's ×)
+   unloads it instead, in its place, in every window, and it goes back to the
+   address it had when it came into the folder (browsing in it does not change
+   that; its title and icon follow the page while it is on that address).
+   ⌘⇧T reopens it in its placeholder's place. To remove a saved tab for good,
+   close it while it is unloaded (the × on its placeholder, or a middle click),
+   or drag it out of the folder, which makes it an ordinary tab again. Every
+   other tab is temporary: closing it closes it everywhere, and archiving
+   closes it when unused. A live folder's pull requests are not saved (the
+   search decides what is in them), and the tabs of a folder you close with
+   it in one window stay in the other windows.
 
 Shortcuts, compact mode, sign-in and spaces are set up natively (Firefox
 settings, `about:keyboard`, Sidebery), in the dotfiles. Switching to a tab in

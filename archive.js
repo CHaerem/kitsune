@@ -19,10 +19,7 @@ const ARCHIVE_CHECK_MINUTES = 10;
 // by the tree as it is now (Sidebery keeps openerTabId equal to the parent),
 // since a tab can be moved into a folder after it was opened.
 function inFolder(all, key, live, tabsById) {
-  for (let k = key, seen = new Set(); k && all[k] && !seen.has(k); k = all[k].parentKey) {
-    seen.add(k);
-    if (all[k].group) return true;
-  }
+  if (all[key]?.group || storedInFolder(all, key)) return true;
   for (let t = live, seen = new Set(); t && !seen.has(t.id); t = tabsById.get(t.openerTabId)) {
     seen.add(t.id);
     if (isSideberyGroup(t.url)) return true;
