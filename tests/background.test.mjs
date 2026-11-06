@@ -699,3 +699,15 @@ test("a window closed right after it opened leaves nothing behind", async () => 
   assert.ok(!x.js("lastOrder").has(w.id));
   x.kill();
 });
+
+test("a window closed while it is being filled is not an error", async () => {
+  const { ff, x, windows: [w] } = await chaosStart({ windows: 1 });
+  ff.openTab(w.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const { window: fresh } = ff.openWindow();
+  await ff.clock.run(205); // the moment Tidier starts on it
+  ff.closeWindow(fresh.id);
+  await ff.clock.idle(60000);
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});

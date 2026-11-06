@@ -507,6 +507,7 @@ export class ChaosFirefox extends FakeFirefox {
   closeWindow(id) {
     const w = this.wins.get(id);
     if (!w) return;
+    this.closeSidebarOf(id);
     const states = w.order.map(x => this.stateOf(this.tabs.get(x)));
     if (w.type === "normal" && states.some(s => !s.url.startsWith("about:"))) {
       this.closedItems.unshift({ kind: "window", at: this.clock.now, sessionId: String(this.closedSeq++), states, winValues: this.winValues.get(id) });

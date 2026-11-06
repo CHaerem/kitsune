@@ -208,9 +208,12 @@ async function fillWindow(windowId, { fresh = false } = {}) {
       if (reps.has(key)) continue;
       const entry = all[key];
       // One refused tab (its container was removed, say) must not leave the
-      // window without all the tabs after it.
-      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined)
-        .catch(err => { noteError(err); return null; });
+      // window without all the tabs after it. A window closed meanwhile is no problem:
+      // it simply wants no more tabs, and you may well have closed it at once.
+      const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined).catch(async err => {
+        if (await browser.windows.get(windowId).catch(() => null)) noteError(err);
+        return null;
+      });
       if (!tab) continue;
       reps.set(key, tab.id);
       created++;
@@ -359,7 +362,14 @@ async function reconcileAll() {
   noteSaved(all); // also gives tabs that were in folders before saved tabs existed their address
   saveSynced(all);
   // A window closed meanwhile must not keep the others from being filled.
-  for (const w of wins) await fillWindow(w.id).catch(noteError);
+  for (const w of wins) await fillIfOpen(w.id).catch(noteError);
+}
+
+// A window closed meanwhile wants no more tabs: what was refused for that reason is no error.
+async function fillIfOpen(windowId, options) {
+  await fillWindow(windowId, options).catch(async err => {
+    if (await browser.windows.get(windowId).catch(() => null)) throw err;
+  });
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -906,7 +916,7 @@ browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
   setTimeout(() => serial(async () => {
     if (await adoptRestored(win.id)) await reconcileAll();
-    else await fillWindow(win.id, { fresh: true });
+    else await fillIfOpen(win.id, { fresh: true });
   }), NEW_WINDOW_DELAY_MS);
 });
 
@@ -920,10 +930,11 @@ async function adoptRestored(windowId) {
   const removed = [];
   for (const t of await browser.tabs.query({ windowId })) {
     if (syncKeyByTab.has(t.id)) continue;
+    // Refused for a tab closed since the query: it is simply gone, and the rest still counts.
     const [key, role] = await Promise.all([
       browser.sessions.getTabValue(t.id, SYNC_KEY),
       browser.sessions.getTabValue(t.id, SYNC_ROLE),
-    ]);
+    ]).catch(() => []);
     if (!key || !role) continue;
     found = true;
     if (all[key]) { syncKeyByTab.set(t.id, key); syncRoleByTab.set(t.id, role); continue; }
