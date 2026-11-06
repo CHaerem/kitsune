@@ -131,7 +131,7 @@ browser.menus.onShown.addListener(async (info, tab) => {
   const all = await getSynced();
   add(MENU_FOLDER, `${MENU_FOLDER}:`, "No folder");
   for (const f of foldersOf(all, tab.cookieStoreId).filter(f => !f.live)) add(MENU_FOLDER, `${MENU_FOLDER}:${f.key}`, f.name);
-  for (const s of await containerSpaces()) if (s.id !== tab.cookieStoreId) add(MENU_SPACE, `${MENU_SPACE}:${s.id}`, s.name);
+  for (const s of await containerSpaces()) if (s.id !== tab.cookieStoreId && !isHiddenSpace(s.id)) add(MENU_SPACE, `${MENU_SPACE}:${s.id}`, s.name);
   browser.menus.refresh();
 });
 

@@ -43,7 +43,7 @@ const syncBusy = new Set();      // tab IDs we are changing ourselves
 let pulling = 0;                 // pulls in progress: tabs being moved are not moves you made
 let started = false;             // tab sync waits for startup before reacting
 
-const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
+const syncable = tab => !tab.pinned && !tab.incognito && !isHiddenSpace(tab.cookieStoreId) && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
 const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); };
 // Sidebery adds a channel suffix ("~!...!~") to group URLs; strip it when copying.
@@ -162,7 +162,7 @@ function bySpace(items, spaceOf) {
 // into another space's folder there would otherwise be copied into every new
 // window, and with it a folder taking in every tab after it.
 function fillOrder(all, tabs, windowId) {
-  return treeOrder(keysInReferenceOrder(all, tabs, windowId).map(k => ({
+  return treeOrder(keysInReferenceOrder(all, tabs, windowId).filter(k => !isHiddenSpace(all[k].cookieStoreId)).map(k => ({
     id: k, parent: all[k].parentKey, space: all[k].cookieStoreId, folder: all[k].group,
   })));
 }
@@ -331,7 +331,8 @@ async function reconcileAll() {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
       // the tab's last copy. fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved) delete all[key];
+      // So does a tab of a hidden space, which comes back when the space is shown.
+      if (sessionHere && !all[key].saved && !isHiddenSpace(all[key].cookieStoreId)) delete all[key];
       continue;
     }
     if (!all[key].group) {
@@ -443,6 +444,7 @@ async function unloadSaved(key, windowId, place) {
   if (!entry) return;
   if (entry.saved) Object.assign(entry, entry.saved);
   saveSynced(all);
+  if (isHiddenSpace(entry.cookieStoreId)) return closeHiddenTabs(); // it stayed open when its space was hidden; now it is hidden like the rest
   const tabs = await browser.tabs.query({});
   for (const t of repsOf(key, tabs)) {
     if (!t.active && isGhostUrl(t.url)) await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
@@ -959,6 +961,7 @@ async function start(delayMs) {
   // restarts, with no sign of why. This runs at every update, in the middle of work.
   const step = fn => Promise.resolve().then(fn).then(() => true, err => { noteError(err); return false; });
   await step(readAlone);
+  await step(readHiddenSpaces); // hiddenspaces.js: before any window is filled
   await serial(async () => {
     await step(closeOldFolderPages); // moveover.js
     await step(initList);
@@ -976,6 +979,7 @@ async function start(delayMs) {
   started = true;
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
+  await step(startSync); // sync.js
 }
 let startRequested = false;
 function requestStart(delayMs) {

@@ -33,6 +33,15 @@
     <h2>Spaces</h2>
     <p class="hint">A space is a Firefox container, with its own logins.</p>
     <div id="spaces"></div>
+    <div id="spaces-here" hidden></div>
+  </section>
+
+  <section id="sync-section" hidden>
+    <h2>The same on every machine</h2>
+    <label class="line"><input type="checkbox" id="sync-on"> Keep essentials, folders, saved tabs, rules and spaces the same on every machine</label>
+    <p class="hint">Through Firefox Sync, which must have Add-ons turned on in its settings. Ordinary tabs and what is open stay on each machine. When you turn this on, what is here and what your other machines have are put together, after a copy is made.</p>
+    <p id="sync-state" hidden></p>
+    <p id="sync-left" hidden></p>
   </section>
 
   <section>
@@ -62,5 +71,6 @@
 
   <p class="hint" id="version"></p>
   <script src="settings.js"></script>
+  <script src="sync.js"></script>
 </body>
 </html>

@@ -24,7 +24,7 @@ async function containerSpaces() {
   return ids.map(c => ({ id: c.cookieStoreId, name: c.name, color: c.colorCode, icon: c.icon, iconUrl: c.iconUrl }));
 }
 async function spaceList(used) {
-  const all = await containerSpaces();
+  const all = (await containerSpaces()).filter(s => !isHiddenSpace(s.id)); // hiddenspaces.js
   if (!tidierAlone) return all.filter(s => used.has(s.id));
   const declared = (await browser.storage.managed.get("spaces").catch(() => ({}))).spaces;
   const { spaceOrder } = await browser.storage.local.get("spaceOrder"); // from Sidebery's export (moveover.js)
@@ -63,7 +63,7 @@ async function showSpace(windowId) {
   const space = activeSpace.get(windowId);
   if (!space) return;
   const tabs = await browser.tabs.query({ windowId, pinned: false }).catch(() => []);
-  const visible = t => t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER;
+  const visible = t => shownInSpace(t, space);
   const show = tabs.filter(t => t.hidden && visible(t)).map(t => t.id);
   const hide = tabs.filter(t => !t.hidden && !visible(t) && !t.active).map(t => t.id);
   if (show.length) await browser.tabs.show(show).catch(() => {});
@@ -114,7 +114,7 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   closedIn.delete(windowId);
   serial(async () => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
+    if (!tab || tab.cookieStoreId === NO_CONTAINER || isHiddenSpace(tab.cookieStoreId)) { viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
       if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
@@ -199,7 +199,9 @@ function ruleMatches(rule, url) {
 async function byRule(tabId, url) {
   const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
-  if (!tab || tab.cookieStoreId === rule.space) return intoSpace(tabId);
+  // A hidden space gets no tabs: the page opens in the space you are in, and you are told why.
+  if (tab && isHiddenSpace(rule.space)) globalThis.say?.(tab.windowId, `Opened here: ${(await containerSpaces()).find(s => s.id === rule.space)?.name ?? "its space"} is hidden on this machine`);
+  if (!tab || tab.cookieStoreId === rule.space || isHiddenSpace(rule.space)) return intoSpace(tabId);
   newTabs.delete(tabId);
   await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
   await browser.tabs.remove(tabId).catch(() => {});
@@ -258,4 +260,6 @@ async function startSpaces() {
     const active = tabs.find(t => t.active);
     if (active && active.cookieStoreId === space) await setSuccessor(active);
   }
+  await leaveHiddenSpaces(); // a window restored on a tab of a space that is hidden now
+  await closeHiddenTabs(); // hiddenspaces.js: restored with the session
 }

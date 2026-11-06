@@ -1464,6 +1464,160 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
+def until(m, script, *args, tries=150):
+    """Run a chrome script returning {ok, ...} until it is ok, and return its last answer: wait for a state, not a time."""
+    return m.js(H + "let got; for (let i = 0; i < args[0]; i++) { got = await (async () => { " + script + " })(); if (got.ok) return got; await wait(200); } return got;", tries, *args)
+
+
+def alone_sync_hide(m):
+    # Through the real storage.sync. In a test Firefox it reaches no server, so another machine is played
+    # by writing what it would write there, which fires onChanged as Firefox Sync does.
+    settings = "/settings/settings.html"
+    sidebar_page(m, """
+      send({type: "newFolder", space: spaces().find(s => s.active).id, name: "Synced folder"});
+      await wait(1000);
+      const key = [...doc.querySelectorAll("#tabs .folder .head")].at(-1).dataset.folderHead;
+      send({type: "moveTab", tabId: Number(plainTabs()[0].dataset.tab), folder: key, before: null});
+      await wait(2000);
+      return key;""")
+    r = ext_page(m, settings, """
+      await wait(800);
+      const tick = doc.getElementById("sync-on");
+      const before = {shown: !doc.getElementById("sync-section").hidden, on: tick.checked, items: Object.keys(await page.browser.storage.sync.get(null)).length};
+      // Firefox's limits, as MDN gives them: the key's length plus the value as JSON.
+      const sync = page.browser.storage.sync, fits = async o => sync.set(page.JSON.parse(JSON.stringify(o))).then(() => true, () => false);
+      const size = (key, n) => ({[key]: "x".repeat(n - key.length - 2)});
+      const limits = {item: await fits(size("limit-a", 8192)), itemOver: await fits(size("limit-b", 8193))};
+      const many = {}; for (let i = 0; i < 12; i++) Object.assign(many, size("limit-m" + i, 8000));
+      await sync.clear();
+      limits.total = await fits(many);
+      limits.totalOver = await fits(size("limit-n", 8000));
+      await sync.clear();
+      const small = {}; for (let i = 0; i < 512; i++) small["limit-" + i] = 1;
+      limits.items = await fits(small);
+      limits.itemsOver = await fits({"limit-one-more": 1});
+      await sync.clear();
+      tick.click();
+      for (let i = 0; i < 100 && !/KB of/.test(doc.getElementById("sync-state").textContent); i++) await wait(100);
+      return {before, limits, state: doc.getElementById("sync-state").textContent, items: JSON.parse(JSON.stringify(await sync.get(null))), bytes: await sync.getBytesInUse(null)};""")
+    check("sync is off by default, on the settings page, with nothing written", r["before"] == {"shown": True, "on": False, "items": 0}, str(r["before"]))
+    check("Firefox's limits are what Tidier counts on: 8192 per item, 102400 in all, 512 items",
+          r["limits"] == {"item": True, "itemOver": False, "total": True, "totalOver": False, "items": True, "itemsOver": False}, str(r["limits"]))
+    text = json.dumps(r["items"])
+    check("turned on, the page says how much is used", "KB of the 100 KB" in r["state"] and r["bytes"] > 0, r["state"])
+    check("essentials, folders and saved tabs go into storage.sync, with no container id and no icon",
+          all(f'["{kind}",' in text for kind in "eft") and "firefox-container" not in text and "favicon" not in text and "data:image" not in text, text[:300])
+    rows = {row[3]: row for row in r["items"].get("1/m.0", []) if row[0] == "s"}
+    check("the spaces go by name", {"Space 1", "Space 2", "Space 3"} <= set(rows), str(sorted(rows)))
+    sid = rows["Space 2"][1]
+    now = int(time.time() * 1000) + 1000
+
+    def from_elsewhere(items):
+        ext_page(m, settings, "await page.browser.storage.sync.set(page.JSON.parse(JSON.stringify(args[0]))); return 1;", items)
+
+    # An essential added on another machine: in every window, unloaded, in the container called that here.
+    from_elsewhere({f"1/{sid}.77": [["e", "smoke-synced", now, "https://example.org/?smoke-synced", "From elsewhere"]]})
+    r = until(m, """const got = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned && ek(w, t) === "smoke-synced").map(t => [t.userContextId, !!t.linkedPanel && !t.selected]));
+      return {ok: got.every(g => g.length === 1) && got.every(g => !g[0][1]), got};""")
+    check("an essential from another machine arrives in every window, in the right container, and unloads", r["ok"] and all(g[0][0] == 2 for g in r["got"]), str(r))
+    r = ext_page(m, settings, """
+      for (let i = 0; i < 100; i++) { const items = await page.browser.storage.sync.get(null); if (!Object.keys(items).some(k => k.endsWith(".77"))) break; await wait(200); }
+      const items = await page.browser.storage.sync.get(null);
+      return {keys: Object.keys(items), has: JSON.stringify(items).includes("smoke-synced")};""")
+    check("it is written back in Tidier's own items, and the other machine's is taken over", r["has"] and not any(k.endswith(".77") for k in r["keys"]), str(r))
+
+    # A folder and a saved tab from another machine.
+    from_elsewhere({f"1/{sid}.76": [["f", "smoke-folder", now, "Folder from elsewhere"], ["t", "smoke-saved", now, "https://example.org/?smoke-saved", "Saved elsewhere", "smoke-folder"]]})
+    r = until(m, """const got = wins().map(w => w.gBrowser.tabs.filter(t => key(w, t) === '"smoke-saved"').map(t => [t.userContextId, role(w, t), !!t.linkedPanel && !t.selected]));
+      return {ok: got.every(g => g.length === 1) && got.every(g => !g[0][2]), got};""")
+    check("a folder's saved tab from another machine arrives in every window, in the right container, and unloads", r["ok"] and all(g[0][0] == 2 for g in r["got"]), str(r))
+    from_elsewhere({f"1/{sid}.76": [["F", "smoke-folder", now + 1000, None, "Folder from elsewhere"], ["T", "smoke-saved", now + 1000]]})
+    r = until(m, """const all = (await storage(args[1], ["syncedTabs"])).syncedTabs;
+      const got = wins().map(w => w.gBrowser.tabs.filter(t => key(w, t) === '"smoke-saved"').length);
+      return {ok: got.every(g => g === 0) && !all["smoke-folder"] && !all["smoke-saved"], got};""", EXT_ID)
+    check("deleted on another machine, they go", r["ok"], str(r))
+
+    # Renamed elsewhere: the same container, and what is in it stays.
+    from_elsewhere({f"1/{sid}.78": [["s", sid, now + 2000, "Renamed elsewhere", rows["Space 2"][4], rows["Space 2"][5]]]})
+    r = ext_page(m, settings, """
+      let name; for (let i = 0; i < 100; i++) { name = (await page.browser.contextualIdentities.query({})).find(c => c.cookieStoreId === "firefox-container-2")?.name; if (name === "Renamed elsewhere") break; await wait(200); }
+      return name;""")
+    check("a space renamed on another machine is renamed here", r == "Renamed elsewhere", str(r))
+    from_elsewhere({f"1/{sid}.78": [["s", sid, now + 4000, "Space 2", rows["Space 2"][4], rows["Space 2"][5]]]})
+    r = ext_page(m, settings, """
+      let name; for (let i = 0; i < 100; i++) { name = (await page.browser.contextualIdentities.query({})).find(c => c.cookieStoreId === "firefox-container-2")?.name; if (name === "Space 2") break; await wait(200); }
+      return name;""")
+    # Deleted elsewhere: the copies go, and only the copies.
+    pinned_before = m.js(H + 'return wins().map(w => w.gBrowser.tabs.filter(t => t.pinned && ek(w, t) !== "smoke-synced").length);')
+    from_elsewhere({f"1/{sid}.79": [["E", "smoke-synced", now + 6000]]})
+    r = until(m, """const got = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => ek(w, t)));
+      return {ok: got.every(g => !g.includes("smoke-synced")), got: got.map(g => g.length)};""")
+    check("an essential deleted on another machine goes from every window, and nothing else does", r["ok"] and r["got"] == pinned_before, f"{r}, {pinned_before}")
+
+    # Hiding: the space you are in, from the settings page.
+    before = m.js(SNAP_ALONE)
+    space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
+    name = f"Space {space}"
+    stored_before = m.js(H + """const s = await storage("%s", ["essentials", "syncedTabs"]);
+      return {essentials: s.essentials.filter(e => e.cookieStoreId === args[0]).map(e => e.key).sort(), saved: Object.keys(s.syncedTabs).filter(k => s.syncedTabs[k].cookieStoreId === args[0]).sort()};""" % EXT_ID, f"firefox-container-{space}")
+    click_tick = """const line = [...doc.querySelectorAll("#spaces-here label")].find(l => l.textContent.includes(args[0]));
+      line.querySelector("input").click(); await wait(300);"""
+    ext_page(m, settings, click_tick + "return 1;", name)
+    r = until(m, """const n = args[1];
+      const tabs = wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n && !url(t).includes("/settings/")).map(t => t.label));
+      const selected = wins().map(w => w.gBrowser.selectedTab.userContextId);
+      return {ok: !tabs.length && !selected.includes(n), tabs, selected};""", space)
+    check("a hidden space has no tab in any window, and every window has left it", r["ok"], str(r))
+    r = sidebar_page(m, "await wait(500); return {spaces: spaces(), name: doc.getElementById('space-name').textContent};")
+    check("a hidden space has no dot on the bar", f"firefox-container-{space}" not in [s["id"] for s in r["spaces"]] and len(r["spaces"]) >= 2 and sum(s["active"] for s in r["spaces"]) == 1, str(r))
+    stored = m.js(H + """const s = await storage("%s", ["essentials", "syncedTabs", "hiddenSpaces"]);
+      return {essentials: s.essentials.filter(e => e.cookieStoreId === args[0]).map(e => e.key).sort(), saved: Object.keys(s.syncedTabs).filter(k => s.syncedTabs[k].cookieStoreId === args[0]).sort(), hidden: s.hiddenSpaces};""" % EXT_ID, f"firefox-container-{space}")
+    check("hiding deletes nothing: its essentials and tabs stay in the record", stored["essentials"] == stored_before["essentials"] and stored["saved"] == stored_before["saved"], f"{stored}, {stored_before}")
+    # ⌃1, ⌃2 and ⌃3 skip it.
+    seen = []
+    for digit in ("1", "2", "3"):
+        press(m, digit, CTRL)
+        time.sleep(1)
+        seen.append(m.js(H + "return main().gBrowser.selectedTab.userContextId;"))
+    check("⌃1, ⌃2 and ⌃3 skip a hidden space", space not in seen, str(seen))
+    # A rule pointing at it: the tab opens in the space you are in. (A link from another app: no container.)
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "smoke-hidden-rule", "space": f"firefox-container-{space}"}]})
+    r = m.js(H + """const w = main(); w.focus(); await wait(300);
+      const active = w.gBrowser.selectedTab.userContextId;
+      w.gBrowser.addTrustedTab("https://example.org/?smoke-hidden-rule", {inBackground: false}); await wait(4000);
+      const got = wins().flatMap(x => x.gBrowser.tabs.filter(y => url(y).includes("smoke-hidden-rule") || y.label.includes("smoke-hidden-rule")).map(y => y.userContextId));
+      await removeWhere((x, y) => url(y).includes("smoke-hidden-rule"));
+      return {active, got};""")
+    check("a rule pointing at a hidden space opens the tab in the space you are in", r["got"] and space not in r["got"] and r["active"] in r["got"], str(r))
+    extension_message(m, {"type": "settings:rules", "rules": []})
+    # And back.
+    ext_page(m, settings, click_tick + "return 1;", name)
+    r = until(m, """const n = args[1], want = args[2];
+      const got = wins().map(w => w.gBrowser.tabs.filter(t => t.userContextId === n && t.pinned).length);
+      return {ok: got.every(x => x === want), got};""", space, len(stored_before["essentials"]))
+    check("shown again, its essentials are back in every window", r["ok"], str(r))
+    def tabs_of(snap):
+        return [(sorted(w["essentials"]), sorted(w["tabs"])) for w in snap["windows"]]
+    r = until(m, """const all = (await storage(args[1], ["syncedTabs"])).syncedTabs, n = args[2];
+      const keys = Object.keys(all).filter(k => all[k].cookieStoreId === "firefox-container-" + n && !all[k].group);
+      const got = wins().map(w => keys.filter(k => w.gBrowser.tabs.some(t => key(w, t) === JSON.stringify(k))).length);
+      return {ok: got.every(x => x === keys.length), got, want: keys.length};""", EXT_ID, space)
+    check("shown again, its tabs are back in every window", r["ok"] and r["want"] > 0, str(r))
+    # With sync on and nothing happening: nothing at all, and nothing written.
+    ext_page(m, settings, """await wait(7000); page.__smokeWrites = 0; page.browser.storage.onChanged.addListener(() => { page.__smokeWrites++; }); return 1;""")
+    idle = extension_message(m, {"type": "idle", "ms": 12000})
+    writes = ext_page(m, settings, "return page.__smokeWrites;")
+    if idle["alarms"]:
+        print(f"SKIP  idle check with sync on: a timed check ran meanwhile ({idle})", flush=True)
+    else:
+        check("with sync on and nothing happening, Tidier does nothing and writes nothing", idle["jobs"] == 0 and idle["views"] == 0 and idle["lookups"] == 0 and writes == 0, f"{idle}, {writes}")
+    # As found, for the groups after this one.
+    r = ext_page(m, settings, """doc.getElementById("sync-on").click(); await wait(800); await page.browser.storage.sync.clear();
+      return doc.getElementById("sync-on").checked;""")
+    check("sync can be turned off again", r is False, str(r))
+    m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/settings/settings.html") || url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t); await wait(500); return 1;""")
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -1632,7 +1786,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_sync_hide, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

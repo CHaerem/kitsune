@@ -55,6 +55,9 @@
       "ownfolders.js",
       "copies.js",
       "moveover.js",
+      "hiddenspaces.js",
+      "syncmerge.js",
+      "sync.js",
       "sidebar-view.js",
       "archive.js",
       "shortcuts.js"

@@ -165,6 +165,7 @@ async function refreshAllLiveFolders() {
   const folders = await liveFolders();
   if (folders.length) setNotice("live", null);
   for (const f of folders) {
+    if (isHiddenSpace(f.cookieStoreId)) continue; // a hidden space gets no tabs; the search is done again when it shows
     const res = await searchLiveFolder(f);
     await serial(() => refreshLiveFolder(f, res)).catch(() => {}); // logged by serial()
   }

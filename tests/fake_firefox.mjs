@@ -23,6 +23,7 @@ export class FakeFirefox {
     this.wins = new Map(); this.tabs = new Map(); this.values = new Map(); this.store = {};
     this.nextTab = 100; this.nextWin = 1; this.ext = null;
     this.hooks = {}; this.log = [];
+    this.syncArea = {}; this.syncMirror = {};
   }
   addWindow({ focused = false, type = "normal" } = {}) {
     const id = this.nextWin++;
@@ -93,8 +94,9 @@ export class FakeFirefox {
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
         const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
         ff.log.push(["create", t.id, p.windowId, p.url]);
-        const s = ff.snap(t); b.tabs.onCreated.fire(s);
-        return s;
+        b.tabs.onCreated.fire(ff.snap(t));
+        if (p.active === undefined) ff.select(t.id); // Firefox selects a new tab unless told not to
+        return ff.snap(t);
       },
       update: async (id, p) => {
         const t = need(id);
@@ -124,7 +126,7 @@ export class FakeFirefox {
       remove: async ids => { ids = Array.isArray(ids) ? ids : [ids]; ids.forEach(need); for (const id of ids) { ff.log.push(["remove", id, ff.tabs.get(id).url]); ff.rm(id); } },
       show: async ids => { ff.log.push(["show", ids]); for (const id of [ids].flat()) need(id).hidden = false; },
       hide: async ids => { ff.log.push(["hide", ids]); for (const id of [ids].flat()) { const t = need(id); if (!t.pinned && !t.active) t.hidden = true; } },
-      discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id)) t.discarded = true; },
+      discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id) && !t.active) t.discarded = true; }, // Firefox keeps the selected tab
     };
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),
@@ -141,14 +143,45 @@ export class FakeFirefox {
       getRecentlyClosed: async () => ff.recentlyClosed || [],
       forgetClosedTab: async (windowId, sessionId) => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.tab?.sessionId !== sessionId); },
     };
-    b.storage = { managed: { get: async () => ff.managed || {} }, local: {
+    const changesOf = (old, o) => Object.fromEntries(Object.keys(o).map(k => [k, { oldValue: old[k], newValue: o[k] }]));
+    b.storage = { onChanged: ev(), managed: { get: async () => ff.managed || {} }, local: {
       get: async k => { const ks = typeof k === "string" ? [k] : k; const o = {}; for (const x of ks) if (x in ff.store) o[x] = JSON.parse(JSON.stringify(ff.store[x])); return o; },
-      set: async o => { ff.storeWrites = (ff.storeWrites || 0) + 1; Object.assign(ff.store, JSON.parse(JSON.stringify(o))); },
+      set: async o => { ff.storeWrites = (ff.storeWrites || 0) + 1; const copy = JSON.parse(JSON.stringify(o)), changes = changesOf(ff.store, copy); Object.assign(ff.store, copy); b.storage.onChanged.fire(changes, "local"); },
+      remove: async k => { for (const x of [k].flat()) delete ff.store[x]; },
+    }, sync: {
+      // With Firefox's limits, which refuse the whole write (MDN).
+      get: async k => { if (ff.syncRefused) throw new Error(ff.syncRefused); const all = JSON.parse(JSON.stringify(ff.syncArea)); return k === null ? all : Object.fromEntries(Object.entries(all).filter(([x]) => [k].flat().includes(x))); },
+      set: async o => {
+        if (ff.syncRefused) throw new Error(ff.syncRefused);
+        const next = { ...ff.syncArea, ...JSON.parse(JSON.stringify(o)) };
+        for (const [k, v] of Object.entries(o)) if (k.length + JSON.stringify(v).length > 8192) throw new Error(`QuotaExceededError: storage.sync API call exceeded its quota limitations: ${k}`);
+        if (Object.keys(next).length > 512 || JSON.stringify(next).length > 102400) throw new Error("QuotaExceededError: storage.sync API call exceeded its quota limitations");
+        const changes = changesOf(ff.syncArea, JSON.parse(JSON.stringify(o)));
+        ff.syncArea = next; ff.syncWrites = (ff.syncWrites || 0) + 1;
+        b.storage.onChanged.fire(changes, "sync");
+      },
+      remove: async k => { const keys = [k].flat(), changes = {}; for (const x of keys) { if (x in ff.syncArea) changes[x] = { oldValue: ff.syncArea[x] }; delete ff.syncArea[x]; } ff.syncWrites = (ff.syncWrites || 0) + 1; b.storage.onChanged.fire(changes, "sync"); },
+      getBytesInUse: async () => Object.entries(ff.syncArea).reduce((n, [k, v]) => n + k.length + JSON.stringify(v).length, 0),
     } };
     b.alarms = { create() {}, onAlarm: ev() };
     b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
       sendNativeMessage: () => reject("no host") };
-    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(c => ({ cookieStoreId: c, name: c, colorCode: "#000", icon: "circle" })), onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
+    const identity = c => ({ cookieStoreId: c, name: c, colorCode: "#000", color: "blue", icon: "circle", ...ff.identities?.[c] }); // ff.identities: names and looks other than the id
+    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(identity), onCreated: ev(), onUpdated: ev(), onRemoved: ev(),
+      create: async ({ name, color, icon }) => {
+        if (ff.badColors?.includes(color)) throw new Error(`Invalid color name ${color}`);
+        const id = `firefox-container-${1 + Math.max(0, ...[...ff.containers].map(c => Number(c.split("-").pop()) || 0))}`;
+        ff.containers.add(id);
+        (ff.identities ||= {})[id] = { name, color, icon };
+        b.contextualIdentities.onCreated.fire({ contextualIdentity: identity(id) });
+        return identity(id);
+      } };
+    b.contextualIdentities.update = async (id, changes) => {
+      if (!ff.containers.has(id)) throw new Error(`Invalid contextual identity: ${id}`);
+      (ff.identities ||= {})[id] = { ...identity(id), ...changes };
+      b.contextualIdentities.onUpdated.fire({ contextualIdentity: identity(id) });
+      return identity(id);
+    };
     b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
     b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
@@ -172,5 +205,22 @@ export class FakeFirefox {
     this.ext = ext;
     return ext;
   }
+}
+// Firefox Sync for one machine, as MDN describes it for each key: a value on the server
+// that differs from the last sync is written here, even over a change made here; then a
+// value here that differs from the server's goes to the server.
+export function firefoxSyncNow(ff, server) {
+  const json = x => JSON.stringify(x);
+  const changes = {};
+  for (const k of new Set([...Object.keys(server), ...Object.keys(ff.syncMirror)])) {
+    if (json(server[k]) === json(ff.syncMirror[k]) || json(server[k]) === json(ff.syncArea[k])) continue;
+    changes[k] = { oldValue: ff.syncArea[k], newValue: server[k] };
+    if (server[k] === undefined) delete ff.syncArea[k]; else ff.syncArea[k] = JSON.parse(json(server[k]));
+  }
+  for (const k of new Set([...Object.keys(server), ...Object.keys(ff.syncArea)])) {
+    if (ff.syncArea[k] === undefined) delete server[k]; else server[k] = JSON.parse(json(ff.syncArea[k]));
+  }
+  ff.syncMirror = JSON.parse(json(server));
+  if (Object.keys(changes).length) ff.ext?.b.storage.onChanged.fire(changes, "sync");
 }
 export const GHOST = (k, key) => `moz-extension://tidier/ghost.html?kind=${k}&key=${encodeURIComponent(key)}`;
