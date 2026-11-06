@@ -599,3 +599,40 @@ test("a copy taken in while Tidier is still starting is refused: without the tab
   assert.equal(ff.store.essentials, undefined);
   x.kill();
 });
+
+test("with Sidebery, a folder from a copy gets its page in every window, in the space with its name, at this machine's Sidebery address", async () => {
+  const ff = machine({ alone: false, windows: false });
+  const w1 = ff.addWindow({ focused: true }), w2 = ff.addWindow();
+  const here = "moz-extension://this-machine/sidebery/group.html";
+  ff.store.syncedTabs = { H: { group: true, url: `${here}#Here`, title: "Here", cookieStoreId: C1, parentKey: null, added: 1 } };
+  ff.addTab(w1.id, { url: "about:home", active: true });
+  for (const w of [w1, w2]) ff.addTab(w.id, { url: `${here}#Here`, title: "Here", cookieStoreId: C1 }, { syncKey: "H", syncRole: "copy" });
+  const x = await run(ff);
+  const copy = swappedCopy();
+  copy.data.essentials = [];
+  copy.data.syncedTabs = { F: { group: true, url: `${GROUP}Clients~!abcdefghijkl!ch!~`, cookieStoreId: C1, parentKey: null, added: 1 } };
+  const r = plain(await x.js("mergeCopy")(copy));
+  assert.equal(r.folders, 1);
+  await wait(500);
+  for (const w of [w1, w2]) {
+    const page = ff.list(w.id).filter(t => t.url === `${here}#Clients`);
+    assert.equal(page.length, 1, `one page in window ${w.id}`);
+    assert.equal(page[0].cookieStoreId, C2, "Work is container 2 here");
+  }
+  assert.equal(ff.synced.F.cookieStoreId, C2);
+  assert.equal(ff.synced.F.own, undefined);
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+test("with Sidebery but no folder of it open here, a folder that never had a Sidebery address stays out, and the rest comes", async () => {
+  const ff = machine({ alone: false });
+  const x = await run(ff);
+  const copy = swappedCopy();
+  const r = plain(await x.js("mergeCopy")(copy));
+  assert.equal(r.folders, 1, "only the one with an address");
+  assert.equal(ff.synced?.F, undefined, "Projects was made since a move");
+  assert.equal(r.essentials, 3);
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});

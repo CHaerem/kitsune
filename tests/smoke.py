@@ -1710,6 +1710,13 @@ def alone_copy_and_import(m):
     check("a space not here is made, with its colour and icon, and its essential is in it", after["made"] == [["purple", "gift"]] and all(x == ["Brought along"] for x in after["fresh"]), str(after))
     check("a folder and its saved tab land under the right space's name", after["folderIn"] == "Space 1" and after["saved"] and after["saved"]["cookieStoreId"] == after["folder"]["cookieStoreId"] and after["folder"]["own"], str(after))
     check("rules come, in the right space, and the order of spaces where there was none", ["copy-rule.example.org", "Space 2"] in after["rules"] and after["order"][:3] == ["Brought along", "Space 1", "Space 2"], str(after))
+    # A long space name must not push a rule's address out of its line (a select is as wide as its longest name).
+    r = ext_page(m, "/settings/settings.html", """const select = doc.querySelector("#rules select"), line = select.parentElement;
+      select.append(Object.assign(doc.createElement("option"), {textContent: "A space with a name long enough to fill the whole line it is shown on, and then a good deal more than that"}));
+      const box = {text: line.querySelector("input").getBoundingClientRect().width, line: line.getBoundingClientRect().width, overflows: line.scrollWidth > line.clientWidth};
+      select.lastChild.remove();
+      return box;""")
+    check("a long space name leaves a rule's address its room", r["text"] > r["line"] / 2 and not r["overflows"], str(r))
     # The same copy again has nothing for you to choose.
     choose_file(m, "copy-file", copy)
     r = ext_page(m, "/settings/settings.html", """return {line: doc.getElementById("merge-result").textContent, offered: !doc.getElementById("merge").hidden};""")
