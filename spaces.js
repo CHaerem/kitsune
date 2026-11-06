@@ -23,10 +23,17 @@ async function containerSpaces() {
   const ids = await browser.contextualIdentities.query({}).catch(() => []);
   return ids.map(c => ({ id: c.cookieStoreId, name: c.name, color: c.colorCode, icon: c.icon, iconUrl: c.iconUrl }));
 }
+// Managed storage is a file Firefox reads again at every question; like tidierAlone it
+// is read once while Tidier runs, and a change to it counts from the next start.
+let declaredRead = null;
+function declaredSpaces() {
+  declaredRead ??= browser.storage.managed.get("spaces").then(stored => stored.spaces, () => undefined);
+  return declaredRead;
+}
 async function spaceList(used) {
   const all = await containerSpaces();
   if (!tidierAlone) return all.filter(s => used.has(s.id));
-  const declared = (await browser.storage.managed.get("spaces").catch(() => ({}))).spaces;
+  const declared = await declaredSpaces();
   const { spaceOrder } = await browser.storage.local.get("spaceOrder"); // from Sidebery's export (moveover.js)
   const first = Array.isArray(declared) ? declared : spaceOrder ?? (await getList()).map(e => e.cookieStoreId);
   const rank = new Map([...new Set(first)].map((id, i) => [id, i]));
@@ -34,11 +41,12 @@ async function spaceList(used) {
   return all.filter(listed).sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
 }
 
-// The window's active space: the one it has, else the selected tab's.
+// The window's active space: the one it has, else the selected tab's (`tabs`: the
+// window's, if you have them).
 async function spaceOf(windowId, tabs, spaces) {
   let space = activeSpace.get(windowId) ?? await browser.sessions.getWindowValue(windowId, SPACE_KEY).catch(() => undefined);
   if (!spaces.some(s => s.id === space)) {
-    const selected = tabs.find(t => t.active);
+    const selected = tabs ? tabs.find(t => t.active) : (await browser.tabs.query({ windowId, active: true }).catch(() => []))[0];
     space = spaces.some(s => s.id === selected?.cookieStoreId) ? selected.cookieStoreId : spaces[0]?.id;
   }
   activeSpace.set(windowId, space);
@@ -62,7 +70,12 @@ async function showSpace(windowId) {
   if (!tidierAlone) return;
   const space = activeSpace.get(windowId);
   if (!space) return;
-  const tabs = await browser.tabs.query({ windowId, pinned: false }).catch(() => []);
+  // Only tabs that may have to change, as this runs for every burst of new tabs: this
+  // space's hidden ones (usually none), and those shown (not the other spaces' hidden ones).
+  const tabs = (await Promise.all([
+    browser.tabs.query({ windowId, pinned: false, hidden: true, cookieStoreId: [space, NO_CONTAINER] }),
+    browser.tabs.query({ windowId, pinned: false, hidden: false }),
+  ]).catch(() => [])).flat();
   const visible = t => t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER;
   const show = tabs.filter(t => t.hidden && visible(t)).map(t => t.id);
   const hide = tabs.filter(t => !t.hidden && !visible(t) && !t.active).map(t => t.id);

@@ -84,14 +84,17 @@ export class FakeFirefox {
       TAB_ID_NONE: -1,
       onCreated: ev(), onUpdated: ev(), onRemoved: ev(), onMoved: ev(), onActivated: ev(), onAttached: ev(), onDetached: ev(),
       query: async (q = {}) => { if (ff.hooks.query) await ff.hooks.query(q); let out = [...ff.wins.values()].flatMap(w => ff.list(w.id));
-        for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId"]) if (q[k] !== undefined) out = out.filter(t => t[k] === q[k]);
+        for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId"]) if (q[k] !== undefined) out = out.filter(t => [q[k]].flat().includes(t[k]));
         if (q.currentWindow) out = out.filter(t => t.windowId === ff.focused);
         return out; },
       get: async id => ff.snap(need(id)),
       create: async p => {
         if (!ff.wins.has(p.windowId)) throw new Error(`Invalid window ID: ${p.windowId}`);
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
-        const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
+        if (p.discarded && p.pinned) throw new Error("Pinned tabs cannot be created and discarded.");
+        if (p.discarded && p.active) throw new Error("Active tabs cannot be created and discarded.");
+        if (p.title && !p.discarded) throw new Error("Title may only be set for discarded tabs.");
+        const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, discarded: !!p.discarded, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.title ?? p.url });
         ff.log.push(["create", t.id, p.windowId, p.url]);
         const s = ff.snap(t); b.tabs.onCreated.fire(s);
         return s;
@@ -144,6 +147,7 @@ export class FakeFirefox {
     b.storage = { managed: { get: async () => ff.managed || {} }, local: {
       get: async k => { const ks = typeof k === "string" ? [k] : k; const o = {}; for (const x of ks) if (x in ff.store) o[x] = JSON.parse(JSON.stringify(ff.store[x])); return o; },
       set: async o => { ff.storeWrites = (ff.storeWrites || 0) + 1; Object.assign(ff.store, JSON.parse(JSON.stringify(o))); },
+      remove: async k => { for (const x of [k].flat()) delete ff.store[x]; },
     } };
     b.alarms = { create() {}, onAlarm: ev() };
     b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
@@ -156,7 +160,9 @@ export class FakeFirefox {
     b.sidebarAction = { toggle: async () => {} };
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };
-    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {} });
+    // performance runs as much faster as the timers, so that waits worked out from it agree with them.
+    const clock = { now: () => performance.now() * SCALE };
+    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance: clock, navigator: {} });
     const files = JSON.parse(readFileSync(new URL("manifest.json", REPO), "utf8")).background.scripts;
     for (const f of files) {
       const src = readFileSync(new URL(f, REPO), "utf8");

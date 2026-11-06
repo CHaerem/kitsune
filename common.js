@@ -81,9 +81,11 @@ const sameSite = (a, b) => {
 // Sidebery folders are "group" pages served by Sidebery itself.
 const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/.test(url || "");
 
-// Placeholder page for ghosts and essential copies (see ghost.js).
-const ghostUrl = (kind, key) => browser.runtime.getURL(`ghost.html?kind=${kind}&key=${encodeURIComponent(key)}`);
-const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.html"));
+// Placeholder page for ghosts and essential copies (see ghost.js). Asked for once:
+// it never changes while Tidier runs, and this is looked at for every tab in a view.
+const GHOST_PAGE = browser.runtime.getURL("ghost.html");
+const ghostUrl = (kind, key) => `${GHOST_PAGE}?kind=${kind}&key=${encodeURIComponent(key)}`;
+const isGhostUrl = url => (url || "").startsWith(GHOST_PAGE);
 
 // Placeholders we close ourselves would show up in Recently Closed Tabs, and
 // ⌘⇧T would bring one back instead of the tab you closed. Only real pages
@@ -91,17 +93,30 @@ const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.h
 // a moment after it is closed (Firefox saves its state first), so each is
 // looked for again whenever that list changes, for FORGET_MS. (An essential
 // copy's address may end in "&placed=N", see essentials.js.)
+//
+// Closing many tabs changes that list once per tab, and each look reads all of it.
+// One look runs at a time, and one more follows if the list changed meanwhile, so
+// everyone waiting sees a look that began after their tab was closed.
 const FORGET_MS = 10000;
 const toForget = new Map(); // placeholder URL -> until when to look for it
+let forgetTimer = null, forgetting = null, forgetAgain = false;
 async function forgetClosedPlaceholders(kind, keys) {
   for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
-  setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
+  clearTimeout(forgetTimer);
+  forgetTimer = setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
   await forgetClosedNow();
 }
-async function forgetClosedNow() {
+function forgetClosedNow() {
+  if (forgetting) { forgetAgain = true; return forgetting; }
+  forgetting = (async () => {
+    do { forgetAgain = false; await lookForClosedPlaceholders(); } while (forgetAgain);
+  })().finally(() => { forgetting = null; });
+  return forgetting;
+}
+async function lookForClosedPlaceholders() {
   for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
   if (!toForget.size) return;
-  const ours = url => [...toForget.keys()].some(p => url === p || url?.startsWith(p + "&"));
+  const ours = url => toForget.has(url) || toForget.has(url?.split("&placed=")[0]);
   const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
   for (const t of closed.map(item => item.tab).filter(Boolean)) {
     if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
@@ -325,8 +340,10 @@ function treeParent(tab, byId) {
   staleOpener.delete(tab.id);
   return p;
 }
-// Seen at once when a tab moves, before folders first moves its old parent up.
+// Seen at once when a tab moves, before folders first moves its old parent up. (With
+// Tidier alone there is no such tree, and this would ask for every tab at every move.)
 browser.tabs.onMoved.addListener(async (tabId, { windowId }) => {
+  if (tidierAlone) return;
   const tabs = await browser.tabs.query({ windowId }).catch(() => []);
   const byId = new Map(tabs.map(t => [t.id, t])), tab = byId.get(tabId);
   if (tab) treeParent(tab, byId);

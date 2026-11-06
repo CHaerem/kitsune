@@ -77,13 +77,14 @@ async function createLiveItem(folder, groupKey, item) {
   };
   all[key] = entry;
   saveSynced(all);
-  const tabs = await browser.tabs.query({});
+  const tabs = tidierAlone ? [] : await browser.tabs.query({}); // a folder of Tidier's own has no tab to look for
   const home = await homeWindowId();
   for (const w of await normalWindows()) {
     const parentId = repMap(tabs.filter(t => t.windowId === w.id)).get(groupKey);
     if (w.id !== home) { await createRep(w.id, key, entry, parentId); continue; }
     const props = { windowId: w.id, url: ghostUrl("lazy", key), cookieStoreId: entry.cookieStoreId, active: false };
     if (parentId !== undefined) props.openerTabId = parentId;
+    if (placeholderWithoutPage(entry)) Object.assign(props, { discarded: true, title: entry.title });
     const tab = await browser.tabs.create(props);
     syncBusy.add(tab.id);
     await setRole(tab.id, key, "live");
@@ -134,7 +135,7 @@ async function renameLiveItem(key, item) {
   const all = await getSynced();
   const entry = all[key], title = liveTitle(item);
   if (!entry || entry.title === title) return;
-  const reps = repsOf(key, await browser.tabs.query({}));
+  const reps = await repsNow(key);
   if (!reps.length || !reps.every(t => isGhostUrl(t.url))) return;
   entry.title = title;
   saveSynced(all);

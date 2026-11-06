@@ -1680,8 +1680,6 @@ def alone_many(m):
         spread = m.js(MANY_COUNT)
         if len(spread) >= 2 and all(c == n for c in spread):
             break
-        if os.environ.get("TIDIER_MANY_DEBUG"):
-            print("DEBUG", round(time.time() - t0), spread, flush=True)
         time.sleep(1)
     numbers["burstS"] = round(time.time() - t0, 1)
     check(f"{n} tabs opened at once are in both windows ({numbers['burstS']} s)", len(spread) >= 2 and all(c == n for c in spread), str(spread))
@@ -1690,7 +1688,11 @@ def alone_many(m):
     numbers["burst"] = {**burst, "longestJobMs": round(r["stats"]["longestJobMs"]), "longestViewMs": round(r["stats"]["longestViewMs"])}
     numbers["memory1"] = m.js(PROC_INFO)["mb"]
     check("the sidebar shows them", r["rows"] >= n // 3, str(r))
-    check("a burst of tabs does not build a view per tab", burst["views"] < n * 2, str(burst))
+    check(f"a burst of tabs does not build a view per tab ({burst['views']})", burst["views"] < n, str(burst))
+    check(f"and the queue is not held for long ({burst['queueMs']} ms for {n} tabs)", burst["queueMs"] < n * 60, str(burst))
+    # Placeholders load no page, which is what would take the memory.
+    loaded = m.js(H + """return wins().flatMap(w => w.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html"))).length;""")
+    check("no placeholder is loaded", loaded == 0, str(loaded))
 
     # From the event to the sidebar showing it, and a view's build, one at a time.
     r = sidebar_page(m, MANY_PAGE + """
@@ -1711,7 +1713,7 @@ def alone_many(m):
       return {shown: Math.round(median(shown)), gone: Math.round(median(gone)), views: after.views - before.views, viewMs: Math.round((after.viewMs - before.viewMs) / Math.max(1, after.views - before.views))};""")
     numbers["newTabShownMs"], numbers["closedGoneMs"], numbers["viewMs"] = r.get("shown"), r.get("gone"), r.get("viewMs")
     check(f"a new tab is in the sidebar soon ({r.get('shown')} ms; gone {r.get('gone')} ms when closed)", (r.get("shown") or 1e9) < 3000 and (r.get("gone") or 1e9) < 3000, str(r))
-    check(f"a view is quick to build ({r.get('viewMs')} ms)", (r.get("viewMs") or 1e9) < 1000, str(r))
+    check(f"a view is quick to build ({r.get('viewMs')} ms)", (r.get("viewMs") or 1e9) < 300, str(r))
 
     # What drawing costs with nothing to change, and how big a view is.
     r = sidebar_page(m, MANY_PAGE + """
@@ -1719,10 +1721,19 @@ def alone_many(m):
       port.onMessage.addListener(v => { last = v; });
       send({type: "hello", windowId});
       for (let i = 0; i < 40 && !last; i++) await wait(100);
-      const text = page.JSON.stringify(last), times = [];
-      for (let i = 0; i < 5; i++) { const view = page.JSON.parse(text), t0 = performance.now(); page.render(view); doc.documentElement.getBoundingClientRect(); times.push(performance.now() - t0); }
-      return {bytes: text.length, rows: last.tabs.length, drawMs: Math.round(median(times) * 10) / 10};""")
+      const text = page.JSON.stringify(last), times = [], first = [];
+      const draw = view => { const t0 = performance.now(); page.render(view); doc.documentElement.getBoundingClientRect(); return performance.now() - t0; };
+      for (let i = 0; i < 5; i++) times.push(draw(page.JSON.parse(text)));
+      // All rows new, as when a sidebar opens or a space is shown for the first time.
+      for (let i = 0; i < 3; i++) {
+        const view = page.JSON.parse(text);
+        for (const tab of view.tabs) tab.id += 1e6 * (i + 1);
+        first.push(draw(view));
+        draw(page.JSON.parse(text));
+      }
+      return {bytes: text.length, rows: last.tabs.length, drawMs: Math.round(median(times) * 10) / 10, firstDrawMs: Math.round(median(first))};""")
     numbers["view"] = r
+    check(f"drawing {r.get('rows')} rows is quick ({r.get('firstDrawMs')} ms all new, {r.get('drawMs')} ms with nothing to change)", (r.get("firstDrawMs") or 1e9) < 2000 and r["drawMs"] < 500, str(r))
 
     # A page whose title ticks: nothing to do for a sidebar showing another space,
     # and at most a view per tick where it is shown.
@@ -1740,6 +1751,8 @@ def alone_many(m):
       }
       return out;""", m.pages)
     numbers["ticking"] = r
+    check("a page ticking in another space builds no view", r["away"]["views"] == 0, str(r))
+    check("a page ticking in this one builds at most a view per tick", r["here"]["views"] <= 25, str(r))
 
     # Selecting a ghost, in the window you are using.
     r = m.js(H + """const x = other(), times = []; x.focus(); await wait(500);
@@ -1788,7 +1801,8 @@ def alone_many(m):
     numbers["newWindow"] = many_diff(before, after)
     numbers["memory2"] = m.js(PROC_INFO)["mb"]
     check(f"a new window gets all {n} tabs soon ({numbers['newWindowS']} s, {numbers['newWindowSettledS']} s until unloaded)",
-          numbers["newWindowS"] is not None and numbers["newWindowS"] < n * 0.2 and settled is not None, str(numbers["newWindow"]))
+          numbers["newWindowS"] is not None and numbers["newWindowS"] < n * 0.07 and settled is not None, str(numbers["newWindow"]))
+    check(f"and takes little memory ({numbers['memory0']} MB before the tabs, {numbers['memory2']} MB after)", numbers["memory2"] - numbers["memory0"] < n * 1.5, str(numbers))
     m.js(H + """await close(wins().find(w => w.__extra)); return 1;""")
 
     # Nothing happening, with this many tabs: nothing done.

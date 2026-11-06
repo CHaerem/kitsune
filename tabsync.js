@@ -37,7 +37,27 @@ const SYNC_KEY = "syncKey";   // sessions value: key of the logical tab
 const SYNC_ROLE = "syncRole"; // sessions value: "live" | "ghost" | "copy"
 const SETTLE_MS = 1500;       // wait for redirects / container reopen before registering
 
-const syncKeyByTab = new Map();  // tabId -> key
+// tabId -> key, and the way back from a key to its tabs: finding a tab's copies must
+// not mean walking every tab (with a thousand tabs that is what most of Tidier's work
+// was). Every change goes through set and delete, so the two directions cannot disagree.
+class TabKeys extends Map {
+  #tabs = new Map(); // key -> Set of tab IDs
+  set(tabId, key) {
+    if (super.has(tabId)) this.delete(tabId);
+    super.set(tabId, key);
+    const ids = this.#tabs.get(key);
+    if (ids) ids.add(tabId); else this.#tabs.set(key, new Set([tabId]));
+    return this;
+  }
+  delete(tabId) {
+    const ids = this.#tabs.get(super.get(tabId));
+    if (ids?.delete(tabId) && !ids.size) this.#tabs.delete(super.get(tabId));
+    return super.delete(tabId);
+  }
+  clear() { this.#tabs.clear(); super.clear(); }
+  tabsOf(key) { return [...(this.#tabs.get(key) ?? [])]; }
+}
+const syncKeyByTab = new TabKeys();  // tabId -> key
 const syncRoleByTab = new Map(); // tabId -> role
 const syncBusy = new Set();      // tab IDs we are changing ourselves
 let pulling = 0;                 // pulls in progress: tabs being moved are not moves you made
@@ -45,7 +65,8 @@ let started = false;             // tab sync waits for startup before reacting
 
 const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
-const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); };
+// `space`: only that space's tabs have changed, so only the sidebars showing it draw.
+const saveSynced = (all, options) => { syncedList.set(all, options); if (options?.space) viewSpaceSoon(options.space); else viewAllSoon(); };
 // Sidebery adds a channel suffix ("~!...!~") to group URLs; strip it when copying.
 // (Ghost placeholder URLs come from ghostUrl() in common.js.)
 const groupBaseUrl = url => url.replace(/~!.*!~$/, "");
@@ -77,6 +98,25 @@ function repsOf(key, tabs) {
   return tabs.filter(t => syncKeyByTab.get(t.id) === key);
 }
 
+// The same for many keys: each key's tabs among `tabs`, in one walk.
+function repsByKey(tabs) {
+  const reps = new Map();
+  for (const t of tabs) {
+    const key = syncKeyByTab.get(t.id);
+    if (key === undefined) continue;
+    if (reps.has(key)) reps.get(key).push(t); else reps.set(key, [t]);
+  }
+  return reps;
+}
+
+// The same for one key, as they are now, by asking Firefox for those tabs only and
+// not for every tab there is. Each tab asked about costs Firefox far less than a list
+// of them all, and a tab closed meanwhile is simply not there.
+async function repsNow(key) {
+  const tabs = await Promise.all(syncKeyByTab.tabsOf(key).map(id => browser.tabs.get(id).catch(() => null)));
+  return tabs.filter(Boolean);
+}
+
 // key -> tab ID of its representation, for the tabs of one window.
 function repMap(tabs) {
   const map = new Map();
@@ -85,8 +125,7 @@ function repMap(tabs) {
 }
 
 function liveTabId(key) {
-  for (const [id, k] of syncKeyByTab) if (k === key && syncRoleByTab.get(id) === "live") return id;
-  return undefined;
+  return syncKeyByTab.tabsOf(key).find(id => syncRoleByTab.get(id) === "live");
 }
 
 // Rebuild the in-memory maps from the sessions values (after startup).
@@ -103,6 +142,14 @@ async function loadRoles() {
   }));
 }
 
+// Loading a placeholder's page only gives the tab a title and an icon (ghost.js), and
+// costs a page in the extension's process, a look for its icon on the network, and a
+// few events for every listener; a new window at 300 tabs took 800 MB doing that. With
+// Tidier alone nothing draws a placeholder's tab but Tidier's own sidebar, which takes
+// both from the record (viewFor), so it is made unloaded, with its title for ⌃Tab.
+// Sidebery draws the tab itself, so it needs the page.
+const placeholderWithoutPage = entry => tidierAlone && !entry.group;
+
 // Create the representation of `key` in a window: a copy for Sidebery group
 // pages, a ghost (placeholder page, see ghost.js) for everything else, nested
 // under its parent.
@@ -110,6 +157,7 @@ async function createRep(windowId, key, entry, parentId, index) {
   const props = { windowId, active: false, cookieStoreId: entry.cookieStoreId };
   if (parentId !== undefined && !tidierAlone) props.openerTabId = parentId;
   if (index !== undefined) props.index = index;
+  if (placeholderWithoutPage(entry)) Object.assign(props, { discarded: true, title: entry.title || entry.url });
   const tab = await browser.tabs.create({ ...props, url: entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key) });
   syncBusy.add(tab.id);
   await setRole(tab.id, key, entry.group ? "copy" : "ghost");
@@ -289,7 +337,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   const lists = {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
-    activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
+    activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers, viewRest, viewsBuilding,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
@@ -323,10 +371,11 @@ async function reconcileAll() {
   // closed: on a Mac, closing the last window and quitting restores no windows,
   // and an update can arrive with none open. The record is then the only copy
   // of the tabs, so it is kept, and windows are filled from it.
-  const sessionHere = Object.keys(all).some(key => repsOf(key, tabs).length);
+  const repsOfKey = repsByKey(tabs); // only this key's tabs change while it is looked at
+  const sessionHere = Object.keys(all).some(key => repsOfKey.has(key));
   for (const key of Object.keys(all)) {
     if (isOwnFolder(all[key])) continue;
-    const reps = repsOf(key, tabs);
+    const reps = repsOfKey.get(key) ?? [];
     if (!reps.length) {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
@@ -377,10 +426,11 @@ async function register(tabId) {
   const parentKey = tab.openerTabId && !tidierAlone ? syncKeyByTab.get(tab.openerTabId) || null : null;
   const entry = { url: tab.url, title: tab.title, icon: tab.favIconUrl, cookieStoreId: tab.cookieStoreId, parentKey, group: isSideberyGroup(tab.url), added: Date.now() };
   all[key] = entry;
-  noteSaved(all);
+  noteSaved(all, [key]); // nothing else has changed, and this is once per new tab
   saveSynced(all);
   await setRole(tab.id, key, entry.group ? "copy" : "live");
-  const tabs = await browser.tabs.query({});
+  // Only a tab with a parent needs to know the other windows' tabs.
+  const tabs = parentKey ? await browser.tabs.query({}) : [];
   for (const w of await normalWindows()) {
     if (w.id === tab.windowId) continue;
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
@@ -396,8 +446,7 @@ async function reopenedSaved(tab, all) {
   const key = await browser.sessions.getTabValue(tab.id, SYNC_KEY).catch(() => undefined);
   const entry = key && all[key];
   if (!entry || entry.group) return false;
-  const tabs = await browser.tabs.query({});
-  const reps = repsOf(key, tabs);
+  const reps = await repsNow(key);
   if (reps.some(t => syncRoleByTab.get(t.id) === "live" && !t.discarded && !isGhostUrl(t.url))) return false; // open already: a copy
   await setRole(tab.id, key, "live");
   for (const t of reps) {
@@ -419,9 +468,10 @@ async function onSyncedClosed(key, role, windowId, place) {
   if (!entry) return;
   const inFolder = storedInFolder(all, key);
   if (inFolder && !tidierAlone) await sleep(FOLDER_CLOSE_SETTLE_MS);
-  const reps = repMap(await browser.tabs.query({ windowId }).catch(() => []));
+  // Asked for only where it can matter: this runs for every tab closed.
+  const folderHere = tidierAlone || !inFolder || repMap(await browser.tabs.query({ windowId }).catch(() => [])).has(folderKeyOf(all, key));
   const action = closeAction({
-    role, inFolder, liveFolder: !!entry.liveFolder, folderHere: tidierAlone || reps.has(folderKeyOf(all, key)),
+    role, inFolder, liveFolder: !!entry.liveFolder, folderHere,
     // Not seen yet (just created): a live tab counts as loaded, so it is kept.
     unloaded: place ? place.unloaded : role !== "live",
   });
@@ -478,7 +528,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   delete all[key];
   lastRefresh.delete(key);
   saveSynced(all);
-  const reps = repsOf(key, await browser.tabs.query({}));
+  const reps = await repsNow(key);
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   if (reps.length) await browser.tabs.remove(reps.map(t => t.id));
   await forgetClosedPlaceholders("ghost", [key]);
@@ -494,7 +544,7 @@ async function forgetClosedGhosts() {
 
 // Forget a synced entry once no window has a tab for it any more.
 async function dropIfUnused(key) {
-  if (repsOf(key, await browser.tabs.query({})).length) return;
+  if ((await repsNow(key)).length) return;
   const all = await getSynced();
   delete all[key];
   saveSynced(all);
@@ -502,7 +552,7 @@ async function dropIfUnused(key) {
 
 // The live tab's window is closing: a ghost in another window takes over.
 async function handOver(key, closingWindowId) {
-  const reps = repsOf(key, await browser.tabs.query({})).filter(t => t.windowId !== closingWindowId);
+  const reps = (await repsNow(key)).filter(t => t.windowId !== closingWindowId);
   if (reps.length) await setRole(reps[0].id, key, "live");
 }
 
@@ -546,8 +596,8 @@ async function pull(ghostId) {
     await setRole(live.id, key, "live");
     const all = await getSynced();
     const entry = all[key];
-    const tabsHere = await browser.tabs.query({ windowId: ghost.windowId });
-    const parentId = entry?.parentKey ? repMap(tabsHere).get(entry.parentKey) : undefined;
+    // (A folder of Tidier's own has no tab to be the parent.)
+    const parentId = entry?.parentKey && !tidierAlone ? repMap(await browser.tabs.query({ windowId: ghost.windowId })).get(entry.parentKey) : undefined;
     await Promise.all([
       browser.tabs.remove(ghostId),
       parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
@@ -690,7 +740,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
     serial(async () => {
       const all = await getSynced(); delete all[key]; saveSynced(all);
       await clearRole(tabId);
-      const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
+      const others = (await repsNow(key)).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
       if (others.length) await browser.tabs.remove(others.map(t => t.id));
       await forgetClosedPlaceholders("ghost", [key]);
@@ -709,7 +759,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       // On its saved address, a saved tab's saved title and icon follow the page.
       if (entry.saved?.url === tab.url) Object.assign(entry.saved, { title: tab.title, icon: tab.favIconUrl || entry.saved.icon });
       noteSaved(all, [key]);
-      saveSynced(all, { lazy: !moved });
+      saveSynced(all, { lazy: !moved, space: entry.cookieStoreId });
       if (changed) refreshGhostsSoon(key);
     });
   }
@@ -729,8 +779,8 @@ function refreshGhostsSoon(key) {
   refreshTimers.set(key, setTimeout(() => serial(async () => {
     refreshTimers.delete(key);
     lastRefresh.set(key, Date.now());
-    for (const t of repsOf(key, await browser.tabs.query({ discarded: true }))) {
-      if (syncRoleByTab.get(t.id) === "ghost") await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
+    for (const t of await repsNow(key)) {
+      if (t.discarded && syncRoleByTab.get(t.id) === "ghost") await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
     }
   }), wait));
 }
@@ -834,19 +884,25 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
 
 // Each window's tabs as last seen, in order, so that a tab you close can be
 // put back where it was: Firefox reports a closed tab by its ID only.
+//
+// One look at a time, and if tabs changed meanwhile, another after a rest in proportion
+// to what this one took: a burst of events in a window of a thousand tabs would otherwise
+// keep Firefox busy describing tabs to no one, the whole time.
+const ORDER_REST = 3;
 const lastOrder = new Map(); // windowId -> [{ id, cookieStoreId, unloaded }]
 const orderQueries = new Map(); // windowId -> whether to look again when the query in progress is done
 function noteOrder(windowId) {
   if (orderQueries.has(windowId)) { orderQueries.set(windowId, true); return; }
   orderQueries.set(windowId, false);
   work.lookups++;
+  const t0 = performance.now();
   browser.tabs.query({ windowId }).then(tabs => {
+    if (!tabs.length) { lastOrder.delete(windowId); return; } // the window is gone
     lastOrder.set(windowId, tabs.sort((a, b) => a.index - b.index)
       .map(t => ({ id: t.id, cookieStoreId: t.cookieStoreId, unloaded: t.discarded || isGhostUrl(t.url) })));
   }, () => lastOrder.delete(windowId)).finally(() => {
-    const again = orderQueries.get(windowId);
-    orderQueries.delete(windowId);
-    if (again) noteOrder(windowId);
+    if (!orderQueries.get(windowId)) { orderQueries.delete(windowId); return; }
+    setTimeout(() => { orderQueries.delete(windowId); noteOrder(windowId); }, ORDER_REST * (performance.now() - t0));
   });
 }
 browser.tabs.onCreated.addListener(tab => noteOrder(tab.windowId));
@@ -971,6 +1027,7 @@ async function start(delayMs) {
     await step(oneLoadedEach); // essentials.js: Firefox may have restored a page in several windows
     await step(forgetClosedGhosts);
     await step(startSpaces); // spaces.js: Firefox shows hidden tabs again at an update
+    await step(pagesAfterMovingBack); // moveover.js
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;

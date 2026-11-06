@@ -75,8 +75,19 @@ async function moveBack() {
   await flushWrites();
   await browser.tabs.show((await browser.tabs.query({ hidden: true })).map(t => t.id)).catch(() => {});
   await resetSpaceKeys(); // Sidebery's again
-  await browser.storage.local.set({ tidierAlone: false });
+  await browser.storage.local.set({ tidierAlone: false, placeholdersNeedPages: true });
   browser.runtime.reload();
+}
+
+// Placeholders made with Tidier alone have no page (placeholderWithoutPage), but Sidebery
+// draws the tab itself. Once, after moving back and with Tidier started again, those
+// without an icon load their page, which sets title and icon and unloads itself.
+async function pagesAfterMovingBack() {
+  if (tidierAlone || !(await browser.storage.local.get("placeholdersNeedPages")).placeholdersNeedPages) return;
+  for (const t of await browser.tabs.query({ discarded: true })) {
+    if (isGhostUrl(t.url) && !t.favIconUrl) await browser.tabs.update(t.id, { url: t.url }).catch(() => {});
+  }
+  await browser.storage.local.remove("placeholdersNeedPages");
 }
 
 // The rules and order of spaces from Sidebery's export: the only place they can be read.

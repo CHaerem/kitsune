@@ -11,32 +11,49 @@
 // alone (ownfolders.js), else Sidebery's folder pages, read from tab sync's record.
 
 const sidebarPorts = new Map(); // windowId -> Set of ports (a window has one sidebar; a reload may briefly add a second)
-const viewTimers = new Map(); // windowId -> timer for the next view
-const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
+const viewTimers = new Map(); // windowId -> { timer, first }: the next view, and when it was first asked for
+const viewsBuilding = new Map(); // windowId -> whether something changed while its view is being built
+const viewRest = new Map(); // windowId -> not before when its next view is built
+const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view...
+const VIEW_LONGEST_WAIT_MS = 250; // ... and a long burst still shows, every so often
+const VIEW_REST = 3; // times what the last view took, so that views never take most of the time, however many tabs
 
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
 // page's (see ghost.js); an essential shows its short name if it has one.
-const tabItem = (t, title) => ({
-  id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
+const tabItem = (t, title, icon) => ({
+  id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || icon || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
 });
+
+// The icon in the record, for a placeholder that has none of its own (createRep,
+// tabsync.js). One from Firefox's own icon cache (page-icon:) cannot be shown in an
+// extension's page, so then the site's, which is what ghost.js would look for.
+function recordIcon(entry) {
+  if (!entry) return null;
+  if (/^(https?:|data:|moz-extension:)/.test(entry.icon || "")) return entry.icon;
+  return isWeb(entry.url) ? new URL("/favicon.ico", entry.url).href : null;
+}
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
 
 async function viewFor(windowId) {
-  const tabs = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
   const list = await getList();
+  // Firefox builds a full description of every tab it is asked for, so a view asks only
+  // for the space it shows, unless the bar itself depends on the other tabs (spaceList).
+  const whole = !tidierAlone || Array.isArray(await declaredSpaces()) ? await browser.tabs.query({ windowId }) : null;
   // Spaces in use: a container with essentials or tabs (with Tidier alone, also the empty ones).
-  const used = new Set([...list.map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
+  const used = new Set(whole ? [...list.map(e => e.cookieStoreId), ...whole.map(t => t.cookieStoreId)] : []);
   const spaces = await spaceList(used);
-  const space = await spaceOf(windowId, tabs, spaces);
+  const space = await spaceOf(windowId, whole, spaces);
+  const tabs = (whole ?? await browser.tabs.query({ windowId, cookieStoreId: space ? [space, NO_CONTAINER] : [NO_CONTAINER] })).sort((a, b) => a.index - b.index);
 
   const rank = new Map(list.map((e, i) => [e.key, i]));
+  const byEssentialKey = new Map(list.map(e => [e.key, e]));
   const pinned = tabs.filter(t => t.pinned && (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER));
   const keys = await Promise.all(pinned.map(keyOf));
-  const essentials = pinned.map((t, i) => ({ t, entry: list.find(e => e.key === keys[i]) }))
+  const essentials = pinned.map((t, i) => ({ t, entry: byEssentialKey.get(keys[i]) }))
     .sort((a, b) => (rank.get(a.entry?.key) ?? Infinity) - (rank.get(b.entry?.key) ?? Infinity))
-    .map(({ t, entry }) => tabItem(t, entry?.name || entry?.title));
+    .map(({ t, entry }) => tabItem(t, entry?.name || entry?.title, recordIcon(entry)));
 
   // A tab without a container (a new tab) belongs to the space you are in.
   const all = await getSynced();
@@ -48,27 +65,44 @@ async function viewFor(windowId) {
   const loose = [];
   for (const t of here) {
     if (isSideberyGroup(t.url)) continue;
-    const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id)));
-    (folder ? folder.tabs : loose).push(tabItem(t, all[syncKeyByTab.get(t.id)]?.title));
+    const folder = byKey.get(folderKeyOf(all, syncKeyByTab.get(t.id))), entry = all[syncKeyByTab.get(t.id)];
+    (folder ? folder.tabs : loose).push(tabItem(t, entry?.title, recordIcon(entry)));
   }
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, spaces, space, essentials, folders, tabs: loose };
 }
 
+// A window without a sidebar costs nothing here. The next view comes once tab events
+// have paused for VIEW_DEBOUNCE_MS, at the latest VIEW_LONGEST_WAIT_MS after the first
+// of them, and one at a time: a view started while another is being built could
+// otherwise overtake it, and the sidebar would end up showing the older one.
 function viewSoon(windowId) {
   if (!sidebarPorts.get(windowId)?.size) return;
-  clearTimeout(viewTimers.get(windowId));
-  viewTimers.set(windowId, setTimeout(async () => {
-    viewTimers.delete(windowId);
-    work.views++;
-    const t0 = performance.now();
-    const view = await viewFor(windowId).catch(err => (console.error("Tidier: sidebar", err), null));
-    const ms = performance.now() - t0;
-    work.viewMs += ms;
-    work.longestViewMs = Math.max(work.longestViewMs, ms);
-    if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
-  }, VIEW_DEBOUNCE_MS));
+  if (viewsBuilding.has(windowId)) { viewsBuilding.set(windowId, true); return; }
+  const now = performance.now(), waiting = viewTimers.get(windowId), first = waiting?.first ?? now;
+  clearTimeout(waiting?.timer);
+  const at = Math.max(Math.min(now + VIEW_DEBOUNCE_MS, first + VIEW_LONGEST_WAIT_MS), viewRest.get(windowId) ?? 0);
+  viewTimers.set(windowId, { first, timer: setTimeout(() => buildView(windowId), at - now) });
+}
+async function buildView(windowId) {
+  viewTimers.delete(windowId);
+  viewsBuilding.set(windowId, false);
+  work.views++;
+  const t0 = performance.now();
+  const view = await viewFor(windowId).catch(err => (console.error("Tidier: sidebar", err), null));
+  const ms = performance.now() - t0;
+  work.viewMs += ms;
+  work.longestViewMs = Math.max(work.longestViewMs, ms);
+  const changed = viewsBuilding.get(windowId);
+  viewsBuilding.delete(windowId);
+  if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
+  if (sidebarPorts.has(windowId)) viewRest.set(windowId, performance.now() + VIEW_REST * ms);
+  if (changed) viewSoon(windowId);
 }
 const viewAllSoon = () => { for (const windowId of sidebarPorts.keys()) viewSoon(windowId); };
+// Only the sidebars that show tabs of this space: a page in another space can change
+// its title all day without any sidebar having anything to draw.
+const showsSpace = (windowId, space) => { const shown = activeSpace.get(windowId); return !shown || space === shown || space === NO_CONTAINER; };
+const viewSpaceSoon = space => { for (const windowId of sidebarPorts.keys()) if (showsSpace(windowId, space)) viewSoon(windowId); };
 
 browser.runtime.onConnect.addListener(port => {
   if (port.name !== "sidebar" || port.sender?.id !== browser.runtime.id) return;
@@ -99,7 +133,7 @@ browser.runtime.onConnect.addListener(port => {
     const set = sidebarPorts.get(windowId);
     if (!set) return;
     set.delete(port);
-    if (!set.size) { sidebarPorts.delete(windowId); clearTimeout(viewTimers.get(windowId)); viewTimers.delete(windowId); }
+    if (!set.size) { sidebarPorts.delete(windowId); clearTimeout(viewTimers.get(windowId)?.timer); viewTimers.delete(windowId); viewRest.delete(windowId); }
   });
 });
 
@@ -134,6 +168,6 @@ for (const event of ["onCreated", "onMoved", "onAttached", "onDetached"]) {
   browser.tabs[event].addListener((tabOrId, info) => viewSoon(tabOrId.windowId ?? info?.windowId ?? info?.newWindowId ?? info?.oldWindowId));
 }
 browser.tabs.onRemoved.addListener((tabId, info) => viewSoon(info.windowId));
-browser.tabs.onUpdated.addListener((tabId, change, tab) => viewSoon(tab.windowId),
+browser.tabs.onUpdated.addListener((tabId, change, tab) => { if (showsSpace(tab.windowId, tab.cookieStoreId)) viewSoon(tab.windowId); },
   { properties: ["title", "favIconUrl", "status", "discarded", "audible", "mutedInfo", "pinned", "url", "hidden"] });
 for (const event of ["onCreated", "onUpdated", "onRemoved"]) browser.contextualIdentities[event].addListener(viewAllSoon);
