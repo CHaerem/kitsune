@@ -83,15 +83,16 @@ addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
 // A click outside only closes the menu, as with a menu of Firefox's own: the × or the row
 // under the pointer must not act on the way. (The right button's release is no such click:
 // the menu is open by then.) Scrolling the list would leave the menu about nothing in view.
+const outsideMenu = e => !document.getElementById("menu").hidden && !e.target.closest?.("#menu");
 function clickOutsideMenu(e) {
-  if (document.getElementById("menu").hidden || e.target.closest?.("#menu")) return;
+  if (!outsideMenu(e)) return;
   e.stopImmediatePropagation();
   e.preventDefault();
   closeMenu();
 }
 addEventListener("click", clickOutsideMenu, true);
 addEventListener("auxclick", e => { if (e.button === 1) clickOutsideMenu(e); }, true);
-addEventListener("wheel", e => { if (!e.target.closest?.("#menu")) closeMenu(); }, { passive: true });
+addEventListener("wheel", e => { if (outsideMenu(e)) closeMenu(); }, { passive: true });
 
 // ↑ and ↓ move through it, → opens a list, ← goes back, Enter is the button's own. The
 // pointer moves the same highlight, so there is never more than one.
