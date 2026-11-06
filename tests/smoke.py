@@ -1521,15 +1521,18 @@ def alone_quiet_undo(m):
     no_page = m.js(NO_PAGE, space)
     check("a tab with no page anywhere is on today's list, as a placeholder", len(no_page) == 1, str(no_page))
 
+    # A tab selected in either window stays, so that nothing jumps there; so does the page
+    # with unsaved input, which is not on the list of what is compared with this.
+    selected = m.js(H + """return wins().map(w => key(w, w.gBrowser.selectedTab));""")
+    stays = len(set(before[0][0]) & set(selected))
+    goes = len(before[0][0]) - stays - 1
     r = sidebar_page(m, """
       const out = {};
       const button = doc.querySelector("#tabs .divider .clear"), box = button.parentElement.getBoundingClientRect();
       out.reach = box.height; out.divider = doc.querySelector("#tabs .divider").getBoundingClientRect().height;
       out.faded = page.getComputedStyle(button).opacity;
-      const closing = plainTabs().length - 2; // the one you are on, and the page with unsaved input
       button.click();
       for (let i = 0; i < 100 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(100);
-      out.closing = closing;
       out.shown = doc.getElementById("note").classList.contains("shown");
       out.line = doc.querySelector("#note .text").textContent;
       out.rows = plainTabs().filter(r => r.querySelector(".title").textContent !== "Unsaved").map(r => Number(r.dataset.tab));
@@ -1539,12 +1542,12 @@ def alone_quiet_undo(m):
       out.tiles = tiles().length;
       return out;""", setup["here"])
     check("Clear shows only near the line, in an area that takes no room", r["reach"] >= 18 and r["divider"] <= 2 and r["faded"] == "0", str(r))
-    check("Clear by a real click closes today's tabs, except the one you are on", r["rows"] == [setup["here"]], str(r))
+    check("Clear by a real click closes today's tabs, except any selected in a window", setup["here"] in r["rows"] and len(r["rows"]) == stays, f"{stays} stay: {r}")
     check("Clear leaves the folders", r["folders"] == setup["folders"], str(r))
-    check("the line says how many went, and how many stayed", r["shown"] and r["line"] == f"{r['closing']} tabs closed, 1 stayed", str(r))
+    check("the line says how many went, and how many stayed", r["shown"] and r["line"] == f"{goes} tabs closed, 1 stayed", f"{goes} go: {r}")
     check("a page with unsaved input stays, without asking", r["stayed"] and r["asked"] != "Unsaved", str(r))
     after = m.js(LIST, space)
-    check("Clear closes them in the other window too", len(after) == 2 and after[0] == after[1] and len(after[0][0]) == 2 and after[0][1] == before[0][1], f"{before} -> {after}")
+    check("Clear closes them in the other window too", len(after) == 2 and after[0] == after[1] and len(after[0][0]) == stays + 1 and after[0][1] == before[0][1], f"{before} -> {after}")
 
     r = sidebar_page(m, """
       const selected = async () => (await page.browser.tabs.query({active: true, currentWindow: true}))[0].id;
@@ -1649,8 +1652,11 @@ def alone_quiet_undo(m):
       const back = plainTabs().length;
       for (let i = 0; i < 20 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(50);
       return {others, labels, line, left, n, back, shown: note.classList.contains("shown")};""", setup["key"])
-    check("the list's menu has Clear too, and it can be undone", "Clear tabs" in r["labels"] and r["line"].endswith("closed") and r["left"] == 1 and r["back"] == r["n"], str(r))
+    check("the list's menu has Clear too, and it can be undone", "Clear tabs" in r["labels"] and r["line"].endswith("closed") and 1 <= r["left"] <= 2 and r["back"] == r["n"], str(r))
     check("Undo leaves no line behind", r["shown"] is False, str(r))
+    # The placeholders with no page have done their work: an update would give each a live
+    # tab (reconcileAll), which alone_update would see as a change.
+    m.js(H + """await removeWhere((w, t) => args[0].includes(key(w, t))); return 1;""", m.js(NO_PAGE, space))
     no_problems(m, "after Clear and Undo")
 
 

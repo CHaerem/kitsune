@@ -11,14 +11,14 @@
 
   // The text stays while the line fades out; only its being shown changes.
   let shown = null;
-  function drawNote(note) {
+  const drawNote = note => {
     shown = note;
     box.classList.toggle("shown", !!note);
     if (!note) return;
     text.textContent = note.text;
     text.title = note.text;
     act.hidden = !note.undo;
-  }
+  };
   act.onclick = () => {
     if (!shown) return;
     send({ type: "undo", note: shown.id });
@@ -31,7 +31,7 @@
 
   // Clear shows only with the pointer near the line between folders and today's tabs.
   // The area it listens on lies over that gap, so nothing is taller for it.
-  function drawClear() {
+  const drawClear = () => {
     const divider = document.querySelector("#tabs > .divider");
     if (!divider || !view.alone) return;
     if (!divider.firstChild) {
@@ -43,7 +43,7 @@
       divider.append(reach);
     }
     divider.firstChild.hidden = !clearable();
-  }
+  };
 
   // With no folders there is no line to find it on: the list's own menu has it (menu.js).
   window.clearItems = () => clearable() ? [["Clear tabs", clear]] : [];
