@@ -158,6 +158,11 @@ class TestFirefox:
             "settings": json.load(open(f"{DOTFILES}/sidebery-settings.json")),
             "sidebarCSS": open(f"{DOTFILES}/sidebery.css").read(),
         }}, open(f"{self.dir}/managed/ManagedStorage/{SIDEBERY_ID}.json", "w"))
+        # Tidier's sidebar look (tidier.css), the same way, where dotfiles has one.
+        if os.path.exists(f"{DOTFILES}/tidier.css"):
+            json.dump({"name": EXT_ID, "description": "test", "type": "storage", "data": {
+                "sidebarCSS": open(f"{DOTFILES}/tidier.css").read(),
+            }}, open(f"{self.dir}/managed/ManagedStorage/{EXT_ID}.json", "w"))
         # The live folders' native host is a stand-in that answers from a file
         # the test writes (fake_github_host.py), never your gh login.
         os.makedirs(f"{self.dir}/managed/NativeMessagingHosts")

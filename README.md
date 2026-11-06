@@ -1,17 +1,57 @@
 # Tidier
 
 A calmer, tidier Firefox: spaces, the same tabs in every window, and tabs
-that tidy themselves, in the spirit of Zen and Arc but in Firefox itself. It
-adds the features Firefox and Sidebery cannot do themselves, for a Firefox +
-Sidebery setup with one Sidebery panel ("space") per container. Each one is a
-small *bodge*: not the proper way to do it, but it does what you need with
-what you have.
+that tidy themselves, in the spirit of Zen and Arc but in Firefox itself.
 
 (It was called Kitsune until November 2026; Mozilla's support site already
 uses that name. The add-on's ID is the same, so it updates as before.)
 
-The rule: only what Firefox and Sidebery cannot do. Anything a setting,
-`about:keyboard` or Sidebery can do is set up there instead (in the dotfiles).
+## The goal
+
+**Firefox that feels calm, ordered and clean, with nothing but Firefox
+underneath.** Zen and Arc showed how a browser can feel; Zen is a fork of
+Firefox that trails its security updates, and Arc is being wound down. Tidier
+gives the same way of working to ordinary Firefox, which updates itself and
+fits company policy, as one extension.
+
+What that means:
+
+- **Only native Firefox.** No other extension is needed. Firefox's own
+  settings, `about:keyboard` and `userChrome.css` are used where they do the
+  job (set up in the dotfiles); Tidier does only what Firefox cannot.
+- **Your tabs, not the window's.** Every tab is in every window and loaded
+  only once; a window is a view onto the same tabs.
+- **Spaces.** One space per container (work, clients, private), each with its
+  own essentials, folders and tabs, so logins never mix.
+- **A browser that tidies itself.** Essentials are always there, tabs in
+  folders are kept, and other tabs are archived when unused.
+- **Calm by default.** Nothing moves unless you move it; nothing is loaded
+  twice; with nothing happening, Tidier does nothing.
+- **Under your control.** Everything is in this repository and the dotfiles,
+  so any problem can be fixed here, not waited on elsewhere.
+- **Seamless.** A push to main is tested in Firefox and Firefox Developer
+  Edition (a month ahead) and, when it passes, signed and installed by
+  Firefox itself. Nothing to do by hand.
+
+### Where it stands (November 2026)
+
+Tidier still runs on top of Sidebery, which draws the vertical tabs, folders
+and the space bar; everything below this section describes that setup. It is
+being replaced by Tidier's own sidebar (`sidebar/`, `sidebar-view.js`):
+essentials of the active space as tiles at the top, its folders and tabs
+below, the spaces at the bottom. In order:
+
+1. The sidebar's view (done; not yet your default sidebar).
+2. Spaces: hiding the other spaces' tabs, and new tabs in the active space.
+3. Folders as Tidier's own data, instead of Sidebery's folder pages.
+4. Dragging, a context menu and keys in the sidebar.
+5. Moving Sidebery's folders and spaces over, once, without losing anything.
+6. Removing what exists only because of Sidebery (folders first, its tree
+   rules, waiting for its sidebar), and Sidebery itself.
+
+Until then the rule is: only what Firefox and Sidebery cannot do. Anything a
+setting, `about:keyboard` or Sidebery can do is set up there instead (in the
+dotfiles).
 
 1. **Essentials in every window.** Pinned tabs are mirrored as unloaded copies
    in every window, in the same container (and therefore the same Sidebery

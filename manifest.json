@@ -22,8 +22,15 @@
     "cookies",
     "nativeMessaging",
     "alarms",
-    "clipboardWrite"
+    "clipboardWrite",
+    "contextualIdentities"
   ],
+  "sidebar_action": {
+    "default_panel": "sidebar/sidebar.html",
+    "default_title": "Tidier",
+    "default_icon": "icon.svg",
+    "open_at_install": false
+  },
   "background": {
     "scripts": [
       "common.js",
@@ -31,6 +38,7 @@
       "tabsync.js",
       "folders.js",
       "livefolders.js",
+      "sidebar-view.js",
       "archive.js",
       "shortcuts.js"
     ],
