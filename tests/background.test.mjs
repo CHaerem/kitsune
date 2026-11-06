@@ -889,6 +889,48 @@ test("an essential's copy closed just after it was created comes back", async ()
   x.kill();
 });
 
+test("a new tab you dragged a moment ago still gets synced when it gets an address", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const fresh = ff.openTab(a.id, { url: "about:newtab", active: true });
+  await ff.clock.run(500);
+  await ff.clock.settled(x.js("moveInWindow")(ff.list(a.id), fresh.id, ff.list(a.id)[0].id)); // as the sidebar's drag does
+  ff.load(fresh, "https://typed.example/");
+  await ff.clock.idle(60000);
+  const key = ff.values.get(fresh.id)?.syncKey;
+  assert.ok(key, "it has a key");
+  assert.ok(ff.list(b.id).some(y => ff.values.get(y.id)?.syncKey === key), "and a ghost in the other window");
+  x.kill();
+});
+
+test("a tab pinned while Tidier was just busy with it leaves tab sync", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  await ff.clock.settled(x.js("moveInWindow")(ff.list(a.id), t.id, ff.list(a.id)[0].id)); // busy for a while
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  assert.ok(!(key in ff.synced));
+  assert.equal(ff.values.get(t.id)?.syncKey, undefined);
+  assert.equal(ff.list(b.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 0, "its ghost has gone");
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "and there is a copy");
+  x.kill();
+});
+
+test("a tab pinned in the moment of an update becomes an essential", async () => {
+  const { ff, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  ff.pinTab(t);
+  const x = ff.update();
+  await ff.clock.idle(60000);
+  assert.ok(!(key in ff.synced));
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://a.example/"]);
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1);
+  x.kill();
+});
+
 test("a tab whose last copy Firefox closes at an update comes back, saved or not", async () => {
   const { ff, x: first, windows: [a, b] } = await chaosStart();
   const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });

@@ -694,26 +694,28 @@ browser.tabs.onCreated.addListener(tab => {
   registerSoon(tab.id);
 });
 
+// A tab pinned is an essential; it leaves tab sync.
+async function leaveSync(tabId, key) {
+  const all = await getSynced(); delete all[key]; saveSynced(all);
+  await clearRole(tabId);
+  const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
+  others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
+  await removeTabs(others.map(t => t.id));
+  await forgetClosedPlaceholders("ghost", [key]);
+}
+
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!started || syncBusy.has(tabId)) return;
+  if (!started) return;
   const key = syncKeyByTab.get(tabId);
   if (!key) {
-    // A new tab that has navigated to a page, e.g. "New Tab" -> a URL.
+    // A new tab that has navigated to a page, e.g. "New Tab" -> a URL. Busy or not: it may
+    // be a new tab you dragged a moment ago, and no later event would tell.
     if (change.url || change.status === "complete") registerSoon(tabId);
     return;
   }
-  if (change.pinned === true) {
-    // Pinned tabs are essentials; they leave tab sync.
-    serial(async () => {
-      const all = await getSynced(); delete all[key]; saveSynced(all);
-      await clearRole(tabId);
-      const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
-      others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-      await removeTabs(others.map(t => t.id));
-      await forgetClosedPlaceholders("ghost", [key]);
-    });
-    return;
-  }
+  // You pinned it, also if Tidier was just busy with it: Tidier pins no synced tab itself.
+  if (change.pinned === true) { serial(() => leaveSync(tabId, key)); return; }
+  if (syncBusy.has(tabId)) return;
   if (syncRoleByTab.get(tabId) === "live" && (change.status === "complete" || change.favIconUrl || change.title)) {
     serial(async () => {
       const all = await getSynced();
@@ -1005,10 +1007,13 @@ async function start(delayMs) {
 // A tab opened while Tidier was starting went unseen (a link that started Firefox, say,
 // or one opened in the moment after an update), and no event will tell about it again:
 // it would stay in one window, unknown, until it goes to another address.
+// The same goes for a tab pinned meanwhile: it would stay both an essential and a synced tab.
 async function seeUnseenTabs() {
   for (const t of await browser.tabs.query({})) {
-    if (syncKeyByTab.has(t.id)) continue;
-    if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
+    const key = syncKeyByTab.get(t.id);
+    if (key) {
+      if (t.pinned) serial(async () => { await onPinned(t); await leaveSync(t.id, key); });
+    } else if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
   }
 }
 let startRequested = false, firefoxStarting = false;
