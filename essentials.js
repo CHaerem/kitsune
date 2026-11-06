@@ -497,6 +497,12 @@ browser.windows.onFocusChanged.addListener(windowId => {
 });
 
 // A copy started loading its page: the others become placeholders.
+// A new tab page you pinned has no page to be an essential of, until you give it an address.
+browser.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (!started || busy.has(tabId) || !tab.pinned || !isWeb(change.url) || keyByTab.has(tabId)) return;
+  serial(async () => { if (!(await keyOf(tab))) await onPinned(tab); });
+}, { properties: ["url"] });
+
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || isGhostUrl(tab.url)) return;
   const key = keyByTab.get(tabId);

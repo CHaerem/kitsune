@@ -979,3 +979,16 @@ test("an essential's placeholder whose value was lost is known by its address", 
   assert.equal(ff.list(w.id).filter(t => t.pinned).length, 1);
   x.kill();
 });
+
+test("a new tab page you pinned is an essential once it has an address", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "about:newtab", active: true });
+  await ff.clock.run(1000);
+  ff.pinTab(t);
+  await ff.clock.run(1000);
+  ff.load(t, "https://later.example/");
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://later.example/"]);
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "the other window has it");
+  x.kill();
+});
