@@ -622,6 +622,14 @@ def live_folders(m):
     second = m.js(state)
     check("a closed pull request tab stays closed when the folder is refreshed",
           all(w["inFolder"] == ["Pull request 2", "Pull request 3"] and not w["outside"] for w in second), str(second))
+    # Merged while you read it: the selected tab stays until you leave it.
+    k = m.js(H + """const w = main(), t = w.gBrowser.tabs.find(t => t.label.endsWith("Pull request 2"));
+      if (!t) return null; w.__smokePrev = w.gBrowser.selectedTab; w.gBrowser.selectedTab = t; await wait(3000); return key(w, t);""")
+    answer([3])
+    time.sleep(4)
+    kept = m.js(H + "return find(%s).map(roles => roles.length);" % json.dumps(k))
+    check("a pull request that leaves the search keeps its tabs while you are looking at it", k and kept == [1, 1], f"{k}, {kept}")
+    m.js(H + """const w = main(); if (w.__smokePrev) w.gBrowser.selectedTab = w.__smokePrev; delete w.__smokePrev; await wait(1500); return 1;""")
     answer([3])
     time.sleep(4)
     third = m.js(state)
