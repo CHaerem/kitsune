@@ -12,7 +12,9 @@ and writes PNGs at twice the size, as on a Retina screen:
     sidebar-SPACE-WIDTH-SCHEME   the sidebar per space, at 220, 300 and 480 px, light and dark
     window-SPACE-SCHEME          the whole window around it, with userChrome.css
     hover-*, menu-*, state-*     one thing at a time, at 300 px, light and dark
+    state-essentials-N-WIDTH     one, two and three essentials, at each width
     settings-SCHEME              the settings page
+    settings-in-full-SCHEME      with everything it can show, made up; -narrow- as narrow as it can be
 
 Runs at the same time are fine: each takes the first free port from 5100 up. To add
 a picture, add a step to STEPS at the end.
@@ -87,6 +89,7 @@ ICONS = {
     # All black, and all white: the two that vanish in one of the schemes.
     "black": svg('<circle cx="16" cy="16" r="11" fill="#000"/><path d="M12 22V10l8 12V10" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>'),
     "white": svg('<path d="M23 20a10 10 0 0 1-11-14 11 11 0 1 0 14 14 10 10 0 0 1-3 0z" fill="#fff"/>'),
+    "mark": svg('<path fill-rule="evenodd" d="M16 5a11 11 0 1 0 0 22 11 11 0 0 0 0-22zm0 5.500a5.500 5.500 0 1 1 0 11 5.500 5.500 0 0 1 0-11z" fill="#000"/>'),  # black, with nothing else in it, as GitHub's and many others are
 }
 
 
@@ -474,6 +477,21 @@ def hover(cam):
     cam.mouse_away()
 
 
+def hover_more(cam):
+    """What only shows under the mouse on some rows: a playing tab's mark stepping aside, and a menu's item."""
+    select(cam.m, on_tab(PERSONAL), PERSONAL["ctx"])
+    if cam.wanted("hover-row-sound") and cam.point_at('#tabs .row.tab:has(.sound[title="Mute"])'):
+        cam.shoot("hover-row-sound")
+    cam.mouse_away()
+    at = cam.wanted("hover-menu-item") and cam.point_at(FOLDER_HEAD)
+    if at and cam.right_click(*at):
+        box, item = cam.sidebar_box(), in_sidebar(cam.m, """const r = doc.querySelector("#menu .item").getBoundingClientRect(); return [r.left + 30, r.top + 12];""")
+        cam.mouse(box["x"] + item[0], box["y"] + item[1])
+        cam.shoot("hover-menu-item")
+    cam.close_menus()
+    cam.mouse_away()
+
+
 def menus(cam):
     select(cam.m, on_tab(PERSONAL), PERSONAL["ctx"])
     # A tab's menu may be Firefox's own, which is no part of the window a picture can show.
@@ -498,6 +516,14 @@ def folders_closed(cam):
     fold(cam.m, {f["name"]: True for f in PERSONAL["folders"]})
     cam.shoot("state-folders-closed")
     fold(cam.m, {f["name"]: bool(f.get("closed")) for f in PERSONAL["folders"]})
+
+
+def live_closed(cam):
+    """A live folder has its own icon, which has to say open or closed as well."""
+    select(cam.m, on_tab(WORK), WORK["ctx"])
+    fold(cam.m, {WORK["live"]["name"]: True})
+    cam.shoot("state-live-folder-closed")
+    fold(cam.m, {WORK["live"]["name"]: False})
 
 
 def folder_rename(cam):
@@ -558,28 +584,92 @@ def empty_spaces(cam):
     cam.shoot("state-no-tabs")
 
 
+def few_essentials(cam):
+    """Three, two and one essentials, at every width. Goes on from empty_spaces: only the
+    two essentials it left in that space, and tabs unpinned here stay in the list."""
+    m, ctx = cam.m, EMPTY["ctx"]
+    url = m.pages + T("Trains", "globe")["path"]
+    m.js(CHROME + """const [url, ctx] = args; gB.addTrustedTab(url, {userContextId: ctx, inBackground: true});
+      for (let i = 0; i < 100 && !byUrl(url)?.image; i++) await wait(50);
+      gB.pinTab(byUrl(url)); await wait(400); return 1;""", url, ctx)
+    for count in (3, 2, 1):
+        for px in WIDTHS:
+            cam.width(px)
+            cam.shoot(f"state-essentials-{count}-{px}")
+        m.js(CHROME + """const pinned = gB.tabs.filter(t => t.pinned && t.userContextId === args[0]);
+          gB.unpinTab(pinned.at(-1)); await wait(400); return 1;""", ctx)
+    cam.width(WIDTH)
+
+
+def icons_that_vanish(cam):
+    """All black and all white, loaded and unloaded, on the same list. Goes on from few_essentials."""
+    m, ctx = cam.m, EMPTY["ctx"]
+    tabs = (("A black mark", "mark", False), ("A black mark, unloaded", "mark", True), ("A white mark", "white", False), ("A white mark, unloaded", "white", True))
+    urls = [(m.pages + T(title, icon)["path"], off) for title, icon, off in tabs]
+    m.js(CHROME + """const [urls, ctx] = args;
+      for (const [url] of urls) gB.addTrustedTab(url, {userContextId: ctx, inBackground: true});
+      for (let i = 0; i < 100 && urls.some(([u]) => !byUrl(u)?.image); i++) await wait(50);
+      for (const [url, off] of urls) if (off) gB.discardBrowser(byUrl(url));
+      await wait(400); return 1;""", urls, ctx)
+    cam.shoot("state-black-and-white-icons")
+
+
+# What the page shows only now and then, with made-up words: a notice, the move to Tidier
+# alone and back, what a report says, a copy to take in.
+SETTINGS_IN_FULL = """
+  const $ = id => document.getElementById(id), add = (parent, tag, cls, text) => { const e = document.createElement(tag); e.className = cls; e.textContent = text; parent.append(e); return e; };
+  add($("notices"), "p", "notice", "Tidier could not read the record of its folders, and is working from the copy made this morning.");
+  $("allow-hiding").hidden = $("move").hidden = $("move-back").hidden = $("merge").hidden = false;
+  $("alone-state").textContent = "This browser uses Sidebery for its tab list, spaces and folders.";
+  $("sidebery-result").textContent = "Imported 2 rules and the order of 3 spaces.";
+  for (const [name, on] of [["Personal: 7 essentials, 3 folders, 12 saved tabs", true], ["Work: 12 essentials, 2 folders, 30 saved tabs", false]]) {
+    const line = add($("merge-spaces"), "label", "line", "");
+    const box = document.createElement("input");
+    box.type = "checkbox"; box.checked = on;
+    line.append(box, name);
+  }
+  $("merge-result").textContent = "Took in 7 essentials, 3 folders and 12 saved tabs. Nothing here was removed.";
+  return 1;
+"""
+
+
 def settings(cam):
-    """The settings page, in a tab as it always is, with something in its lists."""
+    """The settings page, in a tab as it always is, with something in its lists; and with
+    everything it can show, also as narrow as it can be."""
     m = cam.m
     if not cam.wanted("settings"):
         return
     in_sidebar(m, """await page.browser.runtime.sendMessage(clone({type: "settings:rules", rules: [{url: "calendar.example.org", space: "firefox-container-2"}, {url: "/^https:\\\\/\\\\/shop\\\\./", space: "firefox-container-1"}]}));""")
     m.js(CHROME + """const uuid = JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]];
       gB.selectedTab = gB.addTrustedTab("moz-extension://" + uuid + "/settings/settings.html", {}); await wait(800); return 1;""", testfirefox.EXT_ID)
-    for scheme in SCHEMES:
-        if cam.wanted(f"settings-{scheme}"):
-            cam.scheme(scheme)
-            time.sleep(0.4)
-            m.cmd("Marionette:SetContext", {"value": "content"})
-            for handle in m.cmd("WebDriver:GetWindowHandles"):
-                m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": False})
-                if "/settings/settings.html" in m.cmd("WebDriver:GetCurrentURL"):
-                    break
-            cam.write(f"settings-{scheme}", m.cmd("WebDriver:TakeScreenshot", {"full": True}))
-            m.chrome()
+    def page():
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for handle in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": False})
+            if "/settings/settings.html" in m.cmd("WebDriver:GetCurrentURL"):
+                return
+
+    def pictures(name):
+        for scheme in SCHEMES:
+            if cam.wanted(f"{name}-{scheme}"):
+                cam.scheme(scheme)
+                time.sleep(0.4)
+                page()
+                cam.write(f"{name}-{scheme}", m.cmd("WebDriver:TakeScreenshot", {"full": True}))
+                m.chrome()
+
+    pictures("settings")
+    page()
+    m.js(SETTINGS_IN_FULL)
+    m.chrome()
+    pictures("settings-in-full")
+    page()
+    m.js("""document.body.style.maxWidth = "340px"; return 1;""")
+    m.chrome()
+    pictures("settings-narrow")
 
 
-STEPS = (space_by_space, hover, menus, folders_closed, folder_rename, marks, notices, scrolled, empty_spaces, settings)
+STEPS = (space_by_space, hover, hover_more, menus, folders_closed, live_closed, folder_rename, marks, notices, scrolled, empty_spaces, few_essentials, icons_that_vanish, settings)
 
 
 def take_pictures(cam):

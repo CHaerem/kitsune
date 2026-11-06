@@ -19,7 +19,7 @@ there is a test.
 | Feature | From | Status | Notes |
 |---|---|---|---|
 | Vertical tab list in a sidebar | Z A S | Done | Tidier alone, checked; Sidebery in the daily browser |
-| Unloaded tabs shown dimmed | Z A S | Done | in Tidier's sidebar; the look has no check |
+| Unloaded tabs shown dimmed | Z A S | Done | in Tidier's sidebar; seen in the pictures of tools/shoot.py |
 | Close button, middle click to close | Z A S | Done | in Tidier's sidebar |
 | New tab button at the top of the list | A Z | Done | Tidier alone |
 | Drag tabs to reorder, into and out of folders | Z A S | Done | Tidier alone, checked, every window follows; also to the essentials and to a space |
@@ -119,6 +119,9 @@ there is a test.
 | Toolbar (back, forward, address) at the top of the sidebar | Z A | Done | userChrome.css |
 | Light and dark | Z A S | Done | |
 | Works at all sidebar widths (220–480 px) | | Done | checked by the smoke test |
+| One design for everything Tidier draws: the window's tint as the surface, what is on it lifting towards white, the selected thing the only card, the space's colour used sparingly | A | Done | sidebar/tokens.css, linked from each page; tests/look.test.mjs keeps it whole |
+| Long titles fade out instead of ending in dots, and the list dissolves where it ends | A | Done | |
+| Pictures of every width, scheme and state, to work on the look with | | Done | tools/shoot.py |
 
 ## Not wanted
 

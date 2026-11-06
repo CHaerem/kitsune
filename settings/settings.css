@@ -1,84 +1,92 @@
-/* The settings page, on the same surface as the sidebar (tokens.css): the page is the
- * window's colour and each subject a soft card on it, its controls drawn to match. */
+/* The settings page, on the same surface as the sidebar (tokens.css): one flat column,
+ * with room to keep the subjects apart, no boxes and no lines. What can be changed or
+ * pressed is a soft fill on the surface; white is kept for the one field you are in. */
 html { background: var(--frame); }
 body {
-  box-sizing: border-box; max-width: 620px; margin: 0 auto; padding: 48px 20px 64px;
+  box-sizing: border-box; max-width: 540px; margin: 0 auto; padding: 56px 24px 64px;
   color: var(--text); line-height: 20px;
 }
-h1 { margin: 0 0 24px; padding-left: 20px; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -.01em; }
-h2 { margin: 0 0 8px; font-size: var(--size); line-height: 20px; font-weight: 600; }
-p { margin: 0 0 10px; }
-p:last-child, p:empty { margin-bottom: 0; }
-p:empty { display: none; }
-section {
-  margin-bottom: 12px; padding: 18px 20px 20px; border-radius: var(--radius-lg);
-  background: var(--tile);
-}
-section > :last-child, section > p:has(> label) { margin-bottom: 0; }
-section > p:has(> label) { margin-top: 12px; }
-.hint, #alone-state, #copy-state, #report, ol, #move > p { color: var(--muted); }
-#version { padding-left: 20px; margin-top: 20px; font-size: var(--size-small); color: var(--faint); }
-ul, ol { margin: 0 0 12px; padding-left: 20px; }
-li { margin-bottom: 4px; }
-li button { margin-top: 4px; }
-code {
-  padding: 1px 5px; border-radius: 5px; background: var(--press);
-  font: 12px ui-monospace, Menlo, monospace; color: var(--text);
-}
-.notice { padding: 10px 14px; margin: 0 0 12px; border-radius: var(--radius); background: var(--selected); box-shadow: var(--shadow-card); }
+h1 { margin: 0 0 32px; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -.01em; }
+h2 { margin: 0 0 2px; font-size: var(--size); line-height: 20px; font-weight: 600; }
+section { margin-bottom: 36px; }
 
-/* The controls: nothing here is the browser's default look. */
-button, input, select { font: inherit; color: inherit; box-sizing: border-box; }
-button, input[type=text], input[type=number], select { height: 30px; border: 0; border-radius: 8px; }
-button {
-  padding: 0 12px; background: var(--selected); box-shadow: var(--shadow-card);
-  font-weight: 500; transition: transform var(--quick);
+/* Everything said about a subject is in one ink, a step below what you can change. */
+p { margin: 0 0 10px; color: var(--muted); }
+p:empty { display: none; }
+section > :last-child, section > :has(+ p:empty:last-child) { margin-bottom: 0; }
+ul, ol { margin: 0 0 12px; padding-left: 18px; color: var(--muted); }
+li { margin-bottom: 4px; }
+li:has(button) { margin-top: 10px; list-style-position: outside; }
+label { color: var(--muted); }
+#version { margin: 0; font-size: var(--size-small); color: var(--faint); }
+code { padding: 1px 4px; border-radius: 4px; background: var(--tile); font: 12px ui-monospace, Menlo, monospace; color: var(--text); }
+.notice { padding: 8px 10px; margin: 0 0 8px; border-radius: var(--radius); background: var(--tile); color: var(--text); }
+#notices:has(.notice) { margin-bottom: 28px; }
+
+/* The controls: soft fills, nothing of the browser's default look. */
+button, input, select { font: inherit; letter-spacing: inherit; color: var(--text); box-sizing: border-box; }
+button, input[type=text], input[type=number], select, label:has(input[type=file]) {
+  height: 30px; border: 0; border-radius: var(--radius); background-color: var(--tile);
+  transition: background-color var(--quick), box-shadow var(--quick), transform var(--quick);
 }
-/* Under the mouse a button goes a step away from the surface: darker on white, lighter on dark. */
-button:hover { background-image: linear-gradient(var(--press), var(--press)); }
-button:active { transform: scale(.98); }
-input[type=text], input[type=number], select {
-  padding: 0 10px; appearance: none; color: var(--text);
-  background: var(--hover); box-shadow: inset 0 0 0 .5px var(--line);
-  transition: background-color var(--quick), box-shadow var(--quick);
-}
+button:hover, input[type=text]:hover, input[type=number]:hover, select:hover, label:has(input[type=file]):hover { background-color: var(--tile-hover); }
+button, label:has(input[type=file]) { padding: 0 12px; }
+button:active, label:has(input[type=file]):active { transform: scale(.98); }
+/* A button keeps its distance from the next, also when they wrap. */
+section > button, #move-back > button, #merge > button, li > button { margin: 0 2px 8px 0; }
+
+input[type=text], input[type=number], select { padding: 0 10px; appearance: none; }
 input[type=text]:focus, input[type=number]:focus, select:focus {
-  outline: none; background: var(--selected); box-shadow: 0 0 0 1.5px var(--accent-line);
+  outline: none; background-color: var(--selected); box-shadow: 0 0 0 1.5px var(--accent-line);
 }
 ::placeholder { color: var(--faint); }
 select {
-  padding-right: 26px; background-image: light-dark(url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23857f79' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23a5a09a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")); background-repeat: no-repeat;
-  background-position: right 6px center; background-size: 16px;
+  padding-right: 26px; background-repeat: no-repeat; background-position: right 6px center; background-size: 16px;
+  background-image: light-dark(url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23857f79' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23a5a09a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"));
 }
-input[type=number] { appearance: textfield; width: 56px; margin: 0 6px; text-align: center; }
-input[type=checkbox] { accent-color: var(--accent); margin: 0; }
+input[type=number] { appearance: textfield; width: 52px; margin: 0 4px; text-align: center; }
+input[type=checkbox] {
+  appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border-radius: 5px; background-color: var(--press);
+  background-position: center; background-size: 16px; background-repeat: no-repeat;
+  transition: background-color var(--quick);
+}
+input[type=checkbox]:checked {
+  background-color: var(--text);
+  background-image: light-dark(url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.25L7 10.75l4.5-5.5' fill='none' stroke='%23fff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.25L7 10.75l4.5-5.5' fill='none' stroke='%231f1f23' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"));
+}
 /* A file field is a button with what it is for on it: the browser's own says "Browse…"
  * and "no file selected", which say nothing. The field stays, unseen, under its label. */
 label:has(input[type=file]) {
-  position: relative; display: inline-flex; align-items: center; min-height: 30px; padding: 5px 12px; box-sizing: border-box;
-  border-radius: 8px; background: var(--selected); box-shadow: var(--shadow-card); color: var(--text); font-weight: 500;
-  transition: transform var(--quick);
+  position: relative; display: inline-flex; align-items: center; box-sizing: border-box; color: var(--text);
+  max-width: 100%; height: auto; min-height: 30px; padding-block: 5px;
 }
-label:has(input[type=file]):hover { background-image: linear-gradient(var(--press), var(--press)); }
-label:has(input[type=file]):active { transform: scale(.98); }
-label:has(input:focus-visible) { outline: 2px solid var(--accent-line); outline-offset: 1px; }
 input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
-label { color: var(--muted); }
+:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+label:has(input:focus-visible) { outline: 2px solid var(--accent-line); outline-offset: 1px; }
 
-.line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; color: var(--text); }
-.line:last-child { margin-bottom: 0; }
-.line input[type=text] { flex: 1; min-width: 0; }
-#rules:not(:empty) { margin-bottom: 12px; }
-/* A space's colour, and the × of a rule, are small quiet marks, not controls that shout. */
-#spaces .line span { width: 16px; text-align: center; font-size: 11px; line-height: 1; }
+/* A line of controls: they wrap when the page is too narrow to share it. */
+.line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; color: var(--text); }
+.line input[type=text] { flex: 1 1 200px; min-width: 0; }
+.line select { max-width: 100%; }
+
+/* Spaces: a dot and a name. The name has only a trace of a fill at rest, enough to say
+ * it can be changed, and is as wide as a name needs. */
+#spaces .line { margin-bottom: 2px; flex-wrap: nowrap; gap: 10px; }
+#spaces .line > span { flex: none; width: 8px; height: 8px; border-radius: 50%; background: currentColor; font-size: 0; }
+#spaces input[type=text] { flex: 0 1 240px; background-color: color-mix(in srgb, var(--tile) 50%, transparent); }
+#spaces input[type=text]:hover { background-color: var(--tile); }
+#spaces input[type=text]:focus { background-color: var(--selected); }
+
+/* Rules: removing one is always there, but in the faintest ink until you come for it. */
+#rules:not(:empty) { margin-bottom: 8px; }
 #rules button {
-  width: 30px; flex: none; padding: 0; background: none; box-shadow: none; color: var(--muted);
+  width: 28px; height: 28px; flex: none; padding: 0; margin: 0; background: none; color: var(--faint);
   font-size: 0; line-height: 0; display: flex; align-items: center; justify-content: center;
 }
 #rules button::before { content: ""; width: var(--icon); height: var(--icon); background: currentColor; mask: var(--icon-close) center / 14px no-repeat; }
 #rules button:hover { background: var(--press); color: var(--text); }
-section > button + button { margin-left: 6px; }
+
 #merge { margin-top: 12px; }
-#merge-spaces { margin-bottom: 10px; }
-:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+#merge-spaces { margin-bottom: 8px; }
+#merge-spaces .line { flex-wrap: nowrap; gap: 8px; color: var(--muted); }
 [hidden] { display: none !important; }
