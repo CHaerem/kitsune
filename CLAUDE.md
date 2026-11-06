@@ -1,9 +1,10 @@
 # Working on Tidier
 
 Read the README first: **The goal** and **Where it stands** say what Tidier is
-for and which step comes next; FEATURES.md lists what to aim for from Zen, Arc
-and Sidebery. In short: Firefox and Tidier only, with as much as possible in
-Tidier itself, and Sidebery being replaced by Tidier's own sidebar.
+for; PLAN.md is everything that has to be done, in order; FEATURES.md lists what
+to aim for from Zen, Arc and Sidebery. In short: Firefox and Tidier only, with as
+much as possible in Tidier itself, and Sidebery being replaced by Tidier's own
+sidebar. Nothing that exists only for Sidebery gets better from here.
 
 ## Never touch the user's own Firefox
 

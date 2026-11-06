@@ -45,6 +45,8 @@ it matters for moving off it.
 | New tabs and links from other apps open in the active space | A S | Planned | Sidebery today |
 | Rules: an address always opens in a given space ("Air Traffic Control") | A S | Planned | Sidebery's container rules today |
 | Open a link in another space (context menu) | A | Later | |
+| The same essentials, folders and spaces on every machine, by sync | A | Planned | after Tidier has its own spaces and folders |
+| Hide a space on a given machine | | Planned | a workplace's space only on its Mac; hidden, not kept away |
 
 ## Essentials and kept tabs
 

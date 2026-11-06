@@ -35,6 +35,17 @@ What that means:
   Edition (a month ahead) and, when it passes, signed and installed by
   Firefox itself. Nothing to do by hand.
 
+### How it came about
+
+Arc was the browser for years: three spaces (two workplaces and private), each
+with its own essentials and logins so they never mixed, and unused tabs that
+went away by themselves. When Arc was retired, Zen came closest, with an
+extension for the tabs' lifetime. Then a workplace's sign-in requirement ruled
+Zen out, and it became Firefox: settings, Sidebery for the sidebar, and this
+extension for the rest. That works well, but it depends on Sidebery, and much
+is still not as wanted. So Tidier is taking over what Sidebery does, step by
+step, and then grows into everything wanted from Arc and Zen.
+
 ### Where it stands (November 2026)
 
 Tidier still runs on top of Sidebery, which draws the vertical tabs, folders
@@ -50,9 +61,12 @@ below, the spaces at the bottom. In order:
 5. Moving Sidebery's folders and spaces over, once, without losing anything.
 6. Removing what exists only because of Sidebery (folders first, its tree
    rules, waiting for its sidebar), and Sidebery itself.
+7. The same essentials, folders and spaces on every machine, by sync, with
+   spaces that can be hidden per machine (a workplace's space only on its Mac).
 
 All the features worth having from Zen, Arc and Sidebery, and where Tidier
-stands with each, are listed in [FEATURES.md](FEATURES.md).
+stands with each, are listed in [FEATURES.md](FEATURES.md). Everything that has to
+be done, in order, is in [PLAN.md](PLAN.md).
 
 Until then, what Sidebery does (the tab list, folders, the space bar, its
 container rules) is left to it and set up in the dotfiles.
@@ -335,7 +349,7 @@ its own:
    updates* in `about:addons` checks at once.
 
 Nothing is released when only the documents (`README.md`, `FEATURES.md`,
-`CLAUDE.md`), tests, tools, `native/` or `.github/` changed; none of them goes
+`PLAN.md`, `CLAUDE.md`), tests, tools, `native/` or `.github/` changed; none of them goes
 into the extension. Change `major.minor` in `manifest.json` for a bigger change. `tools/release.py
 --dry-run DIR` builds the `.xpi` and `updates.json` locally without signing.
 

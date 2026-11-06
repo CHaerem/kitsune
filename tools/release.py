@@ -28,7 +28,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = "CHaerem/tidier"
 AMO = "https://addons.mozilla.org/api/v5"
 # Everything in git goes into the extension, except these.
-EXCLUDE = ("README.md", "FEATURES.md", "CLAUDE.md", ".gitignore", ".github/", "native/", "tests/", "tools/")
+EXCLUDE = ("README.md", "FEATURES.md", "PLAN.md", "CLAUDE.md", ".gitignore", ".github/", "native/", "tests/", "tools/")
 POLL_SECONDS, POLL_LIMIT_SECONDS = 10, 30 * 60  # AMO usually signs within minutes
 GET_ATTEMPTS, GET_RETRY_SECONDS = 5, 30  # a passing fault at AMO must not end a 30-minute wait
 
