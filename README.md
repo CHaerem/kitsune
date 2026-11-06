@@ -14,7 +14,8 @@ The rule: only what Firefox and Sidebery cannot do. Anything a setting,
    in every window, in the same container (and therefore the same Sidebery
    space). Pinning or unpinning in one window does the same in the others.
    Closing an essential brings it back unloaded, like Zen. Moving one keeps
-   the new order, in every window and in new windows. An essential's
+   the new order, in every window and in new windows. Dragging one to another
+   window takes it there (in its place, not twice) and leaves a copy behind. An essential's
    title and icon follow its page, but only from the essential's own site,
    so a redirect to a sign-in page does not rename it.
 2. **Tabs in every window.** Every other tab is *live* in one window and an
@@ -172,7 +173,9 @@ These are set in dotfiles' `sidebery-settings.json` (see above).
   extensions fold them).
 - Sidebery requires each panel's tabs to be one contiguous run in panel order;
   after filling a window the extension copies the tab order from the window
-  with the most synced tabs. That sort waits ~1.5 s for Sidebery to finish
+  with the most synced tabs, with each space's tabs together (that window can
+  have them mixed: Sidebery shows a tab added at the end of a window in its
+  space without moving it there). That sort waits ~1.5 s for Sidebery to finish
   placing the new tabs; sorting sooner puts tabs in the wrong panel.
 - Sidebery gives the first pinned tab of a new window to the active panel, so a
   throwaway pinned tab holds that spot while the essentials are created.
@@ -302,9 +305,12 @@ container).
 ### On GitHub
 
 `.github/workflows/smoke.yml` runs the same smoke test on GitHub, in a
-headless Firefox on a macOS runner with the newest Sidebery and the newest
-Firefox, and on the weekly run also Firefox Beta (about four weeks ahead, so a
-Firefox change that would break the setup shows up before it reaches you). It
+headless Firefox on a macOS runner with the newest Sidebery, both in the newest
+Firefox and in Firefox Developer Edition (the Beta, about four weeks ahead, so a
+Firefox change that would break the setup shows up before it reaches you).
+Developer Edition allows unsigned add-ons, so there Kitsune is installed for
+real and the test also quits and restarts Firefox to check the restored
+session; on your Mac that part runs with `--installed` or `--xpi`. It
 runs on pushes and pull requests here and every Monday, so a Firefox or
 Sidebery update that breaks something shows up without any change here; after
 changing the Firefox files in dotfiles, start it by hand (Actions → Smoke test

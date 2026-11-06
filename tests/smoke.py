@@ -24,6 +24,10 @@ is reported as failed. It checks that:
   - pinning a tab makes it an essential everywhere, also when the tab is a
     ghost; unpinning a copy removes it everywhere, and the copy you unpinned
     opens its page; an essential copy opens the real page in its container;
+    an essential dragged to another window is there once, and comes back in
+    the window it left;
+    an essential is renamed by its own page, but not by a page on another
+    site (a sign-in it redirects to);
   - a placeholder of a tab that no longer exists closes itself;
   - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
@@ -40,8 +44,14 @@ is reported as failed. It checks that:
     address bar centred with its results under it, also in compact mode;
   - a live folder (with a stand-in for the native host) is in every window,
     first in its space, with its pull requests unloaded; a closed pull request
-    stays closed, one that leaves the search is removed everywhere, and a
-    renamed one takes its new title.
+    stays closed, one that leaves the search is removed everywhere, a
+    renamed one takes its new title, and a failed search changes nothing;
+  - with ten more essentials and thirty more tabs, a new window still gets
+    them all, in their spaces, and they all go when closed;
+  - after Firefox is quit and started again, both windows come back with the
+    same essentials and tabs, one live tab each, folders with their tabs and
+    every tab in its space, and tab sync and new windows still work (only
+    where Kitsune can be installed for real: Developer Edition, or --xpi).
 """
 import glob
 import json
@@ -202,6 +212,7 @@ def more_windows(m):
       return out;""")
     check("essentials and tabs land in their own space in three more new windows", all(not x for x in wrong), str(wrong),
           sidebery_bug="pin race")
+    print(f"INFO  waiting for Sidebery's sidebar in those windows: {extension_message(m, {'type': 'sidebarWaits'})[-3:]}", flush=True)
 
 
 def essentials(m):
@@ -246,11 +257,63 @@ def essentials(m):
               saved: JSON.stringify(saved) === JSON.stringify(both), misplaced: [...await misplaced(w), ...await misplaced(other())]};""" % EXT_ID)
     check("a moved essential keeps its place, in the list and in the other window", r and r["moved"] and r["otherFollows"] and r["saved"]
           and not r["misplaced"], str(r))
+    # Dragging an essential to the other window, which has its own copy of it.
+    r = m.js(H + """
+      const count = () => wins().map(w => { const by = {}; for (const t of w.gBrowser.tabs) if (t.pinned && ek(w, t)) by[ek(w, t)] = (by[ek(w, t)] || 0) + 1; return by; });
+      const before = count(), w = main(), t = w.gBrowser.tabs.find(x => x.pinned && ek(w, x) && x.userContextId === 2), k = ek(w, t);
+      other().gBrowser.adoptTab(t, {tabIndex: 0}); await wait(5000);
+      const after = count();
+      return {k, before: before.map(b => b[k]), after: after.map(a => a[k]), same: JSON.stringify(before.map(b => Object.keys(b).sort())) === JSON.stringify(after.map(a => Object.keys(a).sort())),
+              doubled: after.flatMap(a => Object.entries(a).filter(([, n]) => n > 1)), misplaced: [...await misplaced(w), ...await misplaced(other())],
+              pinnedThere: [main(), other()].map(x => x.gBrowser.tabs.filter(y => y.pinned).map(y => [(ek(x, y) || "").slice(0, 4), url(y).slice(-24)]))};""")
+    check("an essential dragged to the other window is there once, and comes back in the window it left",
+          r["after"] == [1, 1] and r["same"] and not r["doubled"] and not r["misplaced"], str(r))
     r = m.js(H + """
       const byKey = Object.fromEntries((await storage("%s", ["essentials"])).essentials.map(e => [e.key, e.name || e.title]));
       const w = other(), copies = w.gBrowser.tabs.filter(t => t.pinned && !t.linkedPanel && ek(w, t));
       return {copies: copies.length, wrong: copies.filter(t => t.label !== byKey[ek(w, t)]).map(t => [t.label, byKey[ek(w, t)]])};""" % EXT_ID)
     check("unloaded essentials show their name", r["copies"] > 0 and not r["wrong"], str(r))
+    essential_title(m)
+
+
+def set_title(m, address, title):
+    """Set the title of the (loaded) page at `address`, in its own tab."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    try:
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if m.cmd("WebDriver:GetCurrentURL") == address:
+                m.cmd("WebDriver:ExecuteScript", {"script": "document.title = arguments[0];", "args": [title]})
+                return True
+        return False
+    finally:
+        m.chrome()
+
+
+def essential_title(m):
+    # An essential's name follows its page, but only on its own site: a page on
+    # another site (a sign-in it redirects to) does not rename it.
+    stored = H + """const k = args[0]; return (await storage("%s", ["essentials"])).essentials.find(e => e.key === k)?.title;""" % EXT_ID
+    k = m.js(H + """
+      const w = main(), e = w.gBrowser.tabs.find(t => t.pinned && ek(w, t) && t.userContextId === 1), k = ek(w, e);
+      w.__beforeTitleTest = w.gBrowser.selectedTab; w.gBrowser.selectedTab = e; await wait(4000);
+      w.__essentialHome = url(e);
+      w.gBrowser.selectedTab.linkedBrowser.loadURI(Services.io.newURI("https://example.com/?smoke-sign-in"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()});
+      await wait(4000); return k;""")
+    before = m.js(stored, k)
+    other_site = set_title(m, "https://example.com/?smoke-sign-in", "Smoke sign-in")
+    time.sleep(2)
+    after_other = m.js(stored, k)
+    home = m.js(H + """const w = main(), t = w.gBrowser.selectedTab;
+      t.linkedBrowser.loadURI(Services.io.newURI(w.__essentialHome), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()});
+      await wait(4000); return w.__essentialHome;""")
+    own_site = set_title(m, home, "Smoke own title")
+    time.sleep(2)
+    after_own = m.js(stored, k)
+    set_title(m, home, before or "Example Domain")
+    m.js(H + """const w = main(); if (w.__beforeTitleTest && !w.__beforeTitleTest.closing) w.gBrowser.selectedTab = w.__beforeTitleTest; await wait(2000); return 1;""")
+    check("an essential is not renamed by a page on another site (a sign-in), but is by its own",
+          other_site and own_site and after_other == before and after_own == "Smoke own title", f"{before!r} -> {after_other!r} -> {after_own!r}")
 
 
 def folders(m):
@@ -516,7 +579,7 @@ def live_folders(m):
         const before = group ? run.slice(0, run.indexOf(group)) : [];
         out.push({group: !!group, inFolder: prs.filter(t => group && t.openerTab === group).map(t => t.label.replace(/^.*Pull/, "Pull")).sort(),
                   outside: prs.filter(t => !group || t.openerTab !== group).map(t => t.label),
-                  loaded: prs.filter(t => t.linkedPanel && !t.selected).map(t => t.label),
+                  loaded: prs.filter(t => t.linkedPanel && !t.hasAttribute("pending") && !t.selected).map(t => t.label),  // pending: not loaded yet
                   first: before.every(t => isGroup(t) || (t.openerTab && isGroup(t.openerTab))),
                   space: !!group && sbPanel(w, group) === pf["firefox-container-2"]});
       }
@@ -544,8 +607,61 @@ def live_folders(m):
     fourth = m.js(state)
     check("a renamed pull request's unloaded tabs take the new title",
           all(w["inFolder"] == ["Pull request 3 renamed"] and not w["loaded"] for w in fourth), str(fourth))
+    # A search that fails (gh logged out, no network) changes nothing.
+    json.dump({"folders": [{"id": "smoke", "name": "Smoke PRs", "container": "firefox-container-2"}], "items": {}}, open(m.fake_prs, "w"))
+    extension_message(m, {"type": "refreshLiveFolders"})
+    time.sleep(3)
+    fifth = m.js(state)
+    content = lambda ws: [(w["group"], w["inFolder"], w["outside"]) for w in ws]
+    check("a failed search leaves the live folder as it was", content(fifth) == content(fourth), f"{fourth} -> {fifth}")
     json.dump({}, open(m.fake_prs, "w"))
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
+
+
+def many_tabs(m):
+    # Closer to a real setup (yours has about 30 essentials and 50 tabs): ten
+    # more essentials and thirty more tabs over the three spaces, then a new
+    # window, which must get them all, in their spaces, unloaded.
+    r = m.js(H + """
+      const w = main();
+      for (let i = 0; i < 30; i++) { w.gBrowser.addTrustedTab("https://example.org/?smoke-many-" + i, {userContextId: 1 + i % 3, inBackground: true}); await wait(150); }
+      await wait(4000);
+      for (let i = 0; i < 10; i++) {
+        const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-many-e" + i, {userContextId: 1 + i % 3, inBackground: true});
+        await wait(1500); w.gBrowser.pinTab(t); await wait(500);
+      }
+      await wait(6000);
+      const pinned0 = w.gBrowser.tabs.filter(t => t.pinned).length, want = w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length;
+      const t0 = Date.now(), n = w.OpenBrowserWindow(); n.__extra = true;
+      let ms = null;
+      try {
+        for (let i = 0; i < 100 && !n.gBrowser; i++) await wait(100);
+        for (let i = 0; i < 300 && ms === null; i++) {
+          await wait(100);
+          if (n.gBrowser.tabs.filter(t => t.pinned).length >= pinned0 && n.gBrowser.tabs.filter(t => !t.pinned && role(n, t)).length >= want) ms = Date.now() - t0;
+        }
+        const loaded = () => n.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html"));
+        const await_pf = await panelFor();
+        for (let i = 0; i < 60 && (i < 16 || loaded().length); i++) await wait(250);
+        return {ms, essentials: [pinned0, n.gBrowser.tabs.filter(t => t.pinned).length], tabs: [want, n.gBrowser.tabs.filter(t => !t.pinned && role(n, t)).length],
+                stillLoaded: loaded().length, misplaced: {main: await misplaced(w), other: await misplaced(other()), new: await misplaced(n)},
+                strip: [w, n].map(x => { const pf = await_pf, runs = [];
+                  for (const t of x.gBrowser.tabs) { if (t.pinned) continue; const cell = t.userContextId + ":" + (Object.entries(pf).find(([, id]) => id === sbPanel(x, t))?.[0].slice(-1) ?? "?");
+                    if (runs.length && runs[runs.length - 1][0] === cell) runs[runs.length - 1][1]++; else runs.push([cell, 1]); }
+                  return runs.map(([c, k]) => c + "x" + k).join(" "); })};
+      } finally {
+        await close(n);
+        // Unpinning one copy removes an essential everywhere; then the tabs go.
+        for (const t of w.gBrowser.tabs.filter(t => t.pinned && url(t).includes("smoke-many"))) w.gBrowser.unpinTab(t);
+        await wait(4000);
+        await removeWhere((x, t) => !t.pinned && url(t).includes("smoke-many"));
+      }""")
+    check(f"with {r['essentials'][0]} essentials and {r['tabs'][0]} tabs, a new window gets them all ({r['ms']} ms)",
+          r["ms"] is not None and r["essentials"][0] == r["essentials"][1] and r["tabs"][0] == r["tabs"][1], str(r))
+    check("with that many, every tab is in its container's space in every window, and the placeholders unload",
+          not any(r["misplaced"].values()) and not r["stillLoaded"], str(r), sidebery_bug="pin race")
+    left = m.js(H + """await wait(2000); return wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("smoke-many") || (t.pinned && !ek(w, t))).map(t => t.label));""")
+    check("and they are all gone again once closed", all(not x for x in left), str(left))
 
 
 def handover(m):
@@ -584,6 +700,66 @@ def reopened_window(m):
           and r["pinned"][0] == r["pinned"][1], str(r))
 
 
+def restart(m):
+    # Quitting and starting Firefox again restores both windows with their
+    # tabs' Kitsune values: the same essentials and tabs in each, one live tab
+    # each, folders with their tabs, every tab in its space, and tab sync and
+    # new windows work as before.
+    if not m.can_restart:
+        print("SKIP  restart (Kitsune is a temporary add-on here, which Firefox removes when it quits; "
+              "runs where unsigned add-ons are allowed, as in Developer Edition, or with --xpi)", flush=True)
+        return
+    snap = H + """
+      const out = [];
+      for (const w of wins()) {
+        const tabs = w.gBrowser.tabs;
+        out.push({essentials: tabs.filter(t => t.pinned).map(t => ek(w, t) || "untagged " + t.label),
+                  keys: tabs.filter(t => !t.pinned && key(w, t)).map(t => key(w, t)).sort(),
+                  live: tabs.filter(t => !t.pinned && role(w, t) === "live").map(t => key(w, t)),
+                  untagged: tabs.filter(t => !t.pinned && !key(w, t)).map(t => t.label + " " + url(t).slice(0, 60)),
+                  inFolders: tabs.filter(t => /fixture-in-folder/.test(t.label + url(t)) && !(t.openerTab && url(t.openerTab).includes("/sidebery/group.html"))).map(t => t.label),
+                  wrong: await misplaced(w)});
+      }
+      const order = w => JSON.stringify([w.keys, w.essentials, w.untagged]);
+      out.sort((a, b) => order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0);
+      const synced = Object.keys((await storage("%s", ["syncedTabs"])).syncedTabs).length;
+      return {windows: out, synced};""" % EXT_ID
+    m.js(H + """const w = main().OpenBrowserWindow(); for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100); await wait(9000); return 1;""")
+    before = m.js(snap)
+    t0 = time.time()
+    m.restart()
+    # Kitsune starts 5 s after Firefox (onStartup), then fills in what is missing.
+    m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(15000); return 1;""")
+    after = m.js(snap)
+    print(f"INFO  restarted in {round(time.time() - t0)} s: {len(before['windows'])} -> {len(after['windows'])} windows", flush=True)
+    bw, aw = before["windows"], after["windows"]
+    check("after a restart, both windows have the same essentials and tabs as before",
+          len(aw) == len(bw) == 2 and all(w["essentials"] and w["keys"] for w in bw) and [w["essentials"] for w in aw] == [w["essentials"] for w in bw]
+          and [w["keys"] for w in aw] == [w["keys"] for w in bw] and after["synced"] == before["synced"],
+          f"before {[(len(w['essentials']), len(w['keys'])) for w in bw]} {before['synced']}, after {[(len(w['essentials']), len(w['keys'])) for w in aw]} {after['synced']}")
+    lives = sorted(k for w in aw for k in w["live"])
+    check("after a restart, every tab is live in one window only, and no other tab came or went",
+          len(lives) == len(set(lives)) and sorted(w["untagged"] for w in aw) == sorted(w["untagged"] for w in bw),
+          f"doubled {[k for k in lives if lives.count(k) > 1][:3]}, others before {[w['untagged'] for w in bw]}, after {[w['untagged'] for w in aw]}")
+    check("after a restart, folders keep their tabs and every tab is in its container's space",
+          all(not w["inFolders"] and not w["wrong"] for w in aw), str([(w["inFolders"][:3], w["wrong"][:3]) for w in aw]))
+    # Tab sync works as before: a new tab gets a ghost in the other window.
+    r = m.js(H + """
+      const [a] = wins(); const t = a.gBrowser.addTrustedTab("https://example.org/?smoke-after-restart", {userContextId: 1, inBackground: true});
+      await wait(5000); const k = key(a, t), got = find(k);
+      await removeWhere((w, x) => key(w, x) === k);
+      return got;""")
+    check("after a restart, a new tab gets a ghost in the other window", sorted(r) == [["ghost/unloaded"], ["live/loaded"]], str(r))
+    r = m.js(H + """
+      const [a] = wins(), pinned0 = a.gBrowser.tabs.filter(t => t.pinned).length, want = a.gBrowser.tabs.filter(t => !t.pinned && role(a, t)).length;
+      const w = a.OpenBrowserWindow(); for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);
+      await wait(8000);
+      const got = [w.gBrowser.tabs.filter(t => t.pinned).length, w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length];
+      await close(w);
+      return {want: [pinned0, want], got};""")
+    check("after a restart, a new window gets all essentials and tabs", r["want"] == r["got"], str(r))
+
+
 def main():
     xpi = None
     if "--xpi" in sys.argv:
@@ -597,7 +773,7 @@ def main():
         sidebery_version = m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
           return (await AddonManager.getAddonByID(args[0])).version;""", SIDEBERY_ID)
         print(f"Sidebery {sidebery_version}", flush=True)
-        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, handover, reopened_window):
+        for group in (external_links, new_window, more_windows, essentials, folders, tab_sync, ghost_title, pinned_ghost, orphans, popups, archiving, shortcuts, look, live_folders, many_tabs, handover, reopened_window, restart):
             try:
                 group(m)
             except Exception:

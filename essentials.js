@@ -146,6 +146,10 @@ async function ensureAllWindows() {
 // or a live folder tab never opened) stands for its synced tab's page; tab
 // sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
+  // An essential dragged to another window arrives there as a pinned tab, as
+  // if it was just pinned; it is still the same essential (see onAttached).
+  const known = keyByTab.get(tab.id);
+  if (known && (await getList()).some(e => e.key === known)) { await tagTab(tab.id, known); return; }
   let { url, title, favIconUrl: icon } = tab;
   if (isGhostUrl(url)) {
     const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
@@ -290,11 +294,32 @@ async function sortEssentials(windowId, list) {
   }
 }
 
-// An essential dragged to another window: fill the gap in the window it left.
+// An essential dragged to another window: fill the gap in the window it left,
+// and in the window it came to, where it now is twice, keep the one you
+// brought (it may be loaded) and put it in the copy's place.
 browser.tabs.onDetached.addListener((tabId, info) => {
   if (!keyByTab.has(tabId)) return;
   serial(() => ensureWindow(info.oldWindowId));
 });
+browser.tabs.onAttached.addListener((tabId, info) => {
+  if (!keyByTab.has(tabId) || busy.has(tabId)) return;
+  serial(() => dropDoubleCopies(tabId, info.newWindowId));
+});
+
+async function dropDoubleCopies(tabId, windowId) {
+  const key = keyByTab.get(tabId);
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!key || !tab?.pinned) return;
+  await tagTab(tabId, key); // a tab dragged from the tab bar may arrive without its sessions values
+  const pinned = await browser.tabs.query({ windowId, pinned: true });
+  const keys = await Promise.all(pinned.map(keyOf));
+  const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
+  if (!doubles.length) return;
+  doubles.forEach(id => busy.add(id));
+  await browser.tabs.remove(doubles).catch(() => {});
+  await forgetClosedPlaceholders("essential", [key]);
+  await sortEssentials(windowId, await getList());
+}
 
 // Startup is driven from tabsync.js, so both features start in one order.
 async function startEssentials() {
