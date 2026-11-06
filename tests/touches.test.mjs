@@ -43,7 +43,8 @@ test("a tooltip is the title, then the address without its query part", async ()
   const tip = (t, entry) => x.ctx.tabTip({ title: "", ...t }, entry);
   assert.equal(tip({ url: "https://a.example/board?token=secret&x=1", title: "Board" }), "Board\nhttps://a.example/board");
   assert.equal(tip({ url: "https://a.example/mail#inbox", title: "Mail" }), "Mail\nhttps://a.example/mail#inbox", "only the query part goes");
-  assert.equal(tip({ url: "https://a.example/a?b#c", title: "A" }), "A\nhttps://a.example/a");
+  assert.equal(tip({ url: "https://a.example/a?b#c", title: "A" }), "A\nhttps://a.example/a#c");
+  assert.equal(tip({ url: "https://a.example/#/route?b", title: "A" }), "A\nhttps://a.example/#/route");
   x.kill();
 });
 

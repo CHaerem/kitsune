@@ -1535,6 +1535,14 @@ def alone_touches(m):
         out.record = {own: (await page.browser.tabs.get(id)).favIconUrl ?? null, image: !!record.querySelector(icon), letter: !!record.querySelector(".letter")};
       }
 
+      // A page changing its address and nothing else, as some do as you scroll: the tooltip
+      // follows, and the row is not drawn again, which could lose a click or a drag under way.
+      const parts = () => [...warm.children];
+      const before = parts();
+      await page.browser.tabs.update(out.warmId, {url: pages + "/icon?warm#further"});
+      await until(() => warm.title.endsWith("/icon#further"), 5000);
+      out.addressOnly = {tip: warm.title, same: parts().every((e, i) => e === before[i])};
+
       // On another site the record's icon is the old site's, which says something untrue.
       const cross = await until(async () => { const r = await rowOf("/icon?cross"); return r?.querySelector(icon) && r; });
       if (cross) {
@@ -1589,6 +1597,7 @@ def alone_touches(m):
     check("a placeholder's tooltip shows its title and real address, without the query part", r.get("ghostTip") == f"Touched\n{m.pages}/icon", str(r))
     check("an essential's tooltip shows its address, without the query part", "\nhttps://example.org/" in (r.get("tileTip") or "") and "?" not in r["tileTip"], str(r))
     check("a page with no icon keeps the one in the record, not a letter", r.get("record") == {"own": None, "image": True, "letter": False}, str(r))
+    check("an address changing alone changes the tooltip and draws nothing again", (r.get("addressOnly") or {}).get("same") is True and r["addressOnly"]["tip"].endswith("/icon#further"), str(r))
     check("a page on another site with no icon has a letter, not the old site's icon, and the new address", (r.get("cross") or {}).get("letter") is True and r["cross"]["image"] is False and r["cross"]["tip"].endswith("localhost:" + m.pages.rsplit(":", 1)[1] + "/no-icon"), str(r))
     check("a slow load shows nothing at first, and on the icon after half a second", r.get("quietBefore") is True and r.get("shown") is True and r.get("shownAfter", 0) >= 500, str(r))
     a = r.get("animation") or {}

@@ -23,7 +23,7 @@ function tabTip(t, entry) {
   const placeholder = isGhostUrl(t.url);
   const url = (placeholder ? entry?.url : t.url) || "";
   const title = entry?.name || entry?.title || (placeholder ? "" : t.title) || "";
-  const bare = url.split("?")[0];
+  const bare = url.replace(/\?[^#]*/, "");
   const address = bare.length > TIP_ADDRESS_MAX ? bare.slice(0, TIP_ADDRESS_MAX) + "…" : bare;
   return (title === url || title === address ? [address] : [title, address]).filter(Boolean).join("\n");
 }
