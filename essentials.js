@@ -83,22 +83,22 @@ async function initList() {
 // sidebar there first (see fillWindow), so it is passed in.
 async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE_MS)) { // [{ entry, index }]
   const tabs = [];
-  for (const { entry, index } of items) {
-    // Refused if its container was removed while Tidier was not running. One bad
-    // entry must not keep a window from getting the others, or stop Tidier starting.
-    // (Without Sidebery a copy can be pinned from the start.)
-    const tab = await browser.tabs.create({
-      windowId, url: ghostUrl("essential", entry.key), active: false,
-      cookieStoreId: entry.cookieStoreId, index, ...(tidierAlone ? { pinned: true } : {}),
-    }).catch(err => { if (!isGone(err)) noteError(err); return null; });
-    if (!tab) continue;
-    busy.add(tab.id);
-    await tagTab(tab.id, entry.key);
-    tabs.push({ tab, entry });
-    await sleep(CREATE_GAP_MS);
-  }
-  if (!tabs.length) return;
   try {
+    for (const { entry, index } of items) {
+      // Refused if its container was removed while Tidier was not running. One bad
+      // entry must not keep a window from getting the others, or stop Tidier starting.
+      // (Without Sidebery a copy can be pinned from the start.)
+      const tab = await browser.tabs.create({
+        windowId, url: ghostUrl("essential", entry.key), active: false,
+        cookieStoreId: entry.cookieStoreId, index, ...(tidierAlone ? { pinned: true } : {}),
+      }).catch(err => { if (!isGone(err)) noteError(err); return null; });
+      if (!tab) continue;
+      busy.add(tab.id);
+      tabs.push({ tab, entry });
+      await tagTab(tab.id, entry.key);
+      await sleep(CREATE_GAP_MS);
+    }
+    if (!tabs.length) return;
     if (!tidierAlone) {
       await settle(tabs);
       await pinEssentialCopies(tabs);

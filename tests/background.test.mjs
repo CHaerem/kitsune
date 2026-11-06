@@ -992,3 +992,17 @@ test("a new tab page you pinned is an essential once it has an address", async (
   assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "the other window has it");
   x.kill();
 });
+
+test("a copy whose value is refused does not stay busy for good", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.run(10);
+  ff.refusePattern = /^sessions\.setTabValue$/;
+  ff.refuseRate = 1;
+  await ff.clock.idle(60000);
+  assert.ok(ff.refusals > 0);
+  assert.deepEqual([...x.js("busy")].filter(id => ff.list(b.id).some(y => y.id === id)), []);
+  x.kill();
+});
