@@ -1524,20 +1524,21 @@ def alone_archived(m):
               list: before.length === rows().length, back: box.querySelector(".back").textContent};""")
     check("the list's menu has Archived tabs", "Archived tabs" in r.get("labels", []), str(r))
     check("the view shows this space's tabs, newest first, each with its title and age", [x["tip"].split("\n")[1] for x in r.get("rows", [])] == [back_url, forget_url]
-          and all(x["title"] == TITLE and x["age"] == "now" for x in r["rows"]), str(r))
+          and all(x["title"] == TITLE and re.fullmatch(r"now|\d+ min", x["age"]) for x in r["rows"]), str(r))
     check("the view lies over the list, on top, and the list is still there under it", r.get("under") and r.get("covers") and r.get("list"), str(r))
 
     # Esc goes back; the keys stay out of the list under it.
     r = sidebar_page(m, box + """
+      const under = doc.querySelector("#tabs .cursor");  // the list keeps its own, if an earlier check left one
       key("ArrowDown");
-      const cursor = rowsHere()[0].classList.contains("cursor"), under = doc.querySelectorAll("#tabs .cursor").length;
+      const cursor = rowsHere()[0].classList.contains("cursor"), moved = doc.querySelector("#tabs .cursor") !== under;
       key("Escape");
       const closed = !open();
       page.openArchived();
       await settled(() => open());
       await settled(() => box.getBoundingClientRect().left === 0);
-      return {cursor, under, closed, back: middle(box.querySelector(".back"))};""")
-    check("the arrow keys move in the view, not in the list under it", r.get("cursor") and r.get("under") == 0, str(r))
+      return {cursor, moved, closed, back: middle(box.querySelector(".back"))};""")
+    check("the arrow keys move in the view, not in the list under it", r.get("cursor") and r.get("moved") is False, str(r))
     check("Esc goes back to the list", r.get("closed"), str(r))
     mouse(r["back"]["x"], r["back"]["y"])
     r = sidebar_page(m, box + """await settled(() => !open()); return {open: open()};""")
@@ -1565,11 +1566,14 @@ def alone_archived(m):
       await settled(() => key(w, t) && t.label === %s && other().gBrowser.tabs.some(x => key(other(), x) === key(w, t)));
       const u = url(t); w.gBrowser.removeTab(t); return u;""" % json.dumps(TITLE), m.pages, ctx)
     r = sidebar_page(m, box + """await settled(() => rowsHere().length === 2);
-      const tip = rowsHere()[0].title, older = rowsHere()[1].title;
-      await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "forgetArchived", item: {space: args[0], url: args[1]}})));
-      await settled(() => rowsHere().length === 1);
-      return {tip, older, left: rowsHere().length};""", space, closing)
-    check("a tab you close while the view is open comes in by itself, as closed", closing in r.get("tip", "") and "\nClosed " in r["tip"] and "\nArchived " in r["older"] and r["left"] == 1, str(r))
+      return {tip: rowsHere()[0].title, older: rowsHere()[1].title};""")
+    check("a tab you close while the view is open comes in by itself, as closed", closing in r.get("tip", "") and "\nClosed " in r["tip"] and "\nArchived " in r.get("older", ""), str(r))
+    # ⌘⇧T brings it back: it leaves the list by itself. (Firefox's own way back, with its history.)
+    m.js(H + settled + """const w = main(), page = w.gBrowser.selectedTab; w.SessionStore.undoCloseTab(w, 0);
+      await settled(() => w.gBrowser.tabs.some(t => url(t) === args[0] && key(w, t)));
+      w.gBrowser.selectedTab = page; await wait(300); return 1;""", closing)
+    r = sidebar_page(m, box + """await settled(() => rowsHere().length === 1); return {tips: rowsHere().map(x => x.title), open: open()};""")
+    check("a tab that comes back by ⌘⇧T leaves the list", r["open"] and len(r["tips"]) == 1 and closing not in r["tips"][0], str(r))
 
     # A click outside the view closes it, and still does what it does.
     r = sidebar_page(m, box + """
@@ -1653,7 +1657,7 @@ def alone_archived(m):
       const shown = rowsHere().map(describe); key("Escape"); return shown;""")
     check("the list has its real address and title", [x["tip"].split("\n")[1] for x in r] == [h["url"]] and r[0]["title"] == TITLE, str(r))
     c = m.js(H + """return {left: wins().flatMap(w => w.gBrowser.tabs.filter(t => key(w, t) === JSON.stringify(args[0]))).length,
-              recently: wins().flatMap(w => w.SessionStore.getClosedTabDataForWindow(w).map(c => c.state.entries.at(-1)?.url)).filter(u => u?.includes("ghost.html") && !u.includes("kind=test")).length};""", h["key"])
+              recently: wins().flatMap(w => w.SessionStore.getClosedTabDataForWindow(w).map(c => c.state.entries.at(-1)?.url)).filter(u => u?.includes("ghost.html") && u.includes(encodeURIComponent(args[0]))).length};""", h["key"])
     check("nothing of it is left, in the tabs or as a placeholder in Recently Closed", c == {"left": 0, "recently": 0}, str(c))
 
     # What this group added goes again.

@@ -62,7 +62,10 @@ function archivedRow(item) {
     const forget = el("button", "close", "×");
     forget.title = "Forget";
     forget.onclick = e => { e.stopPropagation(); forgetRow(item, row); };
-    row.replaceChildren(icon(item), el("span", "title", item.title), el("span", "age", age), forget);
+    // Up to 200 pictures from as many sites: only those that come into sight are fetched.
+    const picture = icon(item);
+    if (picture.tagName === "IMG") picture.loading = "lazy";
+    row.replaceChildren(picture, el("span", "title", item.title), el("span", "age", age), forget);
   }
   return row;
 }

@@ -94,7 +94,7 @@ function reopenArchived(item, windowId) {
       throw err;
     }
     await dropArchived(item.space, item.url);
-    await register(tab.id); // now, not when it has settled: the other windows get it at once
+    await register(tab.id).catch(noteError); // now, not when it has settled: the other windows get it at once
     const all = await getSynced(), entry = all[syncKeyByTab.get(tab.id)];
     if (entry && row.icon) { entry.icon = row.icon; saveSynced(all); } // Firefox has no way to give an unloaded tab one
     await browser.tabs.update(tab.id, { active: true });
