@@ -169,5 +169,5 @@ for (const event of ["onCreated", "onMoved", "onAttached", "onDetached"]) {
 }
 browser.tabs.onRemoved.addListener((tabId, info) => viewSoon(info.windowId));
 browser.tabs.onUpdated.addListener((tabId, change, tab) => { if (showsSpace(tab.windowId, tab.cookieStoreId)) viewSoon(tab.windowId); },
-  { properties: ["title", "favIconUrl", "status", "discarded", "audible", "mutedInfo", "pinned", "url", "hidden"] });
+  { properties: ["title", "favIconUrl", "status", "discarded", "audible", "mutedInfo", "pinned", "url"] }); // not "hidden": a switch of space hides hundreds of tabs one by one
 for (const event of ["onCreated", "onUpdated", "onRemoved"]) browser.contextualIdentities[event].addListener(viewAllSoon);

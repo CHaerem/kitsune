@@ -526,7 +526,7 @@ async function closeEverywhere(key, { dismiss = true } = {}) {
   const all = await getSynced();
   if (dismiss) await noteLiveFolderDismissed(all[key]);
   delete all[key];
-  lastRefresh.delete(key);
+  stopRefreshing(key);
   saveSynced(all);
   const reps = await repsNow(key);
   reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
@@ -547,6 +547,7 @@ async function dropIfUnused(key) {
   if ((await repsNow(key)).length) return;
   const all = await getSynced();
   delete all[key];
+  stopRefreshing(key);
   saveSynced(all);
 }
 
@@ -738,7 +739,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (change.pinned === true) {
     // Pinned tabs are essentials; they leave tab sync.
     serial(async () => {
-      const all = await getSynced(); delete all[key]; saveSynced(all);
+      const all = await getSynced(); delete all[key]; stopRefreshing(key); saveSynced(all);
       await clearRole(tabId);
       const others = (await repsNow(key)).filter(t => t.id !== tabId);
       others.forEach(t => { syncBusy.add(t.id); forget(t.id); });
@@ -763,7 +764,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       if (changed) refreshGhostsSoon(key);
     });
   }
-});
+}, { properties: ["url", "status", "pinned", "title", "favIconUrl"] }); // what is looked at above: Firefox sends a message for each other change, like every tab a switch of space hides
 
 // The live tab's title or icon changed: reload its ghosts so they show it.
 // Reloading a ghost only loads the local placeholder page, which unloads itself.
@@ -773,6 +774,12 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
 // stale while it changes.
 const REFRESH_DELAY_MS = 3000, REFRESH_GAP_MS = 60000;
 const refreshTimers = new Map(), lastRefresh = new Map();
+// The tab has gone: a timer left running would do nothing, up to a minute from now.
+function stopRefreshing(key) {
+  clearTimeout(refreshTimers.get(key));
+  refreshTimers.delete(key);
+  lastRefresh.delete(key);
+}
 function refreshGhostsSoon(key) {
   if (refreshTimers.has(key)) return; // the pending refresh will show the newest title
   const wait = Math.max(REFRESH_DELAY_MS, (lastRefresh.get(key) || 0) + REFRESH_GAP_MS - Date.now());

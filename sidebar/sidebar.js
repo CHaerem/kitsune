@@ -59,12 +59,19 @@ function keep(id, make, state, draw) {
   return e;
 }
 
+// A row that is drawn again gets a new image. One that has loaded comes straight from
+// Firefox's cache, so it does not blink. One not seen yet is asked for only once its row
+// comes near the view: with many tabs most rows are not. One that failed is not asked
+// for again: a site without an icon would otherwise be asked at every redraw.
+const iconsLoaded = new Set(), iconsFailed = new Set();
 function icon(item) {
-  if (item.icon && /^(https?:|data:|moz-extension:)/.test(item.icon)) {
+  if (item.icon && /^(https?:|data:|moz-extension:)/.test(item.icon) && !iconsFailed.has(item.icon)) {
     const img = el("img");
+    if (!iconsLoaded.has(item.icon)) img.loading = "lazy";
     img.src = item.icon;
     img.alt = "";
-    img.onerror = () => img.replaceWith(el("span", "letter", (item.title || "?").trim()[0] || "?"));
+    img.onload = () => iconsLoaded.add(item.icon);
+    img.onerror = () => { iconsFailed.add(item.icon); img.replaceWith(el("span", "letter", (item.title || "?").trim()[0] || "?")); };
     return img;
   }
   return el("span", "letter", (item.title || "?").trim()[0] || "?");

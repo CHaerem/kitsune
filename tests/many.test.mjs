@@ -428,6 +428,25 @@ test("a window that has gone is not kept in the order, also if a look comes late
   x.kill();
 });
 
+test("a page closed while its placeholders wait to be refreshed leaves no timer behind", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2), other = ff.addWindow();
+  const x = await alone(ff);
+  const live = ff.list(w.id)[0];
+  ff.tabs.get(live.id).title = "New title";
+  x.b.tabs.onUpdated.fire(live.id, { title: "New title" }, ff.snap(ff.tabs.get(live.id)));
+  await wait(100);
+  assert.equal(x.js("refreshTimers").size, 1, "a refresh is on its way");
+  ff.rm(live.id);
+  await wait(2000); // closing it, and what selecting another tab does
+  assert.equal(x.js("refreshTimers").size, 0);
+  const before = x.js("work.jobs");
+  await wait(4000); // the refresh would have come 3 s after the title
+  assert.equal(x.js("work.jobs"), before, "nothing comes later");
+  assert.equal(x.js("lastRefresh").size, 0);
+  x.kill();
+});
+
 test("a tab event with Tidier alone schedules no work that only Sidebery needs", async () => {
   const ff = new FakeFirefox();
   const w = manyTabs(ff, 4);

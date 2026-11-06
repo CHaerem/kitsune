@@ -1694,6 +1694,17 @@ def alone_many(m):
     loaded = m.js(H + """return wins().flatMap(w => w.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html"))).length;""")
     check("no placeholder is loaded", loaded == 0, str(loaded))
 
+    # A placeholder without a page still shows its page's title and icon, from the record.
+    number = int(space0.rsplit("-", 1)[1])
+    m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon", {userContextId: args[1], inBackground: true}); await wait(4000); return 1;""", m.pages, number)
+    r = sidebar_page(m, MANY_PAGE + """const row = [...doc.querySelectorAll("#tabs .tab")].find(x => x.querySelector(".title").textContent === "With an icon");
+      if (!row) return {missing: rows().slice(-3)};
+      row.scrollIntoView(); await wait(1500);
+      const img = row.querySelector("img");
+      return {unloaded: row.classList.contains("unloaded"), icon: img?.src.slice(0, 22), drawn: img?.naturalWidth};""")
+    check("a placeholder made without a page shows its page's title and icon", r.get("unloaded") and r.get("icon") == "data:image/png;base64," and r.get("drawn") == 16, str(r))
+    m.js(H + """await removeWhere((w, t) => url(t).endsWith("/icon")); return 1;""")
+
     # From the event to the sidebar showing it, and a view's build, one at a time.
     r = sidebar_page(m, MANY_PAGE + """
       const space = spaces().find(s => s.active).id, before = await ask({type: "stats"}), shown = [], gone = [];
@@ -1738,7 +1749,8 @@ def alone_many(m):
     # A page whose title ticks: nothing to do for a sidebar showing another space,
     # and at most a view per tick where it is shown.
     r = sidebar_page(m, MANY_PAGE + """
-      const here = spaces().find(s => s.active).id, away = spaces().find(s => !s.active).id, out = {};
+      // Away: the last space, which no window shows (the first ones may be another window's).
+      const here = spaces().find(s => s.active).id, away = spaces().filter(s => !s.active).at(-1).id, out = {};
       for (const [name, space] of [["away", away], ["here", here]]) {
         const tab = await page.browser.tabs.create(bg({windowId, cookieStoreId: space, url: args[0] + "/ticking", active: false}));
         await wait(3000);
