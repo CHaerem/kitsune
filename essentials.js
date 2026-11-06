@@ -26,7 +26,11 @@ const busy = new Set();
 const keyByTab = new Map();
 
 const getList = () => essentialsList.get();
-const setList = list => essentialsList.set(list);
+// Each space's essentials together, in the order the spaces first appear
+// (bySpace, tabsync.js): Sidebery shows pinned tabs by space, and when
+// Firefox starts it moves them so that each space's are together, which
+// would reorder essentials kept apart.
+const setList = list => essentialsList.set(bySpace(list, e => e.cookieStoreId));
 
 function tagTab(tabId, key) {
   keyByTab.set(tabId, key);
@@ -168,6 +172,7 @@ async function onPinned(tab) {
     setTimeout(() => busy.delete(tab.id), 1500);
   }
   for (const w of await normalWindows()) if (w.id !== tab.windowId) await ensureWindow(w.id);
+  await sortEssentials(tab.windowId, await getList()); // with the others of its space
 }
 
 // Essential removed (the tab was unpinned): remove the copies in other windows.
@@ -277,7 +282,8 @@ async function onEssentialMoved(windowId) {
   slots.forEach((slot, j) => { next[slot] = byKey.get(order[j]); });
   if (next.every((e, i) => e === list[i])) return;
   setList(next);
-  for (const w of await normalWindows()) if (w.id !== windowId) await sortEssentials(w.id, next);
+  // Every window, this one too: the list keeps each space's essentials together.
+  for (const w of await normalWindows()) await sortEssentials(w.id, await getList());
 }
 
 // Put a window's essentials in the list's order (pinned tabs come first).

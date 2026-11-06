@@ -804,6 +804,14 @@ def restart(m):
     check("after a restart, a new window gets all essentials and tabs", r["want"] == r["got"], str(r))
 
 
+# The windows whose essentials (pinned tabs) are not together by space, with
+# the containers of their pinned tabs in order.
+PINS_APART = """
+  return wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => t.userContextId))
+    .filter(cs => !cs.every((c, i) => i === 0 || c === cs[i - 1] || !cs.slice(0, i).includes(c)));"""
+apart_after = []
+
+
 def main():
     xpi = None
     if "--xpi" in sys.argv:
@@ -823,6 +831,13 @@ def main():
             except Exception:
                 check(f"{group.__name__} ran", False, traceback.format_exc(limit=2).strip().splitlines()[-1])
                 m.chrome()
+            # Sidebery sorts pinned tabs by space when Firefox starts, so
+            # essentials apart from their space would be reordered then.
+            apart = m.js(H + PINS_APART)
+            if apart:
+                apart_after.append((group.__name__, apart))
+                print(f"INFO  essentials apart from their space after {group.__name__}: {apart}", flush=True)
+    check("every window's essentials stay together by space", not apart_after, str(apart_after[:2]))
     print(f"\n{sum(results)}/{len(results)} passed in {round(time.time() - t0)} s"
           + (f" ({len(known)} known Sidebery bug)" if known else ""))
     sys.exit(0 if all(results) else 1)
