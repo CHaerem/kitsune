@@ -26,6 +26,8 @@ is reported as failed. It checks that:
     opens its page; an essential copy opens the real page in its container;
     an essential dragged to another window is there once, and comes back in
     the window it left;
+    an essential is renamed by its own page, but not by a page on another
+    site (a sign-in it redirects to);
   - a placeholder of a tab that no longer exists closes itself;
   - a popup window (as for signing in) is left out of tab sync;
   - unloaded essential copies show the essential's name;
@@ -42,8 +44,8 @@ is reported as failed. It checks that:
     address bar centred with its results under it, also in compact mode;
   - a live folder (with a stand-in for the native host) is in every window,
     first in its space, with its pull requests unloaded; a closed pull request
-    stays closed, one that leaves the search is removed everywhere, and a
-    renamed one takes its new title;
+    stays closed, one that leaves the search is removed everywhere, a
+    renamed one takes its new title, and a failed search changes nothing;
   - with ten more essentials and thirty more tabs, a new window still gets
     them all, in their spaces, and they all go when closed;
   - after Firefox is quit and started again, both windows come back with the
@@ -271,6 +273,47 @@ def essentials(m):
       const w = other(), copies = w.gBrowser.tabs.filter(t => t.pinned && !t.linkedPanel && ek(w, t));
       return {copies: copies.length, wrong: copies.filter(t => t.label !== byKey[ek(w, t)]).map(t => [t.label, byKey[ek(w, t)]])};""" % EXT_ID)
     check("unloaded essentials show their name", r["copies"] > 0 and not r["wrong"], str(r))
+    essential_title(m)
+
+
+def set_title(m, address, title):
+    """Set the title of the (loaded) page at `address`, in its own tab."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    try:
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if m.cmd("WebDriver:GetCurrentURL") == address:
+                m.cmd("WebDriver:ExecuteScript", {"script": "document.title = arguments[0];", "args": [title]})
+                return True
+        return False
+    finally:
+        m.chrome()
+
+
+def essential_title(m):
+    # An essential's name follows its page, but only on its own site: a page on
+    # another site (a sign-in it redirects to) does not rename it.
+    stored = H + """const k = args[0]; return (await storage("%s", ["essentials"])).essentials.find(e => e.key === k)?.title;""" % EXT_ID
+    k = m.js(H + """
+      const w = main(), e = w.gBrowser.tabs.find(t => t.pinned && ek(w, t) && t.userContextId === 1), k = ek(w, e);
+      w.__beforeTitleTest = w.gBrowser.selectedTab; w.gBrowser.selectedTab = e; await wait(4000);
+      w.__essentialHome = url(e);
+      w.gBrowser.selectedTab.linkedBrowser.loadURI(Services.io.newURI("https://example.com/?smoke-sign-in"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()});
+      await wait(4000); return k;""")
+    before = m.js(stored, k)
+    other_site = set_title(m, "https://example.com/?smoke-sign-in", "Smoke sign-in")
+    time.sleep(2)
+    after_other = m.js(stored, k)
+    home = m.js(H + """const w = main(), t = w.gBrowser.selectedTab;
+      t.linkedBrowser.loadURI(Services.io.newURI(w.__essentialHome), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()});
+      await wait(4000); return w.__essentialHome;""")
+    own_site = set_title(m, home, "Smoke own title")
+    time.sleep(2)
+    after_own = m.js(stored, k)
+    set_title(m, home, before or "Example Domain")
+    m.js(H + """const w = main(); if (w.__beforeTitleTest && !w.__beforeTitleTest.closing) w.gBrowser.selectedTab = w.__beforeTitleTest; await wait(2000); return 1;""")
+    check("an essential is not renamed by a page on another site (a sign-in), but is by its own",
+          other_site and own_site and after_other == before and after_own == "Smoke own title", f"{before!r} -> {after_other!r} -> {after_own!r}")
 
 
 def folders(m):
@@ -564,6 +607,12 @@ def live_folders(m):
     fourth = m.js(state)
     check("a renamed pull request's unloaded tabs take the new title",
           all(w["inFolder"] == ["Pull request 3 renamed"] and not w["loaded"] for w in fourth), str(fourth))
+    # A search that fails (gh logged out, no network) changes nothing.
+    json.dump({"folders": [{"id": "smoke", "name": "Smoke PRs", "container": "firefox-container-2"}], "items": {}}, open(m.fake_prs, "w"))
+    extension_message(m, {"type": "refreshLiveFolders"})
+    time.sleep(3)
+    fifth = m.js(state)
+    check("a failed search leaves the live folder as it was", fifth == fourth, f"{fourth} -> {fifth}")
     json.dump({}, open(m.fake_prs, "w"))
     m.js(H + """await removeWhere((w, t) => url(t).includes("group.html#Smoke%20PRs") || t.label.includes("Pull request ")); return 1;""")
 
