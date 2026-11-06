@@ -57,6 +57,7 @@ class World {
   allTabs() { return this.windows().flatMap(w => this.tabsOf(w)); }
   focused() { return this.ff.wins.get(this.ff.focused) ?? this.windows()[0]; }
   value(t, k) { return this.ff.values.get(t.id)?.[k]; }
+  keyOf(t) { return this.value(t, "syncKey") ?? this.x.js("syncKeyByTab").get(t.id); }
   newUrl() { const n = ++this.pageCounter; return `https://s${n % 4}.example/p${n}`; }
   read(code) { return this.clock.settled(this.x.js(code)); }
   // Learn what the record holds now, so that what later goes missing can be told apart.
@@ -81,7 +82,7 @@ class World {
   }
   // You closed `t`, or are about to.
   async closing(t) {
-    const key = this.value(t, "syncKey") ?? this.x.js("syncKeyByTab").get(t.id), all = await this.read("getSynced()");
+    const key = this.keyOf(t), all = await this.read("getSynced()");
     if (!key) {
       // Just being registered, perhaps: then it is only known by its address.
       this.closedAddresses.add(t.url);
@@ -170,7 +171,7 @@ const OPS = {
     // and a tab that is just being registered there has nothing to hand over to.
     for (const t of W.tabsOf(w)) {
       if (!W.x.js("started") && W.value(t, "syncKey")) W.excused.add(W.value(t, "syncKey"));
-      if (!W.value(t, "syncKey")) for (const [key, k] of W.known) if (k.urls.has(t.url)) W.excused.add(key);
+      if (!W.value(t, "syncRole")) W.closedAddresses.add(t.url);
     }
     W.ff.closeWindow(w.id);
   } },
@@ -183,7 +184,7 @@ const OPS = {
     const w = pick(W.windows(), a);
     const t = w && pick(W.tabsOf(w).filter(t => !t.pinned && !t.hidden && (isWeb(t.url) || isPlaceholder(t.url))), b);
     if (!t) return;
-    if (W.value(t, "syncKey")) W.excused.add(W.value(t, "syncKey"));
+    if (W.keyOf(t)) W.excused.add(W.keyOf(t));
     W.ff.pinTab(t);
   } },
   unpin: { weight: 3, async run(W, { a, b }) {
@@ -273,13 +274,13 @@ const OPS = {
   rowToSpace: { weight: 4, alone: true, run(W, { a, b, c }) {
     const w = pick(W.windows(), a), rows = w && W.shownRows(w.id), item = rows && pick(rows.tabs, b), t = item && W.ff.tabs.get(item.id);
     if (!t) return;
-    if (W.value(t, "syncKey")) W.excused.add(W.value(t, "syncKey"));
+    if (W.keyOf(t)) W.excused.add(W.keyOf(t));
     W.ff.sidebarSays(w.id, { type: "moveToSpace", tabId: item.id, space: pick(SPACES, c) });
   } },
   rowPin: { weight: 3, alone: true, run(W, { a, b }) {
     const w = pick(W.windows(), a), rows = w && W.shownRows(w.id), item = rows && pick(rows.tabs, b), t = item && W.ff.tabs.get(item.id);
     if (!t) return;
-    if (W.value(t, "syncKey")) W.excused.add(W.value(t, "syncKey"));
+    if (W.keyOf(t)) W.excused.add(W.keyOf(t));
     W.ff.sidebarSays(w.id, { type: "pin", tabId: item.id, pinned: true });
   } },
   tileMove: { weight: 4, alone: true, run(W, { a, b, c }) {

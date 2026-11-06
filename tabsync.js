@@ -395,6 +395,13 @@ async function register(tabId) {
     await reconcileAll();
     return;
   }
+  // An essential's copy, reopened from the moment it looked unpinned (a drag to another window):
+  // every window has its copy, so this one goes.
+  if (tab && !tab.pinned && placeholderOf(tab.url).kind === "essential") {
+    await removeTabs([tab.id], busy);
+    await forgetClosedPlaceholders("essential", [placeholderOf(tab.url).key]);
+    return;
+  }
   if (!tab || syncKeyByTab.has(tab.id) || !syncable(tab)) return;
   // Only tabs in ordinary windows: a sign-in popup (window.open) is not a tab
   // you keep, and pulling its tab into another window would break the sign-in.
@@ -539,6 +546,7 @@ async function dropIfUnused(key) {
 // The live tab's window is closing: a ghost in another window takes over.
 async function handOver(key, closingWindowId) {
   const reps = repsOf(key, await browser.tabs.query({})).filter(t => t.windowId !== closingWindowId);
+  if (reps.some(t => syncRoleByTab.get(t.id) === "live")) return; // dragged out of it just before
   if (reps.length) { await setRole(reps[0].id, key, "live"); return; }
   // No other window has it yet (one still being filled, say). It was the only copy now, so
   // they must get it, or the next start takes it for a tab you closed.

@@ -1411,3 +1411,20 @@ test("in the moment after an update Tidier alone knows it is alone", async () =>
   assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1, "with a copy in the other window");
   x.kill();
 });
+
+test("a window that closes after its live tab was dragged out does not make a second live tab", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  const third = ff.openWindow().window;
+  await ff.clock.idle(60000);
+  // Live in the first window, dragged to the second, then the first closes at once.
+  ff.moveTabs([t.id], { windowId: b.id, index: -1 });
+  ff.closeWindow(a.id);
+  await ff.clock.idle(60000);
+  const live = [...ff.tabs.values()].filter(y => ff.values.get(y.id)?.syncKey === key && ff.values.get(y.id)?.syncRole === "live");
+  assert.deepEqual(live.map(y => y.id), [t.id]);
+  assert.equal(ff.list(third.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1);
+  x.kill();
+});
