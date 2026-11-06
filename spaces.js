@@ -172,7 +172,7 @@ browser.tabs.onCreated.addListener(tab => {
   if (!isWeb(tab.url) && !isGhostUrl(tab.url)) firstPage.add(tab.id);
   if (tab.cookieStoreId !== NO_CONTAINER) return;
   newTabs.set(tab.id, Date.now());
-  setTimeout(() => { if (newTabs.delete(tab.id)) viewSoon(tab.windowId); }, REOPEN_WINDOW_MS);
+  setTimeout(() => { if (newTabs.has(tab.id)) serial(() => drawAfterAll(tab.id)); }, REOPEN_WINDOW_MS);
   if (tab.url === "about:newtab" || tab.url === "about:home") serial(() => intoSpace(tab.id));
 });
 browser.tabs.onUpdated.addListener((tabId, change) => {

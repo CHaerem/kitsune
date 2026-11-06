@@ -35,18 +35,21 @@ async function indexWhenReopened(tab, space) {
   return await besideOpener(tab, space) ? tab.index + 1 : topOfToday(tab.windowId, space);
 }
 
+async function toTopOfToday(tab, space) {
+  const index = await topOfToday(tab.windowId, space);
+  if (index < tab.index) await browser.tabs.move(tab.id, { index }).catch(() => {});
+}
+
 // A link from a tab drawn apart stays a tab of its own (PLAN.md, Choices made), and Firefox
 // puts it next to its opener in the window: in the middle of today's tabs, or at the end, out
 // of sight, since a tab moved into a folder lies last in the window. Moved at once, before the
 // view is drawn (VIEW_DEBOUNCE_MS), so there is no jump to see unless the queue is busy.
 browser.tabs.onCreated.addListener(tab => {
-  if (!tidierAlone || !started || tab.pinned || tab.openerTabId == null || tab.cookieStoreId === NO_CONTAINER) return;
+  if (!tidierAlone || !started || tab.pinned || tab.incognito || tab.openerTabId == null || tab.cookieStoreId === NO_CONTAINER) return;
   serial(async () => {
     if (await besideOpener(tab, tab.cookieStoreId)) return;
     const now = await browser.tabs.get(tab.id).catch(() => null);
-    if (!now || now.pinned) return;
-    const index = await topOfToday(now.windowId, now.cookieStoreId);
-    if (index < now.index) await browser.tabs.move(now.id, { index }).catch(() => {});
+    if (now && !now.pinned) await toTopOfToday(now, now.cookieStoreId);
   });
 });
 
@@ -54,8 +57,18 @@ browser.tabs.onCreated.addListener(tab => {
 // Firefox adds it at the end of the window, so its row would show there, selected, and
 // jump to the top when the new one comes: a link from another app takes a while to report
 // its address. (A page a container cannot have, such as about:addons, stays as it is.)
-// A blank tab that never gets an address is drawn after REOPEN_WINDOW_MS (spaces.js).
 const reopensSoon = t => newTabs.has(t.id) && (NEW_TAB_PAGES.has(t.url) || isWeb(t.url));
+
+// After REOPEN_WINDOW_MS (spaces.js) a tab that has not been opened again is drawn after all.
+// A slow site says nothing until it answers, so its address may still come, and then the tab
+// is opened again; or it never comes. Either way the row shows in the one place, not at the
+// end of the window, from where it would jump when the address comes.
+async function drawAfterAll(tabId) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (tab && reopensSoon(tab)) await toTopOfToday(tab, activeSpace.get(tab.windowId));
+  newTabs.delete(tabId);
+  if (tab) viewSoon(tab.windowId);
+}
 
 // Where another window's placeholder of `tabId` goes (`tabs`: every window's, from
 // tabs.query): before the same neighbour it has in its own window. A new tab page is

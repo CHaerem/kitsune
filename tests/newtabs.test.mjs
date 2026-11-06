@@ -34,9 +34,10 @@ const keysIn = (ff, windowId, space = C1) => ff.list(windowId).filter(t => t.coo
 
 // The sidebar's port, as sidebar.js opens it.
 function sidebar(x, windowId) {
-  const listeners = [];
-  x.b.runtime.onConnect.fire({ name: "sidebar", sender: { id: "tidier" }, onMessage: { addListener: f => listeners.push(f) }, onDisconnect: { addListener() {} }, postMessage() {} });
+  const listeners = [], views = [];
+  x.b.runtime.onConnect.fire({ name: "sidebar", sender: { id: "tidier" }, onMessage: { addListener: f => listeners.push(f) }, onDisconnect: { addListener() {} }, postMessage: v => views.push(v) });
   const send = msg => Promise.all(listeners.map(f => f(msg)));
+  send.views = views;
   return send({ type: "hello", windowId }).then(() => send);
 }
 
@@ -276,12 +277,81 @@ test("a tab about to be opened again is not drawn, so it does not jump; a page t
   const addons = created({ url: "about:addons" });
   await wait(50);
   assert.ok((await drawn()).includes(addons.id));
-  // A blank tab that never gets an address is drawn after all, without another event.
+  // A blank tab that never gets an address is drawn after all, without another event: the
+  // sidebar is sent a view by itself.
+  const send = await sidebar(x, w.id);
   const blank = created({ url: "about:blank" });
   await wait(50);
   assert.ok(!(await drawn()).includes(blank.id));
+  send.views.length = 0;
   await wait(3200);
-  assert.ok((await drawn()).includes(blank.id));
+  assert.equal(send.views.at(-1)?.tabs[0].id, blank.id, "in the one place");
+  x.kill();
+});
+
+test("a link that takes longer than the wait shows in the one place meanwhile, and stays there", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: folder() };
+  const w = ff.addWindow({ focused: true });
+  const [, a] = fill(ff, w, [["kept", C1, { parentKey: "F" }], ["a"], ["b"]]);
+  a.active = true;
+  const x = await start(ff);
+  const send = await sidebar(x, w.id);
+  const slow = ff.addTab(w.id, { url: "about:blank", active: true });
+  x.b.tabs.onCreated.fire(ff.snap(slow));
+  await wait(3200);
+  assert.equal(ff.tabs.get(slow.id).url, "about:blank", "still waiting for the site");
+  assert.equal(await firstDrawn(x, w.id), slow.id);
+  assert.equal(ff.index(slow), 1, "under the folder's tab");
+  send.views.length = 0;
+  ff.navigate(slow.id, "https://slow.example/");
+  await wait(300);
+  assert.ok(!ff.tabs.has(slow.id), "opened again in the space");
+  const made = ff.list(w.id)[1];
+  assert.equal(made.url, "https://slow.example/");
+  assert.equal(made.cookieStoreId, C1);
+  assert.equal(await firstDrawn(x, w.id), made.id);
+  x.kill();
+});
+
+test("a page that stays as it is keeps its place: nothing moves it after the wait", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const [a] = fill(ff, w, [["a"], ["b"]]);
+  a.active = true;
+  const x = await start(ff);
+  const addons = ff.addTab(w.id, { url: "about:addons" });
+  x.b.tabs.onCreated.fire(ff.snap(addons));
+  await wait(3200);
+  assert.equal(ff.index(addons), 2);
+  assert.ok(!ff.log.some(([what, id]) => what === "move" && id === addons.id));
+  assert.equal(x.js("newTabs").size, 0, "nothing is kept");
+  x.kill();
+});
+
+test("while a tab is opened again its row is not drawn, up to when it is gone", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const [a] = fill(ff, w, [["a"]]);
+  a.active = true;
+  const x = await start(ff);
+  const seen = new Set();
+  const link = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(link));
+  await wait(50);
+  // Whenever Tidier looks at the tabs on the way, so also in the middle of opening it again.
+  let looking = false;
+  ff.hooks.query = async () => {
+    if (looking) return;
+    looking = true;
+    for (const t of (await x.js("viewFor")(w.id)).tabs) seen.add(t.id);
+    looking = false;
+  };
+  ff.navigate(link.id, "https://link.example/");
+  await wait(300);
+  assert.ok(!ff.tabs.has(link.id), "it has been opened again");
+  assert.ok(seen.has(a.id), "the views were looked at");
+  assert.ok(!seen.has(link.id));
   x.kill();
 });
 
@@ -375,13 +445,17 @@ test("a link from a tab in another space's folder stays next to it: that tab is 
 
 test("with the setting off a link from a tab is never moved, wherever its opener is", async () => {
   const ff = new FakeFirefox();
-  ff.store.syncedTabs = { F: { group: true, url: "moz-extension://sidebery/group.html#Kept", title: "Kept", cookieStoreId: C1, parentKey: null, added: 1 } };
   const w = ff.addWindow({ focused: true });
-  const [a, , kept] = fill(ff, w, [["a"], ["b"], ["kept", C1, { parentKey: "F" }]]);
-  a.active = true;
+  const essential = ff.addTab(w.id, { pinned: true, url: "https://essential.example/", cookieStoreId: C1, active: true });
+  fill(ff, w, [["a"], ["b"]]);
   const x = await start(ff, { alone: false });
-  const link = await linkFrom(ff, x, w, kept, "https://from-folder.example/");
-  assert.equal(ff.index(link), ff.index(kept) + 1);
-  assert.ok(!ff.log.some(([what, id]) => what === "move" && id === link.id));
+  const first = await linkFrom(ff, x, w, essential, "https://one.example/");
+  // Firefox puts the next one after the last link from the same tab: with Tidier alone, the
+  // one place would be above it.
+  const second = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1, openerTabId: essential.id, index: ff.index(first) + 1 });
+  x.b.tabs.onCreated.fire(ff.snap(second));
+  await wait(100);
+  assert.equal(ff.index(second), ff.index(first) + 1);
+  assert.ok(!ff.log.some(([what, id]) => what === "move" && id === second.id));
   x.kill();
 });

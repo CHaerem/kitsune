@@ -1532,9 +1532,21 @@ def alone_new_tab(m):
     check("the other window has the link in the same place", s["me"] and s["main"] == s["other"], str(s))
     check("the link is in the space", s["ctx"] == t["ctx"], str(s))
 
+    # A site that takes long to answer: the row shows after a while, in the same place, and stays there.
+    before = r["after"]
+    m.js(H + """sT(() => { const t = main().gBrowser.addTrustedTab("about:blank", {inBackground: false});
+      sT(() => t.linkedBrowser.loadURI(Services.io.newURI("https://example.org/?smoke-newtab-slow"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()}), 4500); }, 3000); return 1;""")
+    r = sidebar_page(m, new_first, before)
+    check("a link that takes long shows first among today's while it waits", r["after"][1:] == r["before"] and r["jumped"] == 0, str(r))
+    r = sidebar_page(m, rows + """const waiting = args[0];
+      await settled(() => ids()[0] !== waiting);
+      return {waiting, after: ids(), active: plainTabs()[0].classList.contains("active")};""", r["after"][0])
+    check("and is still first once the site answers", r["after"][1:] == before and r["active"], str(r))
+    before = r["after"]
+
     # A link from a tab: Firefox puts it next to that tab, in its container, and there it stays, in both windows.
     s = m.js(H + settled + """const first = main(), space = first.gBrowser.selectedTab.userContextId;
-      const from = first.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === space && url(t).includes("smoke-newtab-") && !url(t).includes("-link") && !url(t).includes("-button"))[1];
+      const from = first.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === space && url(t).includes("smoke-newtab-") && !/-(link|button|slow)/.test(url(t)))[1];
       first.gBrowser.selectedTab = from; await settled(() => from.selected); await wait(300);
       const t = first.gBrowser.addTrustedTab("https://example.org/?smoke-newtab-from-tab", {relatedToCurrent: true, inBackground: true});
       """ + both_orders.replace("return {", "return {beside: first.gBrowser.tabs.indexOf(t) === first.gBrowser.tabs.indexOf(from) + 1, opener: key(first, from), "))
