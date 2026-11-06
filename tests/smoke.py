@@ -1473,19 +1473,32 @@ def alone_live_folders(m):
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
 
 
-def sidebar_click(m, find):
-    """A real click on what the expression `find` gives in the sidebar page: Firefox itself decides what is under the pointer."""
+def sidebar_press(m, find):
+    """Press the real mouse button on what the expression `find` gives in the sidebar page, and leave it down. Returns how to let go: there, or at x, y. Until then nothing else may be sent to Firefox: Marionette forgets the press when it changes context."""
     at = sidebar_page(m, f"""const e = {find}; if (!e) return null;
       const box = e.getBoundingClientRect(); return {{x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2)}};""")
     if not at:
-        return False
+        return None
     m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("/sidebar/sidebar.html")); w.focus();
       if (w.gBrowser.selectedTab !== t) { w.gBrowser.selectedTab = t; await wait(500); } return 1;""")
     switch_to_page(m, "/sidebar/sidebar.html")
-    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
-        {"type": "pointerMove", "duration": 0, "x": at["x"], "y": at["y"]}, {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
-    m.cmd("WebDriver:ReleaseActions")
-    m.chrome()
+    mouse = lambda *actions: m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": list(actions)}]})
+    mouse({"type": "pointerMove", "duration": 0, "x": at["x"], "y": at["y"]}, {"type": "pointerDown", "button": 0})
+
+    def let_go(x=None, y=None):
+        mouse(*([{"type": "pointerMove", "duration": 0, "x": x, "y": y}] if x is not None else []), {"type": "pointerUp", "button": 0})
+        m.cmd("WebDriver:ReleaseActions")
+        m.chrome()
+    return let_go
+
+
+def sidebar_click(m, find, hold=0):
+    """A real click on what the expression `find` gives in the sidebar page: Firefox itself decides what is under the pointer. `hold`: seconds between press and release."""
+    let_go = sidebar_press(m, find)
+    if not let_go:
+        return False
+    time.sleep(hold)
+    let_go()
     return True
 
 
@@ -1520,6 +1533,12 @@ def alone_sound(m):
       const dot = id => doc.querySelector(`#spaces .space[data-space="${id}"]`);
       const until = async (f, ms = 8000) => { for (let i = 0; i < ms / 100; i++) { if (f()) return true; await wait(100); } return false; };
       const box = e => { const b = e.getBoundingClientRect(); return [b.left, b.top, b.width, b.height].map(Math.round); };
+      // Where things are, also inside a tile, a row, a closed head and a dot: their
+      // own box stays the same whatever is in them.
+      const places = away => { const t = tile("sound tile"), r = row("sound row"), h = head("Sound folder"), d = dot(away);
+        return {tile: box(t), tileIcon: box(t.querySelector("img, .letter")), row: box(r), rowIcon: box(r.querySelector("img, .letter")), titleLeft: box(r.querySelector(".title"))[0],
+                close: box(r.querySelector(".close")), head: box(h), headTitleLeft: box(h.querySelector(".title"))[0], countRight: Math.round(h.querySelector(".count").getBoundingClientRect().right),
+                space: box(d), dot: box(d.querySelector(".dot"))}; };
     """
     # In this window everything is a placeholder, and a folder is closed with a tab in it.
     r = sidebar_page(m, FIND + """
@@ -1533,7 +1552,7 @@ def alone_sound(m):
       fold();
       await until(() => head("Sound folder").parentElement.classList.contains("collapsed"));
       return {tile: !!tile("sound tile"), row: !!row("sound row"), unloaded: row("sound row").classList.contains("unloaded") && tile("sound tile").classList.contains("unloaded"),
-              marks: doc.querySelectorAll(".sound").length, boxes: {tile: box(tile("sound tile")), row: box(row("sound row")), dot: box(dot(args[1])), head: box(head("Sound folder"))}};""", here, away)
+              marks: doc.querySelectorAll(".sound").length, boxes: places(args[1])};""", here, away)
     check("with nothing playing there is no mark anywhere", r["marks"] == 0, str(r))
     check("this window has only placeholders of those tabs", r["tile"] and r["row"] and r["unloaded"], str(r))
     before = r["boxes"]
@@ -1548,7 +1567,7 @@ def alone_sound(m):
               dotAway: !!dot(away).querySelector(".sound"), dotHere: !!dot(here).querySelector(".sound"), silentDots: [...doc.querySelectorAll("#spaces .space")].filter(b => b.querySelector(".sound")).length,
               onlyThose: [...doc.querySelectorAll(".sound")].length, svg: !!tile("sound tile").querySelector(".sound svg"), emoji: /[\\u{1F500}-\\u{1F5FF}]/u.test(doc.body.textContent),
               insideTile: inside(tile("sound tile"), tile("sound tile").querySelector(".sound")), insideDot: inside(dot(away), dot(away).querySelector(".sound")),
-              boxes: {tile: box(tile("sound tile")), row: box(row("sound row")), dot: box(dot(away)), head: box(head("Sound folder"))}};""", here, away)
+              boxes: places(away)};""", here, away)
     check("the sound of a page in another window shows on an essential's tile", r["tile"] and r["svg"] and r["insideTile"], str(r))
     check("and on a tab's row, drawn and not as an emoji", r["row"] and not r["emoji"], str(r))
     check("and on the head of a closed folder it is in", r["head"], str(r))
@@ -1560,8 +1579,17 @@ def alone_sound(m):
         return m.js(H + SOUND + """const a = main(), b = other();
           return {selected: [a.gBrowser.selectedTab.label, b.gBrowser.selectedTab.label], muted: Object.fromEntries(["sound tile", "sound row", "sound inside"].map(n => [n, real(n).muted])),
                   windows: Object.fromEntries(["sound tile", "sound row", "sound inside", "sound away"].map(n => [n, winOf(real(n)) === b ? "other" : "main"]))};""")
+
+    def state_until(test):
+        for _ in range(40):
+            s = state()
+            if test(s):
+                break
+            time.sleep(0.2)
+        return s
     ok = sidebar_click(m, '[...doc.querySelectorAll("#essentials .tile")].find(e => e.title === "sound tile")?.querySelector(".sound")')
-    time.sleep(1)
+    state_until(lambda s: s["muted"]["sound tile"])
+    time.sleep(0.5)  # a selection, if the click went on to the tile, would have come with it
     s0 = state()
     r = sidebar_page(m, FIND + """await until(() => tile("sound tile").querySelector(".sound.muted"));
       return {muted: !!tile("sound tile").querySelector(".sound.muted"), title: tile("sound tile").querySelector(".sound").title, active: tile("sound tile").classList.contains("active"), row: !!row("sound row").querySelector(".sound.muted")};""")
@@ -1569,13 +1597,12 @@ def alone_sound(m):
     check("and does not select it", not r["active"] and s0["selected"][0].startswith("Tidier") and s0["selected"][1] != "sound tile", str((r, s0)))
     check("the tile then offers to unmute, and only it changed", r["muted"] and r["title"] == "Unmute" and not r["row"], str(r))
     sidebar_click(m, '[...doc.querySelectorAll("#essentials .tile")].find(e => e.title === "sound tile")?.querySelector(".sound")')
-    time.sleep(1)
-    check("a second click unmutes it", state()["muted"]["sound tile"] is False, str(state()))
+    s = state_until(lambda s: not s["muted"]["sound tile"])
+    check("a second click unmutes it", s["muted"]["sound tile"] is False, str(s))
     # The row's and the closed head's.
     ok = sidebar_click(m, '[...doc.querySelectorAll("#tabs .tab")].find(e => e.title === "sound row")?.querySelector(".sound")')
     ok2 = sidebar_click(m, '[...doc.querySelectorAll("#tabs .head")].find(e => e.title === "Sound folder")?.querySelector(".sound")')
-    time.sleep(1)
-    s1 = state()
+    s1 = state_until(lambda s: s["muted"]["sound row"] and s["muted"]["sound inside"])
     r = sidebar_page(m, FIND + """await until(() => head("Sound folder").querySelector(".sound.muted"));
       return {collapsed: head("Sound folder").parentElement.classList.contains("collapsed"), mark: !!head("Sound folder").querySelector(".sound.muted"), dotHere: !!dot(args[0]).querySelector(".sound")};""", here)
     check("a click on a row's mark on a placeholder mutes the real tab", ok and s1["muted"]["sound row"] and s1["windows"]["sound row"] == "other", str(s1))
@@ -1589,18 +1616,19 @@ def alone_sound(m):
     if not idle["alarms"]:
         check("while something plays, Tidier does nothing", idle["jobs"] == 0 and idle["views"] == 0, str(idle))
 
-    # A click on a dot itself switches, as always; on its mark it goes to the tab.
+    # A click on a dot itself switches, as always; on its mark it goes to the tab. The
+    # bar notes a click that reaches it: one on the mark must end there, or it switches too.
+    sidebar_page(m, """doc.getElementById("spaces").addEventListener("click", () => { doc.documentElement.dataset.barClicked = "1"; }); return 1;""")
     sidebar_click(m, f"""doc.querySelector('#spaces .space[data-space="{away}"] .dot')""")
-    r = sidebar_page(m, FIND + """await until(() => dot(args[0]).classList.contains("active"), 3000); return {active: dot(args[0]).classList.contains("active")};""", away)
+    r = sidebar_page(m, FIND + """await until(() => dot(args[0]).classList.contains("active"), 3000); return {active: dot(args[0]).classList.contains("active"), bar: doc.documentElement.dataset.barClicked};""", away)
     tab = m.js(H + """const w = main(); return w.gBrowser.selectedTab.label;""")
-    check("a click on a dot with a mark switches space, as always", r["active"], str((r, tab)))
-    sidebar_page(m, f"""send({{type: "space", space: "{here}"}}); await wait(1200); return 1;""")
+    check("a click on a dot with a mark switches space, as always", r["active"] and r["bar"] == "1", str((r, tab)))
+    sidebar_page(m, f"""delete doc.documentElement.dataset.barClicked; send({{type: "space", space: "{here}"}}); await wait(1200); return 1;""")
     ok = sidebar_click(m, f"""doc.querySelector('#spaces .space[data-space="{away}"] .sound')""")
-    time.sleep(2.5)
-    s2 = state()
+    s2 = state_until(lambda s: s["selected"][0] == "sound away" and s["windows"]["sound away"] == "main")
     r = sidebar_page(m, FIND + """await until(() => dot(args[0]).classList.contains("active"));
-      return {active: dot(args[0]).classList.contains("active"), row: !!row("sound away")?.querySelector(".sound"), selected: !!row("sound away")?.classList.contains("active"), dot: !!dot(args[0]).querySelector(".sound")};""", away)
-    check("a click on a dot's mark goes to the tab that plays, and pulls it into this window", ok and s2["selected"][0] == "sound away" and s2["windows"]["sound away"] == "main", str(s2))
+      return {active: dot(args[0]).classList.contains("active"), row: !!row("sound away")?.querySelector(".sound"), selected: !!row("sound away")?.classList.contains("active"), dot: !!dot(args[0]).querySelector(".sound"), bar: doc.documentElement.dataset.barClicked ?? null};""", away)
+    check("a click on a dot's mark goes to the tab that plays, and pulls it into this window", ok and s2["selected"][0] == "sound away" and s2["windows"]["sound away"] == "main" and r["bar"] is None, str((s2, r)))
     check("and to its space, where its row shows it", r["active"] and r["row"] and r["selected"] and r["dot"], str(r))
 
     # All quiet again, and gone.
@@ -1610,9 +1638,50 @@ def alone_sound(m):
       send({type: "deleteFolder", key: head("Sound folder").dataset.folderHead}); await wait(800);
       return {marks};""", here)
     check("when it stops, every mark is gone", r["marks"] == 0, str(r))
+
+    # A page whose title ticks is drawn again all the time, and a redraw replaces what is
+    # under the pointer: a press must still do what it was for, however long it takes.
+    m.js(H + SOUND + """const a = main(), t = a.gBrowser.addTrustedTab(args[0] + "/ticking", {userContextId: args[1], inBackground: true});
+      a.__ticking = t;
+      for (let i = 0; i < 80 && !/^[0-9]+$/.test(t.label); i++) await wait(100);
+      play(t, true); return 1;""", m.pages, int(here.split("-")[-1]))
+    TICKING = '[...doc.querySelectorAll("#tabs .tab")].find(e => /^[0-9]+$/.test(e.title))'
+    r = sidebar_page(m, FIND + f"""const ticking = () => {TICKING}; await until(() => ticking()?.querySelector(".sound"));
+      const first = ticking().title; await until(() => ticking().title !== first); return {{ticks: ticking().title !== first}};""")
+    ok = sidebar_click(m, TICKING + '?.querySelector(".sound")', hold=1.5)
+    ticked = m.js(H + """const t = main().__ticking; for (let i = 0; i < 40 && !t.muted; i++) await wait(100); return {muted: t.muted, selected: main().gBrowser.selectedTab === t};""")
+    check("a press on a mark mutes, also while its row is being drawn again", ok and r["ticks"] and ticked["muted"] and not ticked["selected"], str((r, ticked)))
+    r = sidebar_page(m, FIND + f"""const ticking = () => {TICKING}; await until(() => ticking()?.querySelector(".sound.muted"));
+      const first = ticking().title; await until(() => ticking().title !== first); return {{muted: !!ticking().querySelector(".sound.muted"), ticks: ticking().title !== first}};""")
+    check("and what waited is drawn once it is let go", r["muted"] and r["ticks"], str(r))
+    ok = sidebar_click(m, TICKING + '?.querySelector(".close")', hold=1.5)
+    closed = m.js(H + """const a = main(); for (let i = 0; i < 40 && a.gBrowser.tabs.includes(a.__ticking); i++) await wait(100); return !a.gBrowser.tabs.includes(a.__ticking);""")
+    check("a press on a row's × closes, also while the row is being drawn again", ok and closed, str(closed))
+    # One change during a press that ends elsewhere: no click and no later event, so it
+    # has to be drawn because you let go. The page itself makes the change, a moment into
+    # the press, and notes what is drawn a moment later. On a dot's mark, as moving away
+    # from a row would drag the row, and in a headless Firefox such a drag never ends.
+    m.js(H + SOUND + """play(real("sound row"), true); return 1;""")
+    sidebar_page(m, FIND + """const [here] = args; await until(() => dot(here).querySelector(".sound"));
+      const [tab] = await page.browser.tabs.query({title: "sound row", audible: true});
+      const note = (name, was) => { doc.documentElement.dataset[name] = was ? "drawn" : "waits"; };
+      doc.addEventListener("pointerdown", () => {
+        setTimeout(() => page.browser.tabs.update(tab.id, {muted: true}), 200);
+        setTimeout(() => note("whilePressed", !dot(here).querySelector(".sound")), 1000);
+      }, {once: true});
+      // Noted here: looking from outside (sidebar_page) asks for a view itself.
+      doc.addEventListener("pointerup", async () => { await until(() => !dot(here).querySelector(".sound"), 3000); note("letGo", !dot(here).querySelector(".sound")); }, {once: true});
+      return 1;""", here)
+    let_go = sidebar_press(m, f"""doc.querySelector('#spaces .space[data-space="{here}"] .sound')""")
+    time.sleep(1.5)
+    let_go(5, 5)
+    time.sleep(3.5)
+    r = sidebar_page(m, """return {...doc.documentElement.dataset};""")
+    check("what is pressed waits, and a press that ends elsewhere still shows what changed", r.get("whilePressed") == "waits" and r.get("letGo") == "drawn", str(r))
+    m.js(H + SOUND + """const t = real("sound row"); play(t, false); t.toggleMuteAudio(); return 1;""")
     m.js(H + """for (const w of wins()) for (const t of w.gBrowser.tabs) if (t.pinned && t.label === "sound tile") { w.gBrowser.unpinTab(t); break; }
       await wait(2500);
-      await removeWhere((w, t) => t.label.startsWith("sound ") );
+      await removeWhere((w, t) => t.label.startsWith("sound ") || t === main().__ticking);
       if (args[0]) await close(other());
       return 1;""", opened)
 
