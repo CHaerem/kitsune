@@ -16,8 +16,7 @@ const e = (url, at, more = {}) => ({ url, title: url, space: "s1", at, ...more }
 const folder = (name, at, more = {}) => ({ name, space: "s1", at, ...more });
 const tab = (url, f, at, more = {}) => ({ url, title: url, folder: f, space: "s1", at, ...more });
 const gone = (at, more = {}) => ({ gone: 1, at, ...more });
-// Most tests use small stamps; "now" is near them, unless a test is about time.
-const merge = (a, b, now = 1000) => mergeSynced(a, b, now);
+const merge = (a, b) => mergeSynced(a, b);
 const ago = days => NOW - days * 24 * 3600e3;
 
 test("newest wins per thing, and changes to different things are both kept", () => {
@@ -105,36 +104,46 @@ test("a clock that is behind cannot make a change you made after seeing another 
   const renamed = doc({ essentials: { x: { url: "https://x/", title: "t", space: "s1", name: "From B" } } });
   const stamped = noteLocalChanges(fromA, renamed, seenWhenItCame, behind);
   assert.ok(stamped.essentials.x.at > NOW, "later than what it saw, whatever its clock says");
-  assert.equal(merge(stamped, fromA, NOW).essentials.x.name, "From B");
-  assert.equal(merge(fromA, stamped, NOW).essentials.x.name, "From B");
+  assert.equal(merge(stamped, fromA).essentials.x.name, "From B");
+  assert.equal(merge(fromA, stamped).essentials.x.name, "From B");
 });
 
 test("two changes that did not see each other: the clock decides, the same on both", () => {
   const a = doc({ essentials: { x: e("https://x/", NOW + 3600e3, { name: "Ahead" }) } }); // this clock is an hour ahead
   const b = doc({ essentials: { x: e("https://x/", NOW, { name: "Made later, by the right clock" }) } });
-  assert.equal(merge(a, b, NOW).essentials.x.name, "Ahead");
-  assert.deepEqual(merge(a, b, NOW), merge(b, a, NOW));
+  assert.equal(merge(a, b).essentials.x.name, "Ahead");
+  assert.deepEqual(merge(a, b), merge(b, a));
 });
 
 test("a tombstone keeps a thing away for 30 days, and then is forgotten", () => {
-  const t = doc({ essentials: { x: gone(ago(29), { space: "s1" }) } });
+  // The days count from the newest stamp in the data.
+  const today = { today: e("https://today/", NOW) };
+  const t = doc({ essentials: { ...today, x: gone(ago(29), { space: "s1" }) } });
   const old = doc({ essentials: { x: e("https://x/", ago(40)) } });
-  assert.equal(merge(t, old, NOW).essentials.x.gone, 1, "not expired: it stays gone");
-  const expired = doc({ essentials: { x: gone(ago(31), { space: "s1" }) } });
-  assert.equal(merge(expired, doc({}), NOW).essentials.x, undefined, "expired: forgotten");
-  assert.equal(merge(expired, old, NOW).essentials.x, undefined, "an old copy goes with it while it is still known");
+  assert.equal(merge(t, old).essentials.x.gone, 1, "not expired: it stays gone");
+  const expired = doc({ essentials: { ...today, x: gone(ago(31), { space: "s1" }) } });
+  assert.equal(merge(expired, doc({})).essentials.x, undefined, "expired: forgotten");
+  assert.equal(merge(expired, old).essentials.x, undefined, "an old copy goes with it while it is still known");
   // A machine away for longer than that, when no machine knows of the deletion: the thing
   // comes back. Better a thing you deleted long ago than one you did not delete, gone.
-  assert.equal(merge(doc({}), old, NOW).essentials.x.url, "https://x/");
+  assert.equal(merge(doc({ essentials: today }), old).essentials.x.url, "https://x/");
   // Exactly at the limit it is still kept.
-  const edge = doc({ essentials: { x: gone(NOW - SYNC_KEEP_GONE_MS, { space: "s1" }) } });
-  assert.equal(merge(edge, doc({}), NOW).essentials.x.gone, 1);
+  const edge = doc({ essentials: { ...today, x: gone(NOW - SYNC_KEEP_GONE_MS, { space: "s1" }) } });
+  assert.equal(merge(edge, doc({})).essentials.x.gone, 1);
+});
+
+test("two clocks that differ agree on when a tombstone goes: it depends only on the data", () => {
+  const data = doc({ essentials: { today: e("https://today/", NOW), x: gone(NOW - SYNC_KEEP_GONE_MS - 1000, { space: "s1" }) } });
+  const once = merge(data, doc({}));
+  assert.equal(once.essentials.x, undefined);
+  assert.deepEqual(merge(once, data), once, "and what one has let go, the other does not write back");
+  assert.deepEqual(merge(data, once), once);
 });
 
 test("the same thing on two machines at their first merge stays one however long ago that is", () => {
   // Things stamped by a first merge have no time, so what they leave must not expire at once.
   const a = doc({ essentials: { z: e("https://same/", 1) } }), b = doc({ essentials: { a: e("https://same/", 1) } });
-  const m = merge(a, b, NOW);
+  const m = merge(doc({ essentials: { ...a.essentials, later: e("https://later/", NOW) } }), b);
   assert.equal(m.essentials.z.to, "a");
 });
 
@@ -198,7 +207,7 @@ test("turning sync on merges: what is here is kept, and what others decided wins
   const local = noteLocalChanges(emptySyncDoc(), here, null, stamps());
   assert.equal(local.essentials.mine.at, 1);
   const remote = doc({ essentials: { shared: e("https://shared/", ago(1), { name: "New" }), deletedThere: gone(ago(1), { space: "s1" }), theirs: e("https://theirs/", ago(2)) } });
-  const m = merge(local, remote, NOW);
+  const m = merge(local, remote);
   assert.ok(!m.essentials.mine.gone, "what only this machine has is added");
   assert.equal(m.essentials.shared.name, "New", "what the others changed wins");
   assert.equal(m.essentials.deletedThere.gone, 1, "what they deleted goes");
@@ -249,7 +258,7 @@ test("a space is never deleted on the other machines: their logins are in it", (
   assert.equal(after.spaces.s1.name, "Work");
 });
 
-test("a whole kind suddenly empty is not you deleting it", () => {
+test("a whole stored list suddenly empty is not you deleting it", () => {
   const essentials = Object.fromEntries(["a", "b", "c", "d", "e"].map(k => [k, { url: `https://${k}/`, space: "s1" }]));
   const here = doc({ essentials });
   const state = noteLocalChanges(emptySyncDoc(), here, null, stamps());
@@ -259,6 +268,18 @@ test("a whole kind suddenly empty is not you deleting it", () => {
   const few = doc({ essentials: { a: essentials.a } });
   const state2 = noteLocalChanges(emptySyncDoc(), few, null, stamps());
   assert.equal(noteLocalChanges(state2, doc({}), syncSeen(few), stamps()).essentials.a.gone, 1);
+  // The same for all folders and saved tabs together.
+  const record = doc({ folders: { f: { name: "F", space: "s1" } }, saved: Object.fromEntries(["a", "b", "c", "d"].map(k => [k, { url: `https://${k}/`, folder: "f", space: "s1" }])) });
+  const state3 = noteLocalChanges(emptySyncDoc(), record, null, stamps());
+  const wiped = noteLocalChanges(state3, doc({}), syncSeen(record), stamps());
+  assert.ok(!wiped.folders.f.gone && !wiped.saved.a.gone);
+  // Not when a folder is left: dragging every tab out of it is something you do.
+  const out = noteLocalChanges(state3, doc({ folders: record.folders }), syncSeen(record), stamps());
+  assert.equal(out.saved.a.gone, 1);
+  // And not for rules, which you can well remove all of.
+  const rules = doc({ rules: Object.fromEntries(["a", "b", "c", "d", "e"].map(k => [`r:${k}`, { space: "s1" }])) });
+  const state4 = noteLocalChanges(emptySyncDoc(), rules, null, stamps());
+  assert.equal(noteLocalChanges(state4, doc({}), syncSeen(rules), stamps()).rules["r:a"].gone, 1);
 });
 
 test("an order that did not change here keeps its stamp, one that did gets a new one", () => {
@@ -363,6 +384,7 @@ test("what cannot be read is left out, and takes nothing with it", () => {
   assert.deepEqual(Object.keys(d.folders), []);
   assert.deepEqual(Object.keys(d.order), []);
   assert.equal(({}).url, undefined, "nothing reached Object's prototype");
+  assert.deepEqual(Object.keys(docFromItems({ "1/m.0": [["S", "sx", 5]] }).spaces), [], "and no row deletes a space");
   // A thing named as a built-in is an ordinary thing.
   const m = merge(doc({ rules: { constructor: { space: "s1", at: 1 } } }), doc({}));
   assert.equal(m.rules.constructor.space, "s1");
@@ -420,7 +442,7 @@ class Machine {
     const now = this.world.now + this.skew;
     this.clock = Math.max(this.clock, syncHighest(remote));
     const stamp = () => (this.clock = Math.max(now, this.clock + 1));
-    const merged = mergeSynced(noteLocalChanges(this.doc, this.here, this.seen, stamp), remote, now);
+    const merged = mergeSynced(noteLocalChanges(this.doc, this.here, this.seen, stamp), remote);
     this.clock = Math.max(this.clock, syncHighest(merged));
     this.applyMerged(merged);
     this.seen = syncSeen(this.here);

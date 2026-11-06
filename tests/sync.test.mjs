@@ -33,10 +33,22 @@ const report = x => x.send({ type: "sync:get" }, SETTINGS);
 const hide = (x, space, hidden = true) => x.send({ type: "sync:hide", space, hidden }, SETTINGS);
 const ROUND = 8000; // more than sync.js's wait, plus the round itself
 
+// Until Tidier has no round waiting or running: a state, not a time.
+async function settled(x) {
+  for (let i = 0; i < 400; i++) {
+    await wait(100); // events are delivered, and what they start has started
+    if (x.js("syncTimer") === null) {
+      await x.js("serial")(() => {});
+      if (x.js("syncTimer") === null) return;
+    }
+  }
+  throw new Error("a round never ended");
+}
+
 // Firefox Sync runs on every machine, a few times over, with Tidier's rounds in between.
 async function syncAround(server, machines, times = 3) {
   for (let i = 0; i < times; i++) {
-    for (const m of machines) { firefoxSyncNow(m.ff, server); await wait(ROUND); }
+    for (const m of machines) { await settled(m.x); firefoxSyncNow(m.ff, server); await settled(m.x); }
   }
 }
 
@@ -325,7 +337,6 @@ test("a change made while Tidier was not running is found when it starts", async
   A.ff.store.rules = [{ url: "rule.example", space: c(1) }];
   A.x = await boot(A.ff);
   assert.equal(A.x.js("syncIsOn"), true, "it stays on");
-  await wait(ROUND);
   await syncAround(server, machines);
   assert.deepEqual(B.ff.store.rules, [{ url: "rule.example", space: c(7) }]);
   end();
@@ -414,13 +425,13 @@ test("when Firefox refuses, it says so, and nothing is lost", async () => {
   await turnOn(x);
   ff.syncRefused = "storage.sync is not available";
   await pin(x, ff, w.id, "https://b.example/", c(1));
-  await wait(ROUND);
+  await settled(x);
   assert.match(x.js("notices").get("sync"), /not available/, "it shows, in the sidebar too");
   assert.match((await report(x)).problem, /not available/);
   assert.equal(ff.store.essentials.length, 2);
   delete ff.syncRefused;
   await pin(x, ff, w.id, "https://c.example/", c(1));
-  await wait(ROUND);
+  await settled(x);
   assert.equal((await report(x)).problem, null);
   assert.equal(x.js("notices").has("sync"), false);
   assert.ok(JSON.stringify(ff.syncArea).includes("b.example"), "what could not be written then is written now");
@@ -477,6 +488,108 @@ test("moving back to Sidebery forgets what was seen, so moving over again delete
   assert.equal(ff.store.syncState, undefined);
   x.kill();
   void w;
+});
+
+// --- Two machines used at random, with the real scripts ------------------------------
+function seeded(seed) { return () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32; }
+
+// What a machine holds, in the words all machines share.
+function holds(m) {
+  const name = id => m.ff.identities[id]?.name ?? id;
+  const all = m.ff.synced || {}, list = m.ff.store.essentials || [];
+  const folders = Object.entries(all).filter(([, e]) => e.group && e.own);
+  return {
+    essentials: list.map(e => `${name(e.cookieStoreId)} ${e.url} ${e.name ?? ""}`).sort(),
+    folders: folders.map(([k, e]) => `${k} ${name(e.cookieStoreId)} ${e.name}`).sort(),
+    saved: Object.entries(all).filter(([, e]) => e.saved).map(([k, e]) => `${k} ${name(e.cookieStoreId)} ${e.parentKey} ${e.saved.url}`).sort(),
+    rules: (m.ff.store.rules || []).map(r => `${r.url} ${name(r.space)}`).sort(),
+    spaces: [...m.ff.containers].filter(id => id !== "firefox-default").map(name).sort(),
+  };
+}
+
+async function act(m, r, n, urls) {
+  const { ff, x, w } = m;
+  const pick = list => list[Math.floor(r() * list.length)];
+  const spaces = [...ff.containers].filter(id => id !== "firefox-default");
+  const space = pick(spaces);
+  const all = ff.synced || {};
+  const folders = Object.keys(all).filter(k => all[k].group && all[k].own);
+  const saved = Object.keys(all).filter(k => all[k].saved);
+  const copies = ff.list(w.id).filter(t => t.pinned);
+  const what = Math.floor(r() * 11);
+  if (what === 0) { // A site, sometimes one the other machine has too.
+    const url = urls[Math.floor(r() * urls.length)];
+    if (!(ff.store.essentials || []).some(e => e.url === url && e.cookieStoreId === space)) await pin(x, ff, w.id, url, space, url);
+  } else if (what === 1 && copies.length) {
+    const t = pick(copies);
+    if (!t.active) ff.rm(t.id); // closing one only unloads it: it comes back
+  } else if (what === 2 && copies.length) {
+    await x.b.tabs.update(pick(copies).id, { pinned: false });
+  } else if (what === 3) {
+    await x.js("createFolder")(`Folder ${n}`, space);
+  } else if (what === 4 && folders.length) {
+    await x.js("renameFolder")(pick(folders), `Renamed ${n}`);
+  } else if (what === 5 && folders.length) {
+    await x.js("deleteFolder")(pick(folders));
+  } else if (what === 6 && folders.length) {
+    const f = pick(folders), t = ff.addTab(w.id, { url: `https://t${n}.example/`, title: `T${n}`, cookieStoreId: all[f].cookieStoreId });
+    x.b.tabs.onCreated.fire(ff.snap(t));
+    await wait(2200);
+    await x.js("moveTab")(w.id, t.id, null, f);
+  } else if (what === 7 && saved.length) {
+    await x.js("closeEverywhere")(pick(saved), { dismiss: false });
+  } else if (what === 8 && saved.length && folders.length) {
+    const k = pick(saved), f = pick(folders.filter(y => all[y].cookieStoreId === all[k].cookieStoreId));
+    const tab = ff.list(w.id).find(t => ff.values.get(t.id)?.syncKey === k);
+    if (f && tab) await x.js("moveTab")(w.id, tab.id, null, f);
+  } else if (what === 9) {
+    await x.b.contextualIdentities.update(space, { name: `Space ${n}` });
+  } else {
+    const rules = ff.store.rules || [];
+    const next = r() < 0.5 && rules.length ? rules.slice(1) : [...rules, { url: `rule${n}`, space }];
+    await x.send({ type: "settings:rules", rules: next }, SETTINGS);
+  }
+  await wait(100);
+}
+
+test("two machines used at random, with the real scripts, end up holding the same", async () => {
+  // TIDIER_SEEDS=40 to look harder.
+  const seeds = process.env.TIDIER_SEEDS ? Array.from({ length: Number(process.env.TIDIER_SEEDS) }, (_, i) => i + 100) : [11, 23, 37];
+  for (const seed of seeds) {
+    const r = seeded(seed), server = {};
+    const A = machine({ 1: "Work", 2: "Private" }), B = machine({ 5: "Private", 7: "Work" });
+    A.x = await boot(A.ff);
+    B.x = await boot(B.ff);
+    const urls = ["https://same-a.example/", "https://same-b.example/", "https://same-c.example/"];
+    for (let i = 0; i < 6; i++) { await act(A, r, `a${i}`, urls); await act(B, r, `b${i}`, urls); } // things of their own first
+    await turnOn(A.x);
+    await turnOn(B.x);
+    for (let i = 0; i < 40; i++) {
+      const m = r() < 0.5 ? A : B;
+      if (r() < 0.7) await act(m, r, `${seed}x${i}`, [...urls, `https://own${i}.example/`]);
+      else { await settled(m.x); firefoxSyncNow(m.ff, server); }
+      if (r() < 0.3) await settled(m.x);
+    }
+    await syncAround(server, [A, B], 5);
+    for (const m of [A, B]) { await wait(3000); await m.x.js("flushWrites")(); await settled(m.x); }
+    await syncAround(server, [A, B], 2);
+    assert.deepEqual(holds(A), holds(B), `seed ${seed}`);
+    for (const m of [A, B]) {
+      const keys = (m.ff.store.essentials || []).map(e => e.key).sort();
+      const tabs = m.ff.list(m.w.id).filter(t => t.pinned).map(t => m.ff.values.get(t.id)?.essentialKey).sort();
+      assert.deepEqual(tabs, keys, `seed ${seed}: every essential has one tab`);
+      for (const [key, e] of Object.entries(m.ff.synced || {})) {
+        if (!e.saved) continue;
+        assert.equal(m.ff.list(m.w.id).filter(t => m.ff.values.get(t.id)?.syncKey === key).length, 1, `seed ${seed}: a saved tab has one tab`);
+      }
+      assert.deepEqual(m.x.errors.filter(err => !/no host/.test(err)), [], `seed ${seed}`);
+    }
+    // With nothing happening, nothing more is written or run.
+    const writes = [A.ff.syncWrites, B.ff.syncWrites];
+    await wait(ROUND * 2);
+    assert.deepEqual([A.ff.syncWrites, B.ff.syncWrites], writes, `seed ${seed}`);
+    A.x.kill(); B.x.kill();
+  }
 });
 
 // --- Hiding a space ------------------------------------------------------------------
@@ -545,6 +658,8 @@ test("showing it again fills the windows, ordinary tabs too", async () => {
   assert.ok(back.some(t => t.url === GHOST("ghost", "saved")), "the saved tab");
   assert.ok(back.some(t => t.url === GHOST("ghost", "plain")), "the ordinary tab");
   assert.ok(ff.synced.plain && ff.synced.saved);
+  // One tab of each is the live one, so that everything after this finds what it expects.
+  for (const key of ["saved", "plain"]) assert.equal(back.filter(t => ff.values.get(t.id)?.syncKey === key && ff.values.get(t.id)?.syncRole === "live").length, 1, key);
   // And it is hidden as a space you are not in, not shown over the one you are in.
   assert.ok(back.filter(t => !t.pinned).every(t => t.hidden));
   assert.deepEqual(x.errors, []);
@@ -645,6 +760,28 @@ test("a tab you open in a hidden container yourself is shown, and stays out of t
   assert.ok(ff.tabs.has(t.id));
   assert.ok(!Object.values(ff.synced).some(e => e.url === "https://mine.example/"));
   assert.ok((await x.js("viewFor")(w.id)).tabs.some(y => y.id === t.id));
+  x.kill();
+});
+
+test("a live folder of a hidden space is left alone until it shows", async () => {
+  const { ff, w, x } = await withTabs();
+  await hide(x, c(2));
+  await wait(500);
+  let asked = 0;
+  x.b.runtime.sendNativeMessage = async (host, msg) => {
+    if (msg.list) return { folders: [{ id: "prs", name: "Pull requests", container: c(2) }] };
+    asked++;
+    return { items: [{ url: "https://pr.example/1", repo: "r", number: 1, title: "One" }] };
+  };
+  await x.js("refreshAllLiveFolders")();
+  await wait(300);
+  assert.equal(asked, 0);
+  assert.deepEqual(inSpace(ff, w, c(2)), []);
+  await hide(x, c(2), false);
+  await x.js("refreshAllLiveFolders")();
+  await wait(300);
+  assert.equal(asked, 1);
+  assert.ok(Object.values(ff.synced).some(e => e.liveUrl === "https://pr.example/1"));
   x.kill();
 });
 

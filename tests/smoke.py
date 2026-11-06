@@ -1562,12 +1562,23 @@ def alone_sync_hide(m):
       return {essentials: s.essentials.filter(e => e.cookieStoreId === args[0]).map(e => e.key).sort(), saved: Object.keys(s.syncedTabs).filter(k => s.syncedTabs[k].cookieStoreId === args[0]).sort()};""" % EXT_ID, f"firefox-container-{space}")
     click_tick = """const line = [...doc.querySelectorAll("#spaces-here label")].find(l => l.textContent.includes(args[0]));
       line.querySelector("input").click(); await wait(300);"""
+    # One page in it holds unsaved input: that one must stay, and be where you can reach it.
+    unsaved = m.js(H + """const w = main(), t = w.gBrowser.addTrustedTab(args[0] + "/unsaved", {userContextId: args[1], inBackground: true});
+      await wait(4000); return key(w, t);""", m.pages, space)
     ext_page(m, settings, click_tick + "return 1;", name)
-    r = until(m, """const n = args[1];
-      const tabs = wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n && !url(t).includes("/settings/")).map(t => t.label));
+    r = until(m, """const n = args[1], k = args[2];
+      const others = wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n && key(w, t) !== k && !url(t).includes("/settings/")).map(t => t.label));
       const selected = wins().map(w => w.gBrowser.selectedTab.userContextId);
-      return {ok: !tabs.length && !selected.includes(n), tabs, selected};""", space)
-    check("a hidden space has no tab in any window, and every window has left it", r["ok"], str(r))
+      const kept = main().gBrowser.tabs.filter(t => url(t).includes("/unsaved")).map(t => t.hidden);
+      return {ok: !others.length && !selected.includes(n), others, selected, kept};""", space, unsaved)
+    check("a hidden space has no other tab in any window, and every window has left it", r["ok"], str(r))
+    check("a page with unsaved input stays open, and is not hidden away", r["kept"] == [False], str(r))
+    # Closed, it goes like any tab, and the rest stays as it was.
+    r = until(m, """const n = args[1], k = args[2];
+      for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (key(w, t) === k) w.gBrowser.removeTab(t, {skipPermitUnload: true});
+      const left = wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n && !url(t).includes("/settings/")).map(t => t.label));
+      return {ok: !left.length, left};""", space, unsaved)
+    check("closed, it leaves the hidden space with no tab at all", r["ok"], str(r))
     r = sidebar_page(m, "await wait(500); return {spaces: spaces(), name: doc.getElementById('space-name').textContent};")
     check("a hidden space has no dot on the bar", f"firefox-container-{space}" not in [s["id"] for s in r["spaces"]] and len(r["spaces"]) >= 2 and sum(s["active"] for s in r["spaces"]) == 1, str(r))
     stored = m.js(H + """const s = await storage("%s", ["essentials", "syncedTabs", "hiddenSpaces"]);
@@ -1590,6 +1601,18 @@ def alone_sync_hide(m):
       return {active, got};""")
     check("a rule pointing at a hidden space opens the tab in the space you are in", r["got"] and space not in r["got"] and r["active"] in r["got"], str(r))
     extension_message(m, {"type": "settings:rules", "rules": []})
+    # It stays hidden after a restart, also where the session would bring something of it back.
+    if m.can_restart:
+        # (The test's own pages are closed first: restored unloaded, they could not be scripted.)
+        m.js(H + """for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/settings/settings.html") || url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t); await wait(500); return 1;""")
+        m.restart()
+        m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
+        r = m.js(H + """const n = args[0]; return wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n && !url(t).includes("/settings/")).map(t => t.label));""", space)
+        check("after a restart a hidden space still has no tab in any window", not r, str(r))
+        r = sidebar_page(m, "await wait(500); return spaces();")
+        check("after a restart it is still not on the bar", f"firefox-container-{space}" not in [s["id"] for s in r], str(r))
+        r = ext_page(m, settings, "await wait(500); return doc.getElementById('sync-on').checked;")
+        check("after a restart sync is still on", r is True, str(r))
     # And back.
     ext_page(m, settings, click_tick + "return 1;", name)
     r = until(m, """const n = args[1], want = args[2];

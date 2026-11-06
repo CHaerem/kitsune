@@ -22,7 +22,9 @@
 // change different things both keep their change. Something deleted stays as a
 // tombstone ({ gone: 1, at }) for 30 days, so that a machine which has not heard of the
 // deletion cannot bring it back; a machine away for longer does bring it back, which is
-// the safe way to be wrong. Absence never deletes anything: Firefox Sync overwrites a
+// the safe way to be wrong. The 30 days count from the newest stamp in the data and not
+// from this machine's clock: with clocks that differ, one machine would keep rewriting
+// what another has just let go. Absence never deletes anything: Firefox Sync overwrites a
 // whole item when two machines write it (a server's change wins, per MDN), and an item
 // can come late or be emptied, so only an explicit tombstone removes a thing.
 //
@@ -139,8 +141,8 @@ function folderKeepsNewTabs(doc) {
 }
 
 // Two versions of everything become one. Whatever order machines meet in, they end
-// up with the same (tests/sync.test.mjs, with two machines editing at random).
-function mergeSynced(local, remote, now = Date.now()) {
+// up with the same (tests/syncmerge.test.mjs, with machines editing at random).
+function mergeSynced(local, remote) {
   const doc = emptySyncDoc();
   for (const kind of [...SYNC_KINDS, "order"]) {
     for (const id of new Set([...Object.keys(local?.[kind] || {}), ...Object.keys(remote?.[kind] || {})])) {
@@ -152,10 +154,11 @@ function mergeSynced(local, remote, now = Date.now()) {
   sameOnBoth(doc, local, remote, "essentials", e => `${e.space}\n${e.url}`);
   sameOnBoth(doc, local, remote, "saved", s => `${s.folder}\n${s.url}`);
   folderKeepsNewTabs(doc);
+  const newest = syncHighest(doc);
   for (const kind of SYNC_KINDS) {
     for (const [id, item] of Object.entries(doc[kind])) {
       // (A stamp of 1 comes from a first merge and says nothing about when; it is kept.)
-      if (item.gone && syncStamp(item) > 1 && now - syncStamp(item) > SYNC_KEEP_GONE_MS) delete doc[kind][id];
+      if (item.gone && syncStamp(item) > 1 && newest - syncStamp(item) > SYNC_KEEP_GONE_MS) delete doc[kind][id];
     }
   }
   // A folder's order goes with it.
@@ -202,11 +205,15 @@ function syncSpaceId(name, taken = () => false) {
 // merge and not an overwrite, in both directions.
 //
 // Something in a space this machine does not have is not "deleted here". Nor is a whole
-// kind that is suddenly empty, which is not you deleting them one by one: if it
-// was you, what you removed comes back, which is better than losing it on every machine.
+// stored list that is suddenly empty (the essentials, or all folders and saved tabs), which
+// is not you removing them one by one in a few seconds: if it was you, what you removed
+// comes back, which is better than losing it on every machine.
 const SYNC_SUSPECT_COUNT = 5;
 function noteLocalChanges(doc, here, seen, stamp, isHere = () => true) {
   const out = copySyncDoc(doc);
+  const count = (map, kinds) => kinds.reduce((n, kind) => n + Object.keys(map?.[kind] || {}).length, 0);
+  const wiped = kinds => count(seen, kinds) >= SYNC_SUSPECT_COUNT && !count(here, kinds);
+  const suspect = { essentials: wiped(["essentials"]), folders: wiped(["folders", "saved"]), saved: wiped(["folders", "saved"]), rules: false };
   for (const kind of SYNC_KINDS) {
     for (const [id, item] of Object.entries(here[kind])) {
       const sig = syncSig(kind, item), old = syncOwn(out[kind], id);
@@ -216,9 +223,8 @@ function noteLocalChanges(doc, here, seen, stamp, isHere = () => true) {
       out[kind][id] = { ...item, at: stamp() };
     }
     if (!seen || kind === "spaces") continue; // a space is never deleted on other machines: their logins are in it
-    const before = Object.keys(seen[kind] || {});
-    if (before.length >= SYNC_SUSPECT_COUNT && !Object.keys(here[kind]).length) continue;
-    for (const id of before) {
+    if (suspect[kind]) continue;
+    for (const id of Object.keys(seen[kind] || {})) {
       if (syncOwn(here[kind], id) !== undefined) continue;
       const old = syncOwn(out[kind], id);
       if (old && !old.gone && isHere(old.space)) out[kind][id] = syncTombstone(kind, old, stamp());
@@ -332,8 +338,9 @@ function addSyncRow(doc, group, row) {
   if (!kind) return;
   let item;
   if (letter === letter.toUpperCase()) {
+    if (kind === "spaces") return; // a space is never deleted: see noteLocalChanges
     item = { gone: 1, at };
-    if (kind !== "rules" && kind !== "spaces") item.space = group;
+    if (kind !== "rules") item.space = group;
     if (typeof row[3] === "string") item.to = row[3];
     if (kind === "folders" && typeof row[4] === "string") item.name = row[4];
   } else {

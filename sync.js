@@ -18,8 +18,10 @@
 // there is no timer at all. The state (syncState) is written only once a round has been
 // applied: one cut short is simply done again, and all of it is idempotent.
 //
-// Firefox Sync must be signed in, with Add-ons turned on in its settings (MDN); it brings
-// changes every ten minutes or so. Without it, nothing goes anywhere and nothing is wrong.
+// Firefox Sync must be signed in, with Add-ons turned on in its settings (MDN), which also
+// syncs which add-ons are installed. The Firefox setting services.sync.engine.extension-storage.force
+// syncs only this data. It brings changes every ten minutes or so. Without it, nothing goes
+// anywhere and nothing is wrong.
 
 const SYNC_DELAY_MS = 5000;
 const SYNC_BIG_REMOVAL = 5; // removed from elsewhere in one go: a copy is taken first
@@ -74,7 +76,9 @@ function syncMapByName(theirs, local) {
 }
 
 async function syncMatchSpaces(st, remote) {
-  const containers = await containerSpaces();
+  // (Asked directly: an answer of none because Firefox refused must not look like every
+  // space removed. A refusal stops the round, which changes nothing.)
+  const containers = (await browser.contextualIdentities.query({})).map(c => ({ id: c.cookieStoreId, name: c.name }));
   const exists = new Set(containers.map(c => c.id));
   // A container you removed here: the space stays for the other machines (their logins are
   // in it), and stays away from this one until a container with its name is made here.
@@ -96,15 +100,16 @@ async function syncMatchSpaces(st, remote) {
 
 // --- What is here --------------------------------------------------------------------
 const syncClip = title => (typeof title === "string" ? title.slice(0, SYNC_TITLE_CHARS) : undefined);
+const syncDefined = item => Object.fromEntries(Object.entries(item).filter(([, v]) => v !== undefined && v !== null));
 
 async function syncSnapshot(st) {
   const here = emptySyncDoc();
-  const containers = await browser.contextualIdentities.query({}).catch(() => []);
+  const containers = await browser.contextualIdentities.query({});
   const sidOf = new Map(Object.entries(st.map).map(([sid, id]) => [id, sid]));
   sidOf.set(NO_CONTAINER, SYNC_NO_SPACE);
   for (const c of containers) {
     const sid = sidOf.get(c.cookieStoreId);
-    if (sid) here.spaces[sid] = { name: c.name, color: c.color, icon: c.icon };
+    if (sid) here.spaces[sid] = syncDefined({ name: c.name, color: c.color, icon: c.icon });
   }
   const list = await getList();
   const inSpace = new Map();
@@ -112,7 +117,7 @@ async function syncSnapshot(st) {
   for (const e of list) {
     const space = sidOf.get(e.cookieStoreId);
     if (!space || !isWeb(e.url)) continue;
-    here.essentials[e.key] = { url: e.url, title: syncClip(e.title), name: e.name, space };
+    here.essentials[e.key] = syncDefined({ url: e.url, title: syncClip(e.title), name: e.name, space });
     note("e:" + space, e.key);
   }
   const all = await getSynced();
@@ -128,7 +133,7 @@ async function syncSnapshot(st) {
     if (e.group || e.liveFolder || !isWeb(e.saved?.url)) continue;
     const space = sidOf.get(e.cookieStoreId), folder = folderKeyOf(all, key);
     if (!space || !here.folders[folder]) continue;
-    here.saved[key] = { url: e.saved.url, title: syncClip(e.saved.title ?? e.title), name: e.name, folder, space };
+    here.saved[key] = syncDefined({ url: e.saved.url, title: syncClip(e.saved.title ?? e.title), name: e.name, folder, space });
   }
   for (const r of await rulesList.get()) {
     const space = sidOf.get(r.space), id = "r:" + r.url;
@@ -146,7 +151,7 @@ async function syncSnapshot(st) {
   }
   // A folder's order is the window's: only from a window that has all of its tabs, so
   // that a window still being filled, or a hidden space, says nothing about their order.
-  const tabs = (await browser.tabs.query({}));
+  const tabs = await browser.tabs.query({});
   const ref = referenceWindow(tabs, undefined);
   const reps = new Map(tabs.filter(t => t.windowId === ref).map(t => [syncKeyByTab.get(t.id), t.index]));
   const inFolder = new Map();
@@ -332,13 +337,15 @@ function syncApplyRules(doc, here, idOf, st) {
 // Put tabs in this order in a window, moving as few as can be: each must come before the
 // next, and where they are among other tabs does not matter (the sidebar draws by folder).
 async function syncPutInOrder(windowId, ids) {
-  let tabs = await browser.tabs.query({ windowId });
+  let tabs = await browser.tabs.query({ windowId }), moved = false;
   for (let i = ids.length - 2; i >= 0; i--) {
     const a = tabs.find(t => t.id === ids[i]), b = tabs.find(t => t.id === ids[i + 1]);
     if (!a || !b || a.index < b.index) continue;
     await moveInWindow(tabs, a.id, b.id);
     tabs = await browser.tabs.query({ windowId });
+    moved = true;
   }
+  return moved;
 }
 
 const syncRanked = (ids, list) => {
@@ -386,9 +393,8 @@ async function syncApplyOrders(doc, here, idOf) {
     const sorted = syncRanked(keys, doc.order[scope].list);
     for (const w of await normalWindows()) {
       const reps = repMap(await browser.tabs.query({ windowId: w.id }));
-      await syncPutInOrder(w.id, sorted.map(k => reps.get(k)).filter(id => id !== undefined));
+      if (await syncPutInOrder(w.id, sorted.map(k => reps.get(k)).filter(id => id !== undefined))) changed = true;
     }
-    changed = true;
   }
   // Spaces: the bar's order.
   if (differs("spaces")) {
@@ -488,7 +494,7 @@ async function syncRound() {
   } catch (err) {
     syncProblem = String(err?.message ?? err);
     setNotice("sync", `Sync across machines has stopped: ${syncProblem}`);
-    throw err;
+    noteError(err); // and the next change tries again; no timer waits for it
   }
 }
 

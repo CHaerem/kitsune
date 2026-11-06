@@ -87,6 +87,7 @@ async function closeHiddenTabs() {
 // Every window leaves a space that is now hidden. A window on a tab with no container (this
 // settings page, say) keeps that tab: only what is shown around it changes.
 async function leaveHiddenSpaces() {
+  if (!hiddenSpaceIds.size) return;
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
     const selected = tabs.find(t => t.active), space = activeSpace.get(w.id);
@@ -102,6 +103,7 @@ async function leaveHiddenSpaces() {
 // From the settings page. Hiding the last space that shows is not done: a window must
 // have a space (the page does not offer it either).
 async function setSpaceHidden(id, hidden) {
+  if (!tidierAlone) return;
   const stored = (await browser.storage.local.get(HIDDEN_KEY))[HIDDEN_KEY];
   const list = (Array.isArray(stored) ? stored : []).filter(x => x !== id);
   if (hidden) list.push(id);
@@ -113,9 +115,10 @@ async function setSpaceHidden(id, hidden) {
     for (const w of await normalWindows()) await showSpace(w.id); // what stayed is shown, wherever you are
     if (stayed) globalThis.say?.(focusedWindowId, stayed > 1 ? `${stayed} tabs hold unsaved input and stayed open` : "One tab holds unsaved input and stayed open");
   } else {
-    // Not by reconcileAll: it counts an ordinary tab with no tab left as closed. Filled
-    // first, each has its placeholders again, in the windows that are open.
+    // Filled first: reconcileAll counts an ordinary tab with no tab left as closed. Then it
+    // makes one of each tab's placeholders the live one, as after a closed window.
     for (const w of await normalWindows()) await fillWindow(w.id).catch(noteError);
+    await reconcileAll();
     for (const w of await normalWindows()) await showSpace(w.id);
   }
   viewAllSoon();

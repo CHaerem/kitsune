@@ -27,19 +27,17 @@ function drawSpacesHere(r) {
   const box = $("spaces-here");
   box.hidden = !r.alone || r.spaces.length < 2;
   const showing = r.spaces.filter(s => !s.hidden).length;
+  const ticks = r.spaces.map(s => {
+    if (s.declared) return el("span", { className: "line", title: "Hidden on this machine by its setup", textContent: `${s.name}: hidden by this machine's setup` });
+    const last = !s.hidden && showing < 2; // a window needs a space to show
+    const tick = el("input", { type: "checkbox", checked: !s.hidden, disabled: last, title: last ? "A window needs a space to show" : "" });
+    tick.onchange = async () => drawSync(await browser.runtime.sendMessage({ type: "sync:hide", space: s.id, hidden: !tick.checked }));
+    return el("label", { className: "line" }, tick, el("span", { textContent: "●", style: `color:${s.color}` }), s.name);
+  });
   box.replaceChildren(
-    el("p", { className: "hint", textContent: "Shown on this machine. A space that is not ticked gets no tabs here and is not on the bar. Nothing in it is deleted, and your other machines keep it." }),
-    ...r.spaces.map(s => {
-      const line = el("label", { className: "line" });
-      if (s.declared) {
-        line.append(el("span", { textContent: "●", style: `color:${s.color}` }), `${s.name}: hidden on this machine by its setup`);
-        return line;
-      }
-      const tick = el("input", { type: "checkbox", checked: !s.hidden, disabled: !s.hidden && showing < 2, title: !s.hidden && showing < 2 ? "A window needs a space to show" : "" });
-      tick.onchange = async () => drawSync(await browser.runtime.sendMessage({ type: "sync:hide", space: s.id, hidden: !tick.checked }));
-      line.append(tick, el("span", { textContent: "●", style: `color:${s.color}` }), s.name);
-      return line;
-    }),
+    el("h3", { textContent: "Shown on this machine" }),
+    el("div", { className: "ticks" }, ...ticks),
+    el("p", { className: "hint", textContent: "A space that is not ticked gets no tabs here and is not on the bar. Nothing in it is deleted, and your other machines keep it." }),
   );
 }
 
