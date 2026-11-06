@@ -30,7 +30,9 @@ const problems = [];
 function noteError(err) {
   console.error("Tidier:", err);
   work.errors++;
-  problems.push(String(err?.message ?? err));
+  // Where it happened, shortly: a message alone does not say which of many calls it was.
+  const where = String(err?.stack ?? "").split("\n").filter(Boolean).slice(0, 3).map(f => f.replace(/@.*\//, " ").replace(/:\d+$/, "")).join(" < ");
+  problems.push(String(err?.message ?? err) + (where ? ` (${where})` : ""));
   if (problems.length > 20) problems.shift();
 }
 globalThis.addEventListener?.("unhandledrejection", event => noteError(event.reason));
