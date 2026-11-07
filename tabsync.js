@@ -112,7 +112,7 @@ async function loadRoles() {
     // A value that did not get written, or was lost. Left unknown, a placeholder stays for
     // good beside the new one the window then gets, and a page is not synced.
     const shown = placeholderOf(t.url);
-    if (shown.kind === "ghost" && !t.pinned) await setRole(t.id, shown.key, "ghost").catch(noteError);
+    if (shown.kind === "ghost") await setRole(t.id, shown.key, "ghost").catch(noteError);
     else if (key) await setRole(t.id, key, isGhostUrl(t.url) ? "ghost" : isSideberyGroup(t.url) ? "copy" : "live").catch(noteError);
   }));
 }

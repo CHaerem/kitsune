@@ -1701,3 +1701,18 @@ test("a ghost whose folder closes or leaves its window in that moment is still m
   await assert.rejects(ff.clock.settled(x.js(`createRep(99999, "k3", { url: "https://m.example/", cookieStoreId: "${C1}" })`)), /Invalid window ID/);
   x.kill();
 });
+
+test("a ghost pinned while Tidier is starting, its values lost, is an essential with no ghost left", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { k: entry("https://k.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  ff.addTab(w.id, { url: GHOST("ghost", "k"), pinned: true, discarded: true, cookieStoreId: C1 }); // dragged, so no values, and pinned
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://k.example/"]);
+  assert.equal(ff.list(w.id).filter(t => t.url.includes("kind=ghost")).length, 0);
+  assert.deepEqual(Object.keys(ff.synced), []);
+  x.kill();
+});
