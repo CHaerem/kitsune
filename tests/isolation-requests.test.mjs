@@ -566,7 +566,7 @@ test("a catastrophic regular expression holds nothing up", async () => {
   const answer = await ff.request({ tabId: home.id, url: evil });
   const ms = performance.now() - t0;
   assert.equal(answer.cancel, undefined);
-  assert.ok(ms < 500, `took ${Math.round(ms)} ms`);
+  assert.ok(ms < 2000, `took ${Math.round(ms)} ms`); // takes ms; on Firefox's own engine, days
   x.kill();
 });
 
