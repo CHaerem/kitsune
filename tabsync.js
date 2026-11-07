@@ -292,6 +292,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
     unruled,
     earlyKeys,
+    quietNotes, closeGroups,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.

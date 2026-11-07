@@ -118,7 +118,9 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   closedIn.delete(windowId);
   serial(async () => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
+    // No longer selected, its own event is on its way: going through every tab selected
+    // for a moment (each page an Undo brings back) would show each one's space in turn.
+    if (!tab?.active || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
       if (last) { await browser.tabs.update(last.id, { active: true }).catch(() => {}); return; }
