@@ -57,9 +57,10 @@ export class FakeFirefox {
   // Selecting a tab the way the tab strip does: events only, no extension call.
   select(id) {
     const t = this.tabs.get(id); const w = this.wins.get(t.windowId);
+    const previousTabId = w.order.find(x => this.tabs.get(x).active);
     for (const x of w.order) this.tabs.get(x).active = false;
-    t.active = true; t.discarded = false;
-    this.ext?.b.tabs.onActivated.fire({ tabId: id, windowId: t.windowId });
+    t.active = true; t.discarded = false; t.hidden = false; // Firefox shows a hidden tab you select
+    this.ext?.b.tabs.onActivated.fire({ tabId: id, windowId: t.windowId, previousTabId });
   }
   // A page load the page itself asked for (location.replace) or that the user made.
   navigate(id, url, title = url) {
@@ -135,7 +136,7 @@ export class FakeFirefox {
       remove: async ids => { ids = Array.isArray(ids) ? ids : [ids]; ids.forEach(need); for (const id of ids) { ff.log.push(["remove", id, ff.tabs.get(id).url]); ff.rm(id); } },
       show: async ids => { ff.log.push(["show", ids]); for (const id of [ids].flat()) need(id).hidden = false; },
       hide: async ids => { ff.log.push(["hide", ids]); for (const id of [ids].flat()) { const t = need(id); if (!t.pinned && !t.active) t.hidden = true; } },
-      discard: async id => { const t = need(id); if (!t.active && !ff.refuseDiscard?.has(id)) t.discarded = true; }, // Firefox refuses the selected tab, and a page with unsaved input
+      discard: async id => { const t = need(id); ff.log.push(["discard", id]); if (!t.active && !ff.refuseDiscard?.has(id)) t.discarded = true; }, // Firefox refuses the selected tab, and a page with unsaved input
       reload: async id => { need(id); ff.log.push(["reload", id]); },
       // As SessionStore does: created blank, then the original's values, then its page.
       duplicate: async (id, { active, index } = {}) => {

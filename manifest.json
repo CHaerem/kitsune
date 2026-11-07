@@ -57,6 +57,7 @@
       "ownfolders.js",
       "safemoves.js",
       "tabactions.js",
+      "foldrest.js",
       "copies.js",
       "tabnames.js",
       "moveover.js",

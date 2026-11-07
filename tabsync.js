@@ -933,7 +933,10 @@ browser.tabs.onAttached.addListener(tabId => {
 browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
   setTimeout(() => serial(async () => {
-    if (await adoptRestored(win.id)) await reconcileAll();
+    // Taken back, its tabs may be in closed folders. Until now they were strangers to
+    // showSpace, which showed them (spaces.js), and nothing else looks again until you
+    // select a tab there.
+    if (await adoptRestored(win.id)) { await reconcileAll(); await showSpace(win.id); }
     else await fillWindow(win.id, { fresh: true });
   }), NEW_WINDOW_DELAY_MS);
 });

@@ -120,21 +120,43 @@ function row(item, folderKey) {
 }
 
 // --- Folders -------------------------------------------------------------------
+const DOUBLE_CLICK_MS = 500; // the longest a second click usually takes (a Mac's default)
+const foldsWaiting = new Map(); // folder key -> whether a click closed it, while it waits for a second click
 function folder(f) {
-  const closed = view.alone ? f.collapsed : collapsed.has(f.key);
+  const closed = view.alone ? foldsWaiting.get(f.key) ?? f.collapsed : collapsed.has(f.key);
   const box = keep("folder:" + f.key, () => {
     const b = el("div", "folder");
     const head = el("div", "row head");
     head.dataset.folderHead = f.key;
-    head.onclick = () => {
+    // A double click renames, but its first click has closed the folder by then, and that
+    // unloads the tabs in it (foldrest.js): a new name must not cost you your pages. So a
+    // click with the mouse closes the row at once and tells the background only once no
+    // second click has come. The two clicks of a double click cancel out, and nothing is
+    // sent. A click from the keys (detail 0) has no second one.
+    // (Only the class and the count change here: Firefox sends no dblclick if the click
+    // before it took the element under the pointer away, as drawing the head again would.)
+    let foldSoon = null;
+    head.onclick = e => {
       if (b.classList.contains("renaming")) return;
-      if (view.alone) send({ type: "foldFolder", key: f.key, collapsed: !b.classList.contains("collapsed") });
-      else {
+      if (view.alone) {
+        const closing = !b.classList.contains("collapsed");
+        const fold = () => { foldsWaiting.delete(f.key); send({ type: "foldFolder", key: f.key, collapsed: closing }); };
+        clearTimeout(foldSoon);
+        if (!e.detail) return fold();
+        foldsWaiting.set(f.key, closing);
+        foldSoon = setTimeout(fold, DOUBLE_CLICK_MS);
+        b.classList.toggle("collapsed", closing);
+        head.querySelector(".count").textContent = closing && b.lastChild.children.length || "";
+      } else {
         if (collapsed.has(f.key)) collapsed.delete(f.key); else collapsed.add(f.key);
         b.classList.toggle("collapsed");
       }
     };
-    head.ondblclick = () => { if (view.alone && !f.live) rename(f.key); };
+    head.ondblclick = () => {
+      clearTimeout(foldSoon);
+      foldsWaiting.delete(f.key);
+      if (view.alone && !f.live) rename(f.key);
+    };
     head.oncontextmenu = e => { if (view.alone) openMenu(e, folderMenu(f.key, f.live)); };
     head.draggable = !!view?.alone;
     head.ondragstart = e => startDrag(e, { kind: "folder", key: f.key });

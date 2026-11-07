@@ -35,6 +35,7 @@ async function foldFolder(key, collapsed) {
   all[key].collapsed = !!collapsed;
   saveSynced(all);
   for (const w of await normalWindows()) successorSoon(w.id); // spaces.js: closing a tab does not land in a closed folder
+  await foldChanged(key); // foldrest.js
 }
 
 // Deleting a folder loses nothing: its tabs become ordinary tabs, which archiving
@@ -58,6 +59,7 @@ async function deleteFolder(key, windowId) {
   delete all[key];
   noteSaved(all);
   saveSynced(all);
+  await foldChanged(key); // a closed folder's tabs were hidden
   if (undo) say(windowId, "Folder deleted", { undo });
 }
 
@@ -93,6 +95,7 @@ async function moveTab(windowId, tabId, beforeTabId, folderKey) {
       if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : beforeTabId);
       successorSoon(w.id); // spaces.js: into a closed folder, perhaps with no move Firefox would report
     }
+    await restMoved(key); // foldrest.js
   } else {
     await moveInWindow(await browser.tabs.query({ windowId }), tabId, beforeTabId);
   }

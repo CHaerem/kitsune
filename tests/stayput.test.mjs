@@ -128,6 +128,9 @@ test("what Firefox is told follows a fold, an unload and a tab's closing while y
     ["second", { lastAccessed: 5000 }],
     ["third", { lastAccessed: 2000 }],
   ]);
+  // A closed folder's tab rests (foldrest.js), and an unloaded tab is passed over. This one
+  // refuses, as a page with unsaved input does, so only the fold says anything here.
+  ff.refuseDiscard = new Set([made.inWide.id]);
   const x = await start(ff);
   const told = async want => { for (let i = 0; i < 100 && ff.tabs.get(selected.id).successorTabId !== want; i++) await wait(100); assert.equal(ff.tabs.get(selected.id).successorTabId, want); };
   await told(made.inWide.id);

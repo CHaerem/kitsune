@@ -263,5 +263,6 @@ async function rememberFolder(all, key, windowId) {
     noteSaved(now, inside);
     saveSynced(now);
     if (items.length) await bringBack(windowId, items, tabs);
+    await foldChanged(key); // foldrest.js: a closed folder back again rests, or its tabs stay in ⌃Tab
   };
 }
