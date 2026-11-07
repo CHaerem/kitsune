@@ -314,6 +314,9 @@ test("an essential outside any container, loading in two windows at once, moves 
   ff.addTab(other.id, { url: "https://there.example/", cookieStoreId: B });
   const two = ff.addTab(other.id, { url: GHOST("essential", "e"), pinned: true, active: true }, { essentialKey: "e" });
   ff.addTab(other.id, { url: GHOST("essential", "f"), pinned: true, cookieStoreId: A }, { essentialKey: "f" });
+  // No window in use yet: an essential's placeholder selected in the one you use is opened at a
+  // start (selectedEssential, essentials.js), and here both pages ask themselves, as Firefox restores them.
+  ff.wins.get(w.id).focused = false; ff.focused = undefined;
   const x = await run(ff);
   const before = ff.log.length;
   const answers = await Promise.all([ff.request({ tabId: one.id, url: "https://mail.example/" }), ff.request({ tabId: two.id, url: "https://mail.example/" })]);

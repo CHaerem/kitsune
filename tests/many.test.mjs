@@ -324,13 +324,14 @@ test("after moving back, placeholders without an icon load their page, once", as
   const w = ff.addWindow({ focused: true });
   ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
   const other = ff.addWindow();
-  const bare = ff.addTab(other.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  // (With its title: one without is loaded once to get it back, titlesBack.)
+  const bare = ff.addTab(other.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1, title: "A" }, { syncKey: "a", syncRole: "ghost" });
   const x = await start(ff);
   assert.ok(ff.log.some(l => l[0] === "update-url" && l[1] === bare.id), "the placeholder loads");
   assert.equal(ff.store.placeholdersNeedPages, undefined, "and only this once");
   x.kill();
   ff.log.length = 0;
-  ff.tabs.get(bare.id).discarded = true;
+  Object.assign(ff.tabs.get(bare.id), { discarded: true, title: "A" }); // unloaded again by its page, with the title it set
   const y = await start(ff);
   assert.ok(!ff.log.some(l => l[0] === "update-url"), "an ordinary start loads nothing");
   y.kill();

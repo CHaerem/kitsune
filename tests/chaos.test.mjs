@@ -573,7 +573,10 @@ async function check(W, phase, { strong }) {
   // (After a refused call the tab it was about stays marked until the next start.)
   for (const name of refused ? [] : EMPTY_WHEN_IDLE) {
     const set = mem(name);
-    if (set?.size) bad("leak", `${name} holds ${[...set.keys()].slice(0, 5)} with nothing happening`);
+    // (A placeholder that is a window's selected tab waits to be left before it unloads: a
+    // window's last other tab pulled away leaves it selected there.)
+    const left = [...(set?.keys() ?? [])].filter(id => name !== "awaitingIcon" || !ff.tabs.get(id)?.active);
+    if (left.length) bad("leak", `${name} holds ${left.slice(0, 5)} with nothing happening`);
   }
   return W.violations.length === before;
 }
