@@ -56,6 +56,8 @@ async function spaceOf(windowId, tabs, spaces) {
 // Firefox opening there, with that space's login.
 const keptSpace = new Map(); // windowId -> what its sessions value says
 async function setSpace(windowId, space) {
+  // A window closed while this waited in the queue: nothing would take it out of here again.
+  if (!(await browser.windows.get(windowId).catch(() => null))) return;
   activeSpace.set(windowId, space);
   if (keptSpace.get(windowId) !== space) {
     keptSpace.set(windowId, space);

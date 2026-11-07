@@ -147,7 +147,7 @@ const OPS = {
   } },
   // A link from another app, without a container.
   outsideLink: { weight: 4, run(W) {
-    const w = W.focused();
+    const f = W.focused(), w = f?.type === "normal" ? f : W.windows()[0]; // Firefox opens it in a browser window, never in a popup
     if (w) W.ff.openTab(w.id, { url: W.newUrl(), active: true });
   } },
   // A tab opened in a space directly.

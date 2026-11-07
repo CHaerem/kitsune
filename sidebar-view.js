@@ -127,6 +127,7 @@ async function viewFor(windowId) {
 // not act on them before it starts (start, tabsync.js). Each tab is asked once: a session
 // being restored brings a view after every burst of tabs.
 const earlyKeys = new Map(); // tabId -> its key, until Tidier has started
+browser.tabs.onRemoved.addListener(tabId => earlyKeys.delete(tabId)); // also with no view to clear it after the start
 async function rowKeys(tabs) {
   if (started || !tidierAlone) { earlyKeys.clear(); return syncKeyByTab; }
   await Promise.all(tabs.filter(t => !earlyKeys.has(t.id)).map(async t => earlyKeys.set(t.id, await browser.sessions.getTabValue(t.id, SYNC_KEY).catch(() => undefined))));
