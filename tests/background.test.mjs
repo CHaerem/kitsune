@@ -1437,3 +1437,19 @@ test("an essential's placeholder opens its page itself when the other copy is st
   assert.equal(ff.tabs.get(onItsWay.id).windowId, there.id, "the other copy is not moved");
   x.kill();
 });
+
+test("a ghost made a moment ago is not taken for a page, nor unloaded before it has its title", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1, discarded: true }, { syncKey: "a", syncRole: "live" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const fresh = ff.addTab(there.id, { url: "about:blank", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" }); // Firefox says about:blank until the address is known
+  const x = await run(ff);
+  assert.equal(ff.values.get(live.id).syncRole, "live", "the live tab keeps its role");
+  assert.equal(ff.values.get(fresh.id).syncRole, "ghost");
+  assert.equal(ff.tabs.get(fresh.id).discarded, false, "and the new ghost goes on loading");
+  x.kill();
+});

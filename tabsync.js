@@ -347,7 +347,9 @@ async function reconcileAll() {
       const live = reps.filter(t => syncRoleByTab.get(t.id) === "live");
       // Exactly one live tab: prefer a loaded one. A real page is yours, whatever
       // its role says: a ghost selected before the roles were read has opened it.
-      const page = t => !t.discarded && !isGhostUrl(t.url);
+      // (A ghost made a moment ago still says about:blank. It must not be taken for a page: it
+      // would take over from a live tab Firefox has unloaded, or be unloaded before it has its title.)
+      const page = t => !t.discarded && isWeb(t.url);
       const selected = reps.filter(t => page(t) && t.active); // what you are looking at stays
       const keep = selected.find(t => t.windowId === focusedWindowId) || selected[0] || live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
