@@ -12,11 +12,17 @@ function moveCursor(to) {
 addEventListener("keydown", e => {
   if (e.target.closest?.("input, #menu") || e.metaKey || e.ctrlKey || e.altKey) return;
   const all = reachable(), at = all.indexOf(cursor);
+  // Its row has gone, or is out of sight in a folder folded since: Enter and ⌫ must not act
+  // on a tab you cannot see.
+  if (at < 0 && view?.alone) moveCursor(null);
   const tab = cursor?.dataset.tab && Number(cursor.dataset.tab);
+  // The first key starts at the tab you are on, not at the top of the sidebar. (Also after
+  // the cursor's row has gone, or the sidebar lost the focus: stayput.js.)
+  const start = () => (view?.alone && all.find(r => r.classList.contains("active"))) || all[0];
   const fold = closed => { if (cursor?.dataset.folderHead && cursor.parentElement.classList.contains("collapsed") !== closed) cursor.click(); };
   switch (e.key) {
-    case "ArrowDown": moveCursor(all[Math.min(at + 1, all.length - 1)]); break;
-    case "ArrowUp": moveCursor(all[Math.max(at - 1, 0)]); break;
+    case "ArrowDown": moveCursor(at < 0 ? start() : all[Math.min(at + 1, all.length - 1)]); break;
+    case "ArrowUp": moveCursor(at < 0 ? start() : all[Math.max(at - 1, 0)]); break;
     case "ArrowLeft": fold(true); break;
     case "ArrowRight": fold(false); break;
     case "Enter": cursor?.click(); break;

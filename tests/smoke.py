@@ -2691,7 +2691,8 @@ def alone_drag(m):
       // Keys: down to a tab, Enter selects it.
       const key = k => page.dispatchEvent(new page.KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));
       const reach = [...doc.querySelectorAll(".tile, #tabs .head, #tabs .tab")];
-      for (let i = 0; i <= reach.indexOf(plainTabs()[0]); i++) key("ArrowDown");
+      for (let i = 0; i <= reach.length; i++) key("ArrowUp");  // to the top, from wherever the first key starts
+      for (let i = 0; i < reach.indexOf(plainTabs()[0]); i++) key("ArrowDown");
       const chosen = doc.querySelector(".cursor");
       out.cursor = chosen === plainTabs()[0];
       await wait(100);
@@ -3828,6 +3829,562 @@ def alone_space_menu(m):
     no_problems(m, "after a space's menu")
 
 
+# Helpers for alone_stay_put. These checks work on the real sidebar, not on its page in a
+# tab: a background tab gets its scroll events some seconds late, and its timers at most
+# once a second, so waiting goes by the sidebar's clock too. The list is made shorter,
+# which takes the place of some fifty tabs.
+STAY_PUT = """
+  const obj = o => page.JSON.parse(JSON.stringify(o));
+  const side = page.browser.extension.getViews(obj({type: "sidebar", windowId: (await page.browser.windows.getCurrent()).id}))[0], doc = side.document;
+  const wait = ms => new Promise(done => side.setTimeout(() => done(), ms));
+  const list = doc.getElementById("tabs");
+  list.style.cssText = "flex:none;height:160px";
+  const plainTabs = () => [...doc.querySelectorAll("#tabs > .tab")];
+  const folders = () => [...doc.querySelectorAll("#tabs .folder")].map(f => ({name: f.querySelector(".head .title")?.textContent}));
+  const spaces = () => [...doc.querySelectorAll("#spaces .space")].map(b => ({id: b.dataset.space, active: b.classList.contains("active")}));
+  const until = async (test, ms = 8000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(30)) if (await test()) return true; return false; };
+  const tabs = page.browser.tabs;
+  const activeRow = () => doc.querySelector("#tabs .tab.active");
+  const box = () => list.getBoundingClientRect();
+  const fromTop = r => Math.round(r.getBoundingClientRect().top - box().top), fromBottom = r => Math.round(box().bottom - r.getBoundingClientRect().bottom);
+  const inView = r => fromTop(r) >= 0 && fromBottom(r) >= 0;
+  const mine = async () => {
+    const ids = new Set((await tabs.query(obj({windowId: (await page.browser.windows.getCurrent()).id}))).filter(t => t.url.includes("smoke-stay")).map(t => t.id));
+    return () => plainTabs().filter(r => ids.has(Number(r.dataset.tab)));
+  };
+  const select = async r => { const id = r.dataset.tab; await tabs.update(Number(id), obj({active: true})); await until(() => activeRow()?.dataset.tab === id); await wait(50); };
+  const scrollTo = y => new Promise(done => {
+    const was = list.scrollTop;
+    list.addEventListener("scroll", () => done(), {once: true});
+    list.scrollTop = y;
+    if (list.scrollTop === was) done();  // already there: no event comes
+    wait(3000).then(() => done("no scroll event"));
+  });
+  const switchTo = async id => {
+    doc.querySelector(`#spaces .space[data-space="${id}"]`).click();
+    await until(() => spaces().find(s => s.active).id === id && doc.querySelector(".tab.active, .tile.active"));
+    await wait(300);  // nothing may move after this either
+  };
+"""
+
+
+# A real wheel, real clicks and real keys from outside the page, aimed at the sidebar (its
+# page sits in two nested browsers in the window). A headless Firefox has no trackpad, but
+# these take Firefox's own way to the page, with focus and scrolling as they really are.
+SIDEBAR_AT = H + """const w = main(), a = w.SidebarController.browser.getBoundingClientRect(),
+    b = w.SidebarController.browser.contentDocument.getElementById("webext-panels-browser").getBoundingClientRect();
+  return {x: a.x + b.x, y: a.y + b.y};"""
+FOCUS_SIDEBAR = H + """const w = main(); w.focus(); w.SidebarController.browser.contentDocument.getElementById("webext-panels-browser").focus(); await wait(200); return 1;"""
+
+
+def real_wheel(m, at, x, y, dy):
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "wheel", "id": "wheel", "actions": [
+        {"type": "scroll", "x": int(at["x"] + x), "y": int(at["y"] + y), "deltaX": 0, "deltaY": dy, "duration": 0, "origin": "viewport"}]}]})
+    m.cmd("WebDriver:ReleaseActions")
+
+
+def real_click(m, at, x, y):
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+        {"type": "pointerMove", "duration": 0, "x": int(at["x"] + x), "y": int(at["y"] + y), "origin": "viewport"},
+        {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
+    m.cmd("WebDriver:ReleaseActions")
+
+
+def sidebar_setting_off(m):
+    # The setting off is the daily browser: should Tidier's sidebar be opened beside
+    # Sidebery, the list keeps behaving as it always did (compare alone_stay_put).
+    r = sidebar_page(m, """
+      await wait(1000);
+      const obj = o => page.JSON.parse(JSON.stringify(o)), tabs = page.browser.tabs, out = {};
+      const list = doc.getElementById("tabs"), key = k => page.dispatchEvent(new page.KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));
+      const until = async test => { for (const t0 = Date.now(); Date.now() - t0 < 5000 && !test(); ) await wait(30); };
+      list.style.cssText = "flex:none;height:64px";
+      const folder = doc.querySelector("#tabs .folder"), far = [...doc.querySelectorAll("#tabs > .tab")].at(-1);
+      if (!folder || !far) return {missing: true};
+      const before = (await tabs.query(obj({active: true, currentWindow: true})))[0].id;
+      await tabs.update(Number(far.dataset.tab), obj({active: true}));
+      await until(() => doc.querySelector("#tabs > .tab.active"));
+      await wait(300);
+      out.listStays = list.scrollTop === 0 && !!doc.querySelector("#tabs > .tab.active");
+      const inside = folder.querySelector(".tab");
+      await tabs.update(Number(inside.dataset.tab), obj({active: true}));
+      await until(() => folder.querySelector(".tab.active"));
+      folder.querySelector(".head").click();
+      await until(() => folder.classList.contains("collapsed"));
+      out.closedHidesAll = !!folder.querySelector(".tab.active") && [...folder.querySelectorAll(".tab")].every(x => x.offsetParent === null);
+      key("ArrowDown");
+      out.keyAtTop = doc.querySelector(".cursor") === doc.querySelector(".tile, #tabs .head, #tabs .tab");
+      page.dispatchEvent(new page.Event("blur"));
+      out.cursorStays = !!doc.querySelector(".cursor");
+      await tabs.update(before, obj({active: true}));
+      return out;""")
+    check("with the setting off, the list does not follow the selected tab", r.get("listStays") is True, str(r))
+    check("with the setting off, a closed folder hides all its tabs", r.get("closedHidesAll") is True, str(r))
+    check("with the setting off, the first arrow key starts at the top, and the cursor stays", r.get("keyAtTop") is True and r.get("cursorStays") is True, str(r))
+    m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t);
+      await wait(300); return 1;""")
+
+
+def alone_stay_put(m):
+    m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t);
+      await wait(300); return 1;""")
+    home, second, short = sidebar_page(m, STAY_PUT + """await wait(300);
+      side.dispatchEvent(new side.Event("blur"));
+      const a = spaces().find(s => s.active).id, others = spaces().filter(s => !s.active).map(s => s.id);
+      return [a, ...others];""")[:3]
+    m.js(H + """const w = main(); for (const ctx of args) { for (let i = 0; i < 8; i++) { w.gBrowser.addTrustedTab("https://example.org/?smoke-stay-" + ctx + "-" + i, {userContextId: ctx, inBackground: true}); await wait(60); } }
+      return 1;""", int(home.split("-")[-1]), int(second.split("-")[-1]))
+
+    # Each space keeps its place: also over a space too short to scroll, whose
+    # position of 0 must not be written to another.
+    r = sidebar_page(m, STAY_PUT + """
+      const [home, second, short] = args, out = {};
+      let rows = await mine();
+      await until(() => rows().length >= 8);
+      await select(rows()[5]);
+      await scrollTo(list.scrollTop - 17);
+      out.home = list.scrollTop;
+      await switchTo(second);
+      rows = await mine();
+      await until(() => rows().length >= 8);
+      await select(rows()[4]);
+      await scrollTo(list.scrollTop - 5);
+      out.second = list.scrollTop;
+      await switchTo(short);
+      out.short = list.scrollTop;
+      await switchTo(home);
+      out.homeBack = list.scrollTop;
+      await switchTo(second);
+      out.secondBack = list.scrollTop;
+      await switchTo(home);
+      out.homeAgain = list.scrollTop;
+      // Back and forth faster than the views come: only the last one counts, with nothing mixed up.
+      for (const id of [second, short, home, second, home]) { doc.querySelector(`#spaces .space[data-space="${id}"]`).click(); await wait(10); }
+      await until(() => spaces().find(s => s.active).id === home);
+      await wait(600);
+      out.homeQuick = list.scrollTop;
+      await switchTo(second);
+      out.secondQuick = list.scrollTop;
+      await switchTo(home);
+      // Restored first, then the selected tab shown by the least distance: from where
+      // you left the list, the row comes in at the top edge; from the top of the list, at the bottom.
+      rows = await mine();
+      await select(rows()[1]);
+      await scrollTo(list.scrollHeight);
+      out.away = !inView(activeRow());
+      await switchTo(short);
+      await switchTo(home);
+      out.restoredThenShown = {top: fromTop(activeRow()), bottom: fromBottom(activeRow())};
+      return out;""", home, second, short)
+    check("each space keeps its place in the list", r.get("home") and r["homeBack"] == r["home"] and r["homeAgain"] == r["home"] and r["secondBack"] == r["second"], str(r))
+    check("a space too short to scroll does not change another's place", r.get("short") == 0 and r["home"] != r["second"], str(r))
+    check("switching back and forth quickly mixes up no place", r.get("homeQuick") == r.get("home") and r.get("secondQuick") == r.get("second"), str(r))
+    check("a selected tab you scrolled away from comes back by the least distance from your place", r.get("away") and r["restoredThenShown"]["top"] == 0, str(r))
+
+    # The list moves only for a selected tab wholly out of view.
+    r = sidebar_page(m, STAY_PUT + """
+      const out = {}, rows = await mine(), r = rows();
+      await scrollTo(1 + list.scrollHeight);
+      await select(r[0]);
+      out.up = fromTop(r[0]);
+      await select(r.at(-1));
+      out.down = fromBottom(r.at(-1));
+      // Partly in view: it stays where it is.
+      const part = r[2], y = list.scrollTop + fromTop(part) + 10;
+      await scrollTo(y);
+      await select(part);
+      await wait(200);
+      out.partly = {moved: list.scrollTop - y, cut: fromTop(part)};
+      // A click on a row in view.
+      const y1 = list.scrollTop, seen = r.find(x => inView(x) && x !== activeRow());
+      seen.click();
+      await until(() => activeRow() === seen);
+      await wait(200);
+      out.clicked = {selected: activeRow() === seen, moved: list.scrollTop - y1};
+      // A tab opened in the background, below what is shown.
+      const before = plainTabs().length;
+      await tabs.create(obj({url: "https://example.org/?smoke-stay-background", active: false, cookieStoreId: doc.documentElement.dataset.space}));
+      await until(() => plainTabs().length > before);
+      await wait(200);
+      out.background = {added: plainTabs().length > before, moved: list.scrollTop - y1};
+      // And nothing moves by itself when the selected tab is out of view and something else changes.
+      await select(r.at(-1));
+      await scrollTo(0);
+      const out0 = !inView(activeRow());
+      await tabs.create(obj({url: "https://example.org/?smoke-stay-background2", active: false, cookieStoreId: doc.documentElement.dataset.space}));
+      await wait(500);
+      out.staysAway = {away: out0, moved: list.scrollTop};
+      // A tab that comes in above what is shown (moved there here or in another window).
+      await scrollTo(list.scrollTop + fromTop(r[1]));
+      const shown = r[1], top = fromTop(shown), mover = r.at(-1), first = plainTabs()[0];
+      send({type: "moveTab", tabId: Number(mover.dataset.tab), before: Number(first.dataset.tab), folder: null});
+      await until(() => plainTabs()[0] === mover);
+      await wait(200);
+      out.above = {arrived: plainTabs()[0] === mover, moved: fromTop(shown) - top};
+      return out;""")
+    check("a selected tab above the list comes in at the top edge, below it at the bottom edge", r.get("up") == 0 and r.get("down") == 0, str(r))
+    check("a partly shown selected tab does not move the list", r.get("partly", {}).get("moved") == 0 and r["partly"]["cut"] < 0, str(r))
+    check("clicking a row in view does not move the list", r.get("clicked") == {"selected": True, "moved": 0}, str(r))
+    check("a tab opened in the background does not move the list", r.get("background") == {"added": True, "moved": 0}, str(r))
+    check("with the selected tab scrolled away, other changes leave the list alone", r.get("staysAway") == {"away": True, "moved": 0}, str(r))
+    check("a tab that comes in above what is shown does not move what you see", r.get("above") == {"arrived": True, "moved": 0}, str(r))
+
+    # A closed folder shows the selected tab, and only that; nothing is unfolded or written.
+    r = sidebar_page(m, STAY_PUT + """
+      const out = {}, rows = await mine();
+      const space = doc.documentElement.dataset.space;
+      send({type: "newFolder", space, name: "Stay"});
+      await until(() => folders().some(f => f.name === "Stay"));
+      const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Stay"), folder = head.parentElement, key = head.dataset.folderHead;
+      for (const r of rows().slice(0, 3)) send({type: "moveTab", tabId: Number(r.dataset.tab), folder: key, before: null});
+      const inFolder = () => [...folder.querySelectorAll(".tab")];
+      await until(() => inFolder().length === 3);
+      const shown = () => inFolder().filter(r => r.offsetParent !== null).map(r => r.dataset.tab);
+      const stored = async () => (await page.browser.storage.local.get("syncedTabs")).syncedTabs[key]?.collapsed;  // written a moment later
+      const a = inFolder()[0], b = inFolder()[1];
+      await select(b);
+      head.click();
+      await until(() => folder.classList.contains("collapsed") && shown().length < 3);
+      await until(async () => (await stored()) === true);
+      out.foldedHere = {shown: shown(), want: [b.dataset.tab], stored: await stored(), inView: inView(b)};
+      await select(rows()[0]);
+      await wait(150);
+      out.left = {shown: shown(), stored: await stored(), closed: folder.classList.contains("collapsed")};
+      await scrollTo(list.scrollHeight);
+      await select(a);
+      await wait(150);
+      out.selectedInside = {shown: shown(), want: [a.dataset.tab], stored: await stored(), closed: folder.classList.contains("collapsed"), inView: inView(a), headInView: inView(head)};
+      // Its row goes when you leave it: from above what is shown, without moving what you see.
+      await scrollTo(list.scrollHeight);
+      const seen = rows().filter(inView).at(-1), seenAt = fromTop(seen), above = !inView(a);
+      seen.click();
+      await until(() => activeRow() === seen && shown().length === 0);
+      await wait(150);
+      out.leftFromBelow = {above, gone: shown().length, moved: fromTop(seen) - seenAt};
+      head.click();
+      await until(() => !folder.classList.contains("collapsed"));
+      await until(async () => (await stored()) === false);
+      out.unfolded = {shown: shown().length, stored: await stored()};
+      return {...out, key};""")
+    check("folding the selected tab's folder keeps that row and hides the others", r.get("foldedHere") and r["foldedHere"]["shown"] == r["foldedHere"]["want"] and r["foldedHere"]["stored"] is True and r["foldedHere"]["inView"], str(r))
+    check("leaving the tab hides it, and the folder stays closed", r.get("left") == {"shown": [], "stored": True, "closed": True}, str(r))
+    check("selecting a tab in a closed folder shows it, in view, and unfolds nothing", r.get("selectedInside") and r["selectedInside"]["shown"] == r["selectedInside"]["want"] and r["selectedInside"]["stored"] is True and r["selectedInside"]["closed"] and r["selectedInside"]["inView"] and r["selectedInside"]["headInView"], str(r))
+    check("leaving a tab in a closed folder above the view does not move what you see", r.get("leftFromBelow") == {"above": True, "gone": 0, "moved": 0}, str(r))
+    check("unfolding brings back all its tabs", r.get("unfolded") == {"shown": 3, "stored": False}, str(r))
+    folder_key = r.get("key")
+
+    # After closing: not an unloaded tab, even if used later, and not into a closed folder.
+    r = sidebar_page(m, STAY_PUT + """
+      const out = {}, rows = await mine();
+      const folder = doc.querySelector(`.folder[data-key="${args[0]}"]`), head = folder.firstChild, inFolder = () => [...folder.querySelectorAll(".tab")];
+      const told = (id, next) => until(async () => (await tabs.get(id)).successorTabId === next);
+      const id = r => Number(r.dataset.tab);
+      const [l, u, s] = rows().slice(-3).map(id);
+      for (const r of rows().slice(-3)) await select(r);
+      await tabs.discard(u);
+      out.unloaded = (await tabs.get(u)).discarded;
+      out.toldLoaded = await told(s, l);
+      await tabs.remove(s);
+      await until(() => activeRow() && activeRow().dataset.tab !== String(s));
+      out.afterUnloaded = {selected: id(activeRow()), want: l};
+      // Used just before, in a folder you then close while on another tab.
+      const f = inFolder()[0], t = rows().at(-1);
+      await select(f);
+      await select(t);
+      out.toldFolder = await told(id(t), id(f));
+      head.click();
+      await until(() => folder.classList.contains("collapsed"));
+      out.toldOutside = await until(async () => { const n = (await tabs.get(id(t))).successorTabId; return n !== id(f) && n !== undefined; });
+      const tId = id(t);
+      await tabs.remove(tId);
+      await until(() => activeRow() && activeRow().dataset.tab !== String(tId));
+      out.afterFolded = {outside: !folder.contains(activeRow()), closed: folder.classList.contains("collapsed")};
+      // Closing the selected tab inside a closed folder: a tab in a folder only unloads, in its
+      // place, so nothing is lost; you land outside, and its row goes with the folder still closed.
+      const kept = inFolder().find(r => !r.classList.contains("unloaded")), keptId = id(kept), count = inFolder().length;
+      await select(kept);
+      out.toldOut = await until(async () => { const n = (await tabs.get(keptId)).successorTabId; return n !== undefined && !inFolder().some(r => id(r) === n); });
+      await tabs.remove(keptId);
+      await until(() => activeRow() && activeRow().dataset.tab !== String(keptId) && inFolder().length === count && !inFolder().some(r => id(r) === keptId));
+      await wait(200);
+      out.closedInside = {landedOutside: !folder.contains(activeRow()), kept: inFolder().length === count, hidden: inFolder().every(r => r.offsetParent === null), closed: folder.classList.contains("collapsed")};
+      // Put into the closed folder with no move for Firefox to report: the window's last
+      // tab, used just before this one, once Tidier has it in its record.
+      const last = (await tabs.create(obj({url: "https://example.org/?smoke-stay-last", active: true, cookieStoreId: doc.documentElement.dataset.space}))).id;
+      await until(() => activeRow()?.dataset.tab === String(last));
+      await wait(2000);
+      const on = rows()[2];
+      await select(on);
+      out.toldLast = await told(id(on), last);
+      out.lastIsLast = (await tabs.get(last)).index === (await tabs.query(obj({windowId: (await page.browser.windows.getCurrent()).id}))).length - 1;
+      send({type: "moveTab", tabId: last, folder: args[0], before: null});
+      await until(() => inFolder().some(r => id(r) === last));
+      out.inClosed = inFolder().some(r => id(r) === last);
+      out.toldNotLast = await until(async () => { const n = (await tabs.get(id(on))).successorTabId; return n !== last && n !== undefined; });
+      return out;""", folder_key)
+    check("Firefox knows the next tab as soon as a tab is unloaded", r.get("unloaded") is True and r.get("toldLoaded") is True, str(r))
+    check("closing a tab selects a loaded tab, not an unloaded one used later", r.get("afterUnloaded", {}).get("selected") == r.get("afterUnloaded", {}).get("want"), str(r))
+    check("closing a tab does not select into a folder closed meanwhile", r.get("toldFolder") is True and r.get("toldOutside") is True and r.get("afterFolded") == {"outside": True, "closed": True}, str(r))
+    check("closing the selected tab in a closed folder keeps it there unloaded, and lands outside", r.get("toldOut") and r.get("closedInside") == {"landedOutside": True, "kept": True, "hidden": True, "closed": True}, str(r))
+    check("nor into a closed folder a tab was put in without moving", r.get("toldLast") and r.get("lastIsLast") and r.get("inClosed") and r.get("toldNotLast"), str(r))
+
+    # A page without a container (about:, Tidier's settings) belongs to no space, and is
+    # shown in the one you are in: closing it lands as closing any tab there does, not on
+    # the unloaded tab Firefox would take for being next to it.
+    m.js(H + """main().gBrowser.addTrustedTab("about:robots", {inBackground: true}); await wait(500); return 1;""")
+    r = sidebar_page(m, STAY_PUT + """
+      const out = {}, rows = await mine(), id = r => Number(r.dataset.tab);
+      const windowId = (await page.browser.windows.getCurrent()).id;
+      const all = await tabs.query(obj({windowId})), robots = all.find(t => t.url === "about:robots").id;
+      const visible = all.filter(t => !t.hidden && !t.pinned && t.id !== robots).sort((a, b) => a.index - b.index);
+      const beside = visible.at(-1).id, used = rows().find(r => id(r) !== beside);
+      await select(used);
+      await tabs.discard(beside);
+      await tabs.update(robots, obj({active: true}));
+      await until(() => activeRow()?.dataset.tab === String(robots));
+      out.besideUnloaded = (await tabs.get(beside)).discarded;
+      out.told = await until(async () => (await tabs.get(robots)).successorTabId === id(used));
+      await tabs.remove(robots);
+      await until(() => activeRow() && activeRow().dataset.tab !== String(robots));
+      await wait(200);
+      out.landed = activeRow()?.dataset.tab === String(id(used));
+      return out;""")
+    check("closing a page without a container lands on the loaded tab used last, not the unloaded one beside it", r == {"besideUnloaded": True, "told": True, "landed": True}, str(r))
+
+    # The first key starts at the selected row, also after going away.
+    r = sidebar_page(m, STAY_PUT + """
+      const out = {}, rows = await mine(), key = k => side.dispatchEvent(new side.KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));
+      const cursor = () => doc.querySelector(".cursor"), reach = () => [...doc.querySelectorAll(".tile, #tabs .head, #tabs .tab")].filter(e => e.offsetParent !== null);
+      const r = rows()[3];
+      await select(r);
+      out.none = !cursor();
+      key("ArrowDown");
+      out.first = cursor() === r;
+      key("ArrowDown");
+      out.second = reach().indexOf(cursor()) === reach().indexOf(r) + 1;
+      side.dispatchEvent(new side.Event("blur"));
+      out.gone = !cursor();
+      key("ArrowUp");
+      out.againUp = cursor() === r;
+      // Its row drawn again (a page's title, a sound): the mark stays, or you lose your place.
+      await tabs.update(Number(r.dataset.tab), obj({muted: true}));
+      await until(() => r.querySelector(".sound"));
+      out.markStays = !!r.querySelector(".sound") && r.classList.contains("cursor");
+      await tabs.update(Number(r.dataset.tab), obj({muted: false}));
+      await until(() => !r.querySelector(".sound"));
+      side.dispatchEvent(new side.Event("blur"));
+      const tile = doc.querySelector("#essentials .tile");
+      await tabs.update(Number(tile.dataset.tab), obj({active: true}));
+      await until(() => tile.classList.contains("active"));
+      key("ArrowDown");
+      out.onTile = cursor() === tile;
+      side.dispatchEvent(new side.Event("blur"));
+      // Walking by key: the cursor brings a row in by the least distance, and Enter selects
+      // it without moving the list again.
+      await select(r);
+      await scrollTo(0);
+      key("ArrowDown");
+      for (let i = 0; i < 30 && cursor() !== rows().at(-1); i++) key("ArrowDown");
+      out.walked = {on: cursor() === rows().at(-1), bottom: fromBottom(cursor())};
+      const y = list.scrollTop;
+      key("Enter");
+      await until(() => activeRow() === rows().at(-1));
+      await wait(200);
+      out.entered = {selected: activeRow() === rows().at(-1), moved: list.scrollTop - y};
+      side.dispatchEvent(new side.Event("blur"));
+      // A cursor on a row that is hidden since (its folder folded by a click): ⌫ and Enter do
+      // nothing to a tab you cannot see, and the next arrow key starts at the selected row.
+      const space = doc.documentElement.dataset.space, name = "Fold under cursor";
+      send({type: "newFolder", space, name});
+      await until(() => folders().some(f => f.name === name));
+      const hide = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === name), child = rows()[0], childId = Number(child.dataset.tab);
+      send({type: "moveTab", tabId: childId, folder: hide.dataset.folderHead, before: null});
+      await until(() => hide.parentElement.contains(child));
+      await select(rows().at(-1));
+      side.dispatchEvent(new side.Event("blur"));
+      for (let i = 0; i < 40 && cursor() !== child; i++) key("ArrowUp");
+      out.onChild = cursor() === child;
+      hide.click();
+      await until(() => child.offsetParent === null);
+      key("Backspace");
+      key("Enter");
+      await wait(300);
+      out.hiddenAlive = await tabs.get(childId).then(() => true, () => false);
+      out.hiddenNotSelected = activeRow() === rows().at(-1);
+      key("ArrowDown");
+      out.fromSelected = cursor() === rows().at(-1);
+      side.dispatchEvent(new side.Event("blur"));
+      send({type: "deleteFolder", key: hide.dataset.folderHead});
+      await until(() => !folders().some(f => f.name === name));
+      // Ready for a real ⌃Tab from outside the sidebar, whichever way Firefox orders it: to the
+      // tab after this one or the tab used before it, the same one here, below what is shown.
+      await select(rows().at(-1));
+      await select(rows().at(-2));
+      await scrollTo(0);
+      out.target = rows().at(-1).dataset.tab;
+      return out;""")
+    check("the first arrow key starts at the selected row", r.get("none") and r.get("first") and r.get("second"), str(r))
+    check("the cursor goes when the sidebar loses the focus, and the next key starts at the selected row", r.get("gone") and r.get("againUp"), str(r))
+    check("the cursor's mark stays when its row is drawn again", r.get("markStays") is True, str(r))
+    check("the first arrow key starts at the selected essential", r.get("onTile") is True, str(r))
+    check("walking down by key brings a row in by the least distance, and Enter leaves the list where it is",
+          r.get("walked") == {"on": True, "bottom": 0} and r.get("entered") == {"selected": True, "moved": 0}, str(r))
+    check("a cursor on a row hidden since closes and selects nothing, and the next key starts at the selected row",
+          r.get("onChild") and r.get("hiddenAlive") and r.get("hiddenNotSelected") and r.get("fromSelected"), str(r))
+    m.js(H + "main().focus(); await wait(300); return 1;")
+    press(m, "\ue004", CTRL)
+    k = sidebar_page(m, STAY_PUT + """
+      await until(() => activeRow()?.dataset.tab === args[0]);
+      await wait(100);
+      return {selected: activeRow()?.dataset.tab === args[0], bottom: activeRow() && fromBottom(activeRow())};""", r.get("target"))
+    check("⌃Tab to a tab below the list brings it in at the bottom edge", k == {"selected": True, "bottom": 0}, str(k))
+
+    # The same for real: the wheel, clicks on the bar and on a row, and keys.
+    at = m.js(SIDEBAR_AT)
+    settled = """let last = -1; await until(async () => { const same = list.scrollTop === last; last = list.scrollTop; await wait(100); return same; });"""
+    centre = """const middle = e => { const q = e.getBoundingClientRect(); return {x: q.x + q.width / 2, y: q.y + q.height / 2}; };
+      const dot = id => middle(doc.querySelector(`#spaces .space[data-space="${id}"]`));
+      const until_space = id => until(() => spaces().find(s => s.active).id === id && doc.querySelector(".tab.active, .tile.active"));"""
+    place_home = sidebar_page(m, STAY_PUT + centre + """
+      const rows = await mine(), r = rows()[4];
+      await select(r);
+      await scrollTo(list.scrollTop + fromTop(r) - 64);
+      return {list: middle(list), was: list.scrollTop};""")
+    real_wheel(m, at, place_home["list"]["x"], place_home["list"]["y"], -25)
+    wheeled = sidebar_page(m, STAY_PUT + centre + "await until(() => list.scrollTop !== args[1]);" + settled + "return {y: list.scrollTop, dot: dot(args[0])};", second, place_home["was"])
+    real_click(m, at, wheeled["dot"]["x"], wheeled["dot"]["y"])
+    there = sidebar_page(m, STAY_PUT + centre + """
+      await until_space(args[0]);
+      const rows = await mine(), r = rows()[3];
+      await select(r);
+      await scrollTo(list.scrollTop + fromTop(r) - 32);
+      return {list: middle(list), was: list.scrollTop, dot: dot(args[1])};""", second, home)
+    real_wheel(m, at, there["list"]["x"], there["list"]["y"], -15)
+    y2 = sidebar_page(m, STAY_PUT + "await until(() => list.scrollTop !== args[0]);" + settled + "return list.scrollTop;", there["was"])
+    real_click(m, at, there["dot"]["x"], there["dot"]["y"])
+    back = sidebar_page(m, STAY_PUT + centre + """
+      await until_space(args[0]);
+      await wait(300);
+      const rows = await mine(), seen = rows().find(x => inView(x) && x !== activeRow());
+      return {y: list.scrollTop, row: middle(seen), tab: seen.dataset.tab, active: activeRow()?.dataset.tab};""", home)
+    check("with a real wheel and real clicks on the bar, each space keeps its place",
+          wheeled["y"] < place_home["was"] and y2 < there["was"] and back.get("y") == wheeled["y"], f"{place_home} {wheeled} {there} {y2} {back}")
+    real_click(m, at, back["row"]["x"], back["row"]["y"])
+    clicked = sidebar_page(m, STAY_PUT + """
+      await until(() => activeRow()?.dataset.tab === args[0]);
+      await wait(200);
+      return {selected: activeRow()?.dataset.tab === args[0], y: list.scrollTop, focus: doc.hasFocus(), cursor: !!doc.querySelector(".cursor")};""", back["tab"])
+    check("a real click on a row in view selects it and does not move the list, and the page has the focus after",
+          clicked == {"selected": True, "y": back["y"], "focus": False, "cursor": False}, str(clicked))
+    m.js(FOCUS_SIDEBAR)
+    press(m, "\ue015")  # ↓
+    first = sidebar_page(m, STAY_PUT + """await until(() => doc.querySelector(".cursor"));
+      return {on: doc.querySelector(".cursor")?.dataset.tab, selected: activeRow()?.dataset.tab, focus: doc.hasFocus()};""")
+    m.js(FOCUS_SIDEBAR)
+    press(m, "\ue015")
+    second_key = sidebar_page(m, STAY_PUT + """const c = () => doc.querySelector(".cursor"), reach = [...doc.querySelectorAll(".tile, #tabs .head, #tabs .tab")].filter(e => e.offsetParent !== null);
+      await until(() => c()?.dataset.tab !== args[0]);
+      return {next: reach.indexOf(c()) === reach.findIndex(e => e.dataset.tab === args[0]) + 1, tab: c()?.dataset.tab};""", first.get("on"))
+    m.js(FOCUS_SIDEBAR)
+    press(m, "\ue007")  # Enter
+    entered = sidebar_page(m, STAY_PUT + """await until(() => activeRow()?.dataset.tab === args[0] && !doc.hasFocus());
+      await wait(100);
+      return {selected: activeRow()?.dataset.tab === args[0], cursor: !!doc.querySelector(".cursor"), focus: doc.hasFocus()};""", second_key.get("tab"))
+    check("real keys: the first ↓ starts at the selected row, the next moves on", first.get("on") == first.get("selected") and first.get("focus") is True and second_key.get("next") is True, f"{first} {second_key}")
+    check("real keys: Enter selects, the page has the focus, and the cursor's mark is gone", entered == {"selected": True, "cursor": False, "focus": False}, str(entered))
+
+    # For real: placeholders here, whose pages are live in another window. Selecting one
+    # gives the row another tab, from another window, while you look at the list.
+    opened = m.js(H + """if (other()) return false;
+      const w = main().OpenBrowserWindow(); w.__smoke = true;
+      for (let i = 0; i < 100 && !(w.gBrowser?.tabs.length > 3); i++) await wait(100);
+      await wait(2500); return true;""")
+    space = sidebar_page(m, STAY_PUT + "await wait(100); return doc.documentElement.dataset.space;")
+    m.js(H + """const o = other(), context = args[0];
+      for (let i = 0; i < 5; i++) { o.gBrowser.addTrustedTab("https://example.org/?smoke-stay-far-" + i, {userContextId: context, inBackground: true}); await wait(80); }
+      await wait(2500); main().focus(); await wait(500); return 1;""", int(space.split("-")[-1]))
+    r = sidebar_page(m, STAY_PUT + """
+      const out = {}, id = r => Number(r.dataset.tab), folderKey = args[0], title = r => r.querySelector(".title").textContent;
+      const ghosts = async () => { const g = []; for (const r of plainTabs()) if ((await tabs.get(id(r))).url.includes("ghost.html")) g.push(r); return g; };
+      const pulled = (was, name) => until(() => activeRow() && activeRow().dataset.tab !== was && title(activeRow()) === name && !activeRow().classList.contains("unloaded"));
+      let g = await ghosts();
+      out.placeholders = g.length;
+      // A click on one at the very top of what is shown: the list does not move, though the tab does.
+      const c = g[0], was = c.dataset.tab, name = title(c);
+      await scrollTo(list.scrollTop + fromTop(c));
+      const y = list.scrollTop, moves = [];
+      list.addEventListener("scroll", () => moves.push(list.scrollTop));
+      c.click();
+      out.clickPulled = await pulled(was, name);
+      await wait(400);
+      out.click = {moved: list.scrollTop - y, events: moves.length, top: fromTop(activeRow())};
+      // One out of view, selected from outside the list: it comes in, and stays in while the tab arrives.
+      g = await ghosts();
+      const f = g.at(-1), fWas = f.dataset.tab, fName = title(f);
+      await scrollTo(0);
+      await tabs.update(id(f), obj({active: true}));
+      out.farPulled = await pulled(fWas, fName);
+      await wait(400);
+      out.farInView = inView(activeRow());
+      // One in a closed folder: its row shows, it stays the only one when the tab arrives, and the folder stays closed.
+      const folder = doc.querySelector(`.folder[data-key="${folderKey}"]`), inside = () => [...folder.querySelectorAll(".tab")];
+      const shown = () => inside().filter(r => r.offsetParent !== null);
+      g = await ghosts();
+      const p = g[0], pName = title(p);
+      send({type: "moveTab", tabId: id(p), folder: folderKey, before: null});
+      await until(() => inside().some(r => r === p));
+      const pWas = p.dataset.tab;
+      await tabs.update(id(p), obj({active: true}));
+      out.closedPulled = await pulled(pWas, pName);
+      await wait(400);
+      out.closed = {only: shown().length === 1 && shown()[0] === activeRow(), closed: folder.classList.contains("collapsed"), inView: inView(activeRow()), stored: (await page.browser.storage.local.get("syncedTabs")).syncedTabs[folderKey].collapsed};
+      // Ready for closing: a loaded tab used just before this one, and then a placeholder made.
+      g = await ghosts();
+      const [before, onTab] = plainTabs().filter(r => !r.classList.contains("unloaded") && !g.includes(r));
+      await select(before);
+      await select(onTab);
+      return {...out, before: id(before), onTab: id(onTab)};""", folder_key)
+    check("clicking a placeholder at the top of the list does not move it", r.get("placeholders", 0) >= 3 and r.get("clickPulled") and r.get("click") == {"moved": 0, "events": 0, "top": 0}, str(r))
+    check("selecting a placeholder out of view brings it in, and it stays in while its tab arrives", r.get("farPulled") and r.get("farInView"), str(r))
+    check("a placeholder in a closed folder shows while selected, and only it, with the folder closed", r.get("closedPulled") and r.get("closed") == {"only": True, "closed": True, "inView": True, "stored": True}, str(r))
+    m.js(H + """other().gBrowser.addTrustedTab("https://example.org/?smoke-stay-later", {userContextId: args[0], inBackground: true}); await wait(2500); main().focus(); await wait(300); return 1;""", int(space.split("-")[-1]))
+    r2 = sidebar_page(m, STAY_PUT + """
+      const out = {}, [before, onTab] = args;
+      const all = await tabs.query(obj({windowId: (await page.browser.windows.getCurrent()).id}));
+      const used = all.find(x => x.id === before).lastAccessed;
+      out.placeholderLater = all.some(t => t.url.includes("ghost.html") && t.lastAccessed > used);
+      out.told = await until(async () => (await tabs.get(onTab)).successorTabId === before);
+      await tabs.remove(onTab);
+      await until(() => activeRow() && activeRow().dataset.tab !== String(onTab));
+      await wait(300);
+      out.landed = activeRow()?.dataset.tab === String(before);
+      return out;""", r.get("before"), r.get("onTab"))
+    check("closing a tab passes over a placeholder used later, for the loaded tab used before", r2 == {"placeholderLater": True, "told": True, "landed": True}, str(r2))
+    # Nothing was lost or doubled by all that: each tab once per window, loaded once.
+    r = m.js(H + """const out = {doubled: [], loadedTwice: []};
+      const keys = new Set(wins().flatMap(w => w.gBrowser.tabs.map(t => key(w, t)).filter(Boolean)));
+      for (const k of keys) {
+        if (wins().some(w => w.gBrowser.tabs.filter(t => key(w, t) === k).length > 1)) out.doubled.push(k);
+        if (wins().flatMap(w => w.gBrowser.tabs.filter(t => key(w, t) === k && role(w, t) === "live")).length > 1) out.loadedTwice.push(k);
+      }
+      return out;""")
+    check("each tab is in a window once and live in one window, after all this", r == {"doubled": [], "loadedTwice": []}, str(r))
+
+    # Its tabs must be out of the folder before closing them, or they only unload; and one
+    # that is only a placeholder by now, having no page, is closed for good from the folder.
+    sidebar_page(m, STAY_PUT + """for (const head of doc.querySelectorAll("#tabs .folder .head")) if (head.querySelector(".title").textContent === "Stay") {
+        const unloaded = () => [...head.parentElement.querySelectorAll(".tab.unloaded")];
+        for (const r of unloaded()) await tabs.remove(Number(r.dataset.tab));
+        await until(() => !unloaded().length);
+        send({type: "deleteFolder", key: head.dataset.folderHead});
+      }
+      await until(() => !folders().some(f => f.name === "Stay")); list.style.cssText = "";""")
+    m.js(H + """await removeWhere((x, t) => url(t).includes("smoke-stay"));
+      const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t);
+      if (args[0]) await close(other());
+      await wait(500); return 1;""", opened)
+
+
 def alone_end(m):
     no_problems(m, "with Tidier alone")
 
@@ -3851,11 +4408,13 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_tab_names,
                 alone_selection,
                 alone_space_menu,
+                alone_stay_put,
                 alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, quiet_off, ghost_title,
           pinned_ghost, orphans, popups, archiving, shortcuts, look,
+          sidebar_setting_off,
           tab_menu_off,
           live_folders, many_tabs, trees, handover, reopened_window, update, restart, move_over)
 # What a group needs run before it (as setup, reported only if it fails) when
@@ -3869,7 +4428,7 @@ NEEDS[move_over] = [new_window]
 # By default the groups run in these parallel runs, each in its own test
 # Firefox, about equally long (the whole test in about a third of the time).
 SHARDS = (  # measured: about 120, 145 and 140 s on a Mac, before saved_tabs (about 60 s)
-    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, ghost_title, saved_tabs, quiet_off, tab_menu_off),
+    (external_links, new_window, more_windows, orphans, popups, shortcuts, look, sidebar_setting_off, ghost_title, saved_tabs, quiet_off, tab_menu_off),
     (essentials, folders, tab_sync, folder_pull, tab_moves, trees, pinned_ghost),
     (archiving, live_folders, many_tabs, handover, reopened_window, update, restart),
     (move_over,),

@@ -80,6 +80,36 @@ async function lastUsedIn(windowId, space, ...except) {
   return tabs.filter(t => !except.includes(t.id)).sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 }
 
+// The tab to land on when the selected one closes. You did not ask for this tab, so it
+// should not load a page by itself or open up a folder you closed: the tabs outside closed
+// folders if there are any, else all of them, and among those the one used last that is
+// already loaded in this window, else the one used last. An essential counts. (Switching
+// space is different: there you asked for that space, and lastUsedIn takes you back to the
+// tab you were on, loaded or not.)
+async function nextAfterClosing(windowId, space, exceptId) {
+  const here = (await browser.tabs.query({ windowId, cookieStoreId: space }).catch(() => [])).filter(t => t.id !== exceptId);
+  const all = await getSynced();
+  const outside = here.filter(t => !all[folderKeyOf(all, syncKeyByTab.get(t.id))]?.collapsed);
+  const choice = outside.length ? outside : here;
+  const loaded = choice.filter(t => !t.discarded && !isGhostUrl(t.url));
+  if (loaded.length) return loaded.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  return usedLastOf(choice);
+}
+
+// The one used last among tabs that may be placeholders. A placeholder's own lastAccessed
+// says when Tidier made it or passed over it, so its real page's is read, in whichever
+// window that is; with no real page anywhere it counts as never used. Only here are all
+// windows' tabs needed, and this is rare: a window you use has a loaded tab.
+async function usedLastOf(tabs) {
+  const keysOf = t => [syncKeyByTab.get(t.id), keyByTab.get(t.id)].filter(Boolean);
+  const realUse = new Map();
+  for (const t of await browser.tabs.query({}).catch(() => [])) {
+    if (!isGhostUrl(t.url)) for (const k of keysOf(t)) realUse.set(k, Math.max(realUse.get(k) || 0, t.lastAccessed || 0));
+  }
+  const usedAt = t => isGhostUrl(t.url) ? Math.max(0, ...keysOf(t).map(k => realUse.get(k) || 0)) : t.lastAccessed || 0;
+  return tabs.sort((a, b) => usedAt(b) - usedAt(a))[0];
+}
+
 // Switching: back to the tab you used last in that space, else a new tab there.
 async function switchSpace(windowId, space) {
   const last = await lastUsedIn(windowId, space);
@@ -123,10 +153,11 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
     // No longer selected, its own event is on its way: going through every tab selected
     // for a moment (each page an Undo brings back) would show each one's space in turn.
-    if (!tab?.active || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
+    if (!tab?.active) { viewSoon(windowId); return; }
+    if (tab.cookieStoreId === NO_CONTAINER) { await setSuccessor(tab); viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
-      const last = await lastUsedIn(windowId, stay);
-      if (last) { await browser.tabs.update(last.id, { active: true }).catch(() => {}); return; }
+      const next = await nextAfterClosing(windowId, stay);
+      if (next) { await browser.tabs.update(next.id, { active: true }).catch(() => {}); return; }
       // Refused when the space has just been removed (safemoves.js): then this tab's space it is.
       if (await browser.tabs.create({ windowId, cookieStoreId: stay }).catch(() => null)) return;
     }
@@ -136,13 +167,40 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   });
 });
 
-// What Firefox selects when the selected tab closes: the one used last in its
-// space, not the next tab it happens to be able to show.
+// What Firefox selects when the selected tab closes: see nextAfterClosing, not the
+// next tab it happens to be able to show. A page without a container (about:, Tidier's
+// settings) is shown in the space you are in, so closing it lands there too; left to
+// Firefox, it would land on whatever is beside it, an unloaded tab or a closed folder's.
 async function setSuccessor(tab) {
   if (!tidierAlone) return;
-  const next = await lastUsedIn(tab.windowId, tab.cookieStoreId, tab.id);
+  const space = tab.cookieStoreId === NO_CONTAINER ? activeSpace.get(tab.windowId) : tab.cookieStoreId;
+  if (!space) return;
+  const next = await nextAfterClosing(tab.windowId, space, tab.id);
   await browser.tabs.update(tab.id, { successorTabId: next ? next.id : browser.tabs.TAB_ID_NONE }).catch(() => {});
 }
+
+// The choice is made when a tab is selected, and Firefox cannot ask at the moment it
+// closes. So while you stay on a tab, what the choice rests on is looked at again when
+// it changes: a folder folded (foldFolder), a tab put in a folder (moveTab), a tab unloaded,
+// or moved to another window and leaving a placeholder here. At most one look waits per
+// window, however long the queue is busy (filling a new window is a tab event per tab):
+// it reads what is true when its turn comes, and only a change after that asks for another.
+const successorDue = new Set(); // windows with a look on its way
+function successorSoon(windowId) {
+  if (!tidierAlone || !started || successorDue.has(windowId)) return;
+  successorDue.add(windowId);
+  setTimeout(() => serial(async () => {
+    successorDue.delete(windowId);
+    const [active] = await browser.tabs.query({ windowId, active: true }).catch(() => []);
+    if (active) await setSuccessor(active);
+  }), SPACE_DEBOUNCE_MS);
+}
+browser.tabs.onCreated.addListener(tab => successorSoon(tab.windowId));
+browser.tabs.onMoved.addListener((tabId, { windowId }) => successorSoon(windowId));
+browser.tabs.onAttached.addListener((tabId, { newWindowId }) => successorSoon(newWindowId));
+browser.tabs.onDetached.addListener((tabId, { oldWindowId }) => successorSoon(oldWindowId));
+browser.tabs.onRemoved.addListener((tabId, { windowId, isWindowClosing }) => { if (!isWindowClosing) successorSoon(windowId); });
+browser.tabs.onUpdated.addListener((tabId, change, tab) => { if ("discarded" in change) successorSoon(tab.windowId); }, { properties: ["discarded"] });
 
 // A tab created in another space (a ghost or essential copy from tab sync, a tab
 // moved in) is hidden at once.
@@ -265,6 +323,6 @@ async function startSpaces() {
     const space = await spaceOf(w.id, tabs, await spaceList(used));
     await showSpace(w.id);
     const active = tabs.find(t => t.active);
-    if (active && active.cookieStoreId === space) await setSuccessor(active);
+    if (active && (active.cookieStoreId === space || active.cookieStoreId === NO_CONTAINER)) await setSuccessor(active);
   }
 }

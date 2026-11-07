@@ -111,6 +111,7 @@ export class FakeFirefox {
         if (p.pinned !== undefined && p.pinned !== t.pinned) { t.pinned = p.pinned; b.tabs.onUpdated.fire(id, { pinned: p.pinned }, ff.snap(t)); }
         if (p.openerTabId !== undefined) t.openerTabId = p.openerTabId;
         if (p.muted !== undefined) t.mutedInfo = { muted: p.muted };
+        if (p.successorTabId !== undefined) t.successorTabId = p.successorTabId;
         if (p.url) { ff.log.push(["update-url", id, p.url]); ff.navigate(id, p.url); }
         return ff.snap(t);
       },
