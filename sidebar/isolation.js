@@ -53,9 +53,6 @@ readPermissions();
 document.getElementById("problem").addEventListener("click", () => isolationTell("seen"));
 
 // --- Menus ------------------------------------------------------------------------------
-// A list in place where the menu can do that (tabmenu.js, with drawMenu), else one line
-// for each space: a narrow sidebar has no room for a menu beside a menu.
-const inPlace = (label, items) => typeof drawMenu === "function" ? [[label, items]] : items.map(([name, act]) => [`${label}: ${name}`, act]);
 const spacesOtherThan = id => (view?.spaces ?? []).filter(s => s.id !== id);
 
 const plainFolderMenu = folderMenu;
@@ -63,14 +60,13 @@ window.folderMenu = (key, live) => {
   const items = plainFolderMenu(key, live);
   if (!view?.alone) return items;
   const others = spacesOtherThan(view.space).map(s => [s.name, async () => isolationTell("moveFolder", { key, space: s.id, windowId: await thisWindow }), { color: s.color }]);
-  return others.length ? [...items, ...inPlace("Move to space", others)] : items;
+  return others.length ? [...items, ["Move to space", others]] : items; // a list in place: a narrow sidebar has no room for a menu beside a menu
 };
 
-// The tab menu's table (tabmenu.js), where it is there, with each item put by the one it
+// The tab menu's table (tabmenu.js), with each item put by the one it
 // belongs after: the table draws a line between groups. It is one list for one tab or
 // many: what can't take many has no `many`, and is left out then.
 function addToTabMenu() {
-  if (typeof TAB_MENU === "undefined") return;
   const after = (id, item) => {
     const at = TAB_MENU.findIndex(i => i.id === id);
     TAB_MENU.splice(at < 0 ? TAB_MENU.length : at + 1, 0, item);
@@ -88,12 +84,11 @@ function addToTabMenu() {
   }
 }
 
-// The space's menu (spacemenu.js), where it is there: New space, and then its name is
+// The space's menu (spacemenu.js): New space, and then its name is
 // ready to change on the line above the list. Editing the rest and deleting are on the
 // settings page, which that menu leads to.
 let namingNewSpace = null;
 function addToSpaceMenu() {
-  if (typeof spaceMenu !== "function") return;
   const plainSpaceMenu = spaceMenu;
   window.spaceMenu = space => {
     const items = plainSpaceMenu(space);
@@ -103,7 +98,7 @@ function addToSpaceMenu() {
   };
 }
 function nameNewSpace() {
-  if (namingNewSpace && view?.spaces.some(s => s.id === namingNewSpace) && typeof openSpaceBox === "function") {
+  if (namingNewSpace && view?.spaces.some(s => s.id === namingNewSpace)) {
     openSpaceBox(namingNewSpace);
     namingNewSpace = null;
   }
@@ -122,7 +117,7 @@ let draggedTabs = null;
 addEventListener("dragstart", e => {
   const id = Number(e.target.closest?.(".row.tab")?.dataset.tab);
   if (!view?.alone || !id) return;
-  draggedTabs = window.selectedTabs?.(id) ?? [id];
+  draggedTabs = selectedTabs(id); // selection.js
   dropForSpace.hidden = false;
 }, true);
 addEventListener("dragend", () => { draggedTabs = null; dropForSpace.hidden = true; dropForSpace.classList.remove("drop-into"); }, true);

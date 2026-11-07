@@ -98,8 +98,7 @@ const isSettled = (tabId, url) => !!settled.get(tabId)?.has(withoutFragment(url)
 const opensUnruled = globalThis.openUnruled;
 globalThis.openUnruled = props => {
   markByHand(props);
-  if (opensUnruled) return opensUnruled(props);
-  return browser.tabs.create(props).then(tab => { firstPage.delete(tab.id); return tab; });
+  return opensUnruled(props);
 };
 
 const requestOfTab = new Map(); // tabId -> its latest top-level request: a redirect has the same one
@@ -212,7 +211,7 @@ async function lookAtRequest(details, look) {
   if (look.given || requestOfTab.get(tabId) !== requestId) return {};
   if (here !== NO_CONTAINER && !firstPage && typedTooFast()) {
     settle(tabId, url); // for good: such a page goes on asking, and must not get a tab out once the time is up
-    tellOnce(tab.windowId, "A page kept sending this tab to other spaces, so it stays here");
+    say(tab.windowId, "A page kept sending this tab to other spaces, so it stays here");
     return {};
   }
   // A link from another app that a rule sends elsewhere goes to its small window there (littlewindow.js).
@@ -228,7 +227,7 @@ async function lookAtRequest(details, look) {
   // address that belongs to another. (A rule whose space is gone counts for nothing, so
   // this is a Firefox refusing for a moment, not an address that can never load.) The
   // address goes with what is said, since it is then nowhere else.
-  tellOnce(tab.windowId, here === NO_CONTAINER ? `This could not be opened in a space, so it was not loaded: ${url}` : `This could not be opened in its space, so it was not loaded: ${url}`);
+  say(tab.windowId, here === NO_CONTAINER ? `This could not be opened in a space, so it was not loaded: ${url}` : `This could not be opened in its space, so it was not loaded: ${url}`);
   return { cancel: true };
 }
 
@@ -265,7 +264,7 @@ async function homeOf(tab) {
 // else. Returns whether it worked.
 async function openElsewhere(tab, url, space, popup, leaves = false) {
   if (tab.pinned && await essentialIntoSpace(tab, space)) return true;
-  const opening = openIn(tab, url, space, popup);
+  const opening = placeOfReopened(tab, space).then(index => openIn(tab, url, space, popup, index));
   let timer;
   const created = await Promise.race([
     opening,
@@ -279,9 +278,8 @@ async function openElsewhere(tab, url, space, popup, leaves = false) {
     opening.then(late => { if (late?.id && !stays) return closeOldTab(tab, late, space); }).catch(() => {});
     return false;
   }
-  newTabs.delete(tab.id);
-  setNotice("isolation", null);
   if (!stays) await closeOldTab(tab, created, space);
+  newTabs.delete(tab.id); // only now: until it has gone, no view draws it (reopensSoon, newtabs.js)
   return true;
 }
 
@@ -328,12 +326,21 @@ async function recordIntoSpace(key, created, space) {
   await forgetClosedPlaceholders("ghost", [key]);
 }
 
-async function openIn(tab, url, space, popup) {
-  if (!popup) return browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: tab.index + 1, ...(tab.pinned ? { pinned: true } : {}) });
+// An essential, or a tab with a record that comes out of no container, is the same tab in
+// a space, so it stays where it was. Anything else is a page arriving in that space, for
+// which there is one place (newtabs.js): the window's order says nothing about what is
+// drawn, so next to the old tab can be anywhere, or at the end, below a long list.
+async function placeOfReopened(tab, space) {
+  if (tab.pinned || (tab.cookieStoreId === NO_CONTAINER && await recordKeyOf(tab.id))) return tab.index + 1;
+  return indexWhenReopened(tab, space);
+}
+
+async function openIn(tab, url, space, popup, index) {
+  if (!popup) return browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index, ...(tab.pinned ? { pinned: true } : {}) });
   // A popup window takes no second tab: the page goes to the normal window you were using.
   const wins = await normalWindows();
   const win = wins.find(w => w.id === focusedWindowId) ?? wins[0];
-  if (win) return browser.tabs.create({ windowId: win.id, cookieStoreId: space, url, active: true });
+  if (win) return browser.tabs.create({ windowId: win.id, cookieStoreId: space, url, active: true, index: await topOfToday(win.id, space) });
   return browser.windows.create({ cookieStoreId: space, url }).then(made => made.tabs?.[0] ?? made);
 }
 
@@ -362,12 +369,6 @@ async function moveEssentialIntoSpace(key, space) {
   for (const copy of await copiesOf(key)) if (selected.has(copy.windowId)) await browser.tabs.update(copy.id, { active: true }).catch(() => {});
   await browser.tabs.remove(old.map(t => t.id)).catch(() => {});
   await forgetClosedPlaceholders("essential", [key]);
-}
-
-// The quiet line if there is one (quiet.js), else the lasting notice: this must be seen.
-function tellOnce(windowId, text) {
-  if (globalThis.say) globalThis.say(windowId, text);
-  else setNotice("isolation", text);
 }
 
 // The listener must be added while the background page loads, or a request made while
@@ -451,7 +452,7 @@ function notPastProxy(details) {
     setTimeout(() => browser.tabs.update(tabId, { url, loadReplace: true }).catch(() => {}), 0); // once this one has gone
     setTimeout(() => askedAgain.delete(tabId), ASK_AGAIN_MS);
   } else if (tabId >= 0) {
-    browser.tabs.get(tabId).then(tab => tellOnce(tab.windowId, `This could not go through its space's proxy, so it was not loaded: ${url}`)).catch(() => {});
+    browser.tabs.get(tabId).then(tab => say(tab.windowId, `This could not go through its space's proxy, so it was not loaded: ${url}`)).catch(() => {});
   }
   return { cancel: true };
 }
@@ -589,7 +590,7 @@ async function clearSiteCookies(tabId, windowId) {
     ...(c.hostOnly ? {} : { domain: c.domain }), ...(c.session ? {} : { expirationDate: c.expirationDate }),
   }).catch(noteError)));
   const name = (await containerSpaces()).find(s => s.id === space)?.name ?? "this space";
-  globalThis.say?.(windowId ?? found.tab.windowId, cookies.length ? `${site}'s cookies cleared in ${name}` : `${site} has no cookies in ${name}`, cookies.length ? { undo } : {});
+  say(windowId ?? found.tab.windowId, cookies.length ? `${site}'s cookies cleared in ${name}` : `${site} has no cookies in ${name}`, cookies.length ? { undo } : {});
   return { cleared: cookies.length, site, undo: cookies.length ? undo : null };
 }
 
@@ -653,8 +654,8 @@ async function newSpace(name) {
 // A new space with these tabs in it: you stay where you are.
 async function newSpaceWith(tabIds, windowId) {
   const space = await newSpace();
-  for (const id of tabIds) await moveToSpace(id, space.cookieStoreId);
-  globalThis.say?.(windowId, `Moved to ${space.name}. Its name can be changed in the space's menu`);
+  await tabAction(windowId, { action: "space", tabIds, space: space.cookieStoreId }); // a row may be a placeholder; several go in order
+  say(windowId, `Moved to ${space.name}. Its name can be changed in the space's menu`);
   return space.cookieStoreId;
 }
 
@@ -865,11 +866,11 @@ async function copyToSpace(tabIds, space, windowId) {
   for (const id of tabIds) {
     const found = await addressOfTab(id);
     if (!found || found.space === space) continue;
-    const opened = await globalThis.openUnruled({ windowId: found.tab.windowId, cookieStoreId: space, url: found.url, active: false }).catch(() => null);
+    const opened = await openUnruled({ windowId: found.tab.windowId, cookieStoreId: space, url: found.url, active: false }).catch(() => null);
     if (opened) copies++;
   }
   const name = (await containerSpaces()).find(s => s.id === space)?.name ?? "that space";
-  if (copies) globalThis.say?.(windowId, copies === 1 ? `A copy is open in ${name}` : `${copies} copies are open in ${name}`);
+  if (copies) say(windowId, copies === 1 ? `A copy is open in ${name}` : `${copies} copies are open in ${name}`);
   return copies;
 }
 
@@ -905,7 +906,8 @@ async function moveFolderToSpace(key, space, windowId) {
   Object.assign(folder, { cookieStoreId: space, rank });
   noteSaved(all);
   saveSynced(all);
-  if (stayed) globalThis.say?.(windowId, stayed === 1 ? "One tab holds unsaved input and stayed here" : `${stayed} tabs hold unsaved input and stayed here`);
+  await showSpaceEverywhere(); // foldrest.js: what came with a closed folder rests there, and what stayed behind shows here
+  if (stayed) say(windowId, stayed === 1 ? "One tab holds unsaved input and stayed here" : `${stayed} tabs hold unsaved input and stayed here`);
   return { moved, stayed };
 }
 

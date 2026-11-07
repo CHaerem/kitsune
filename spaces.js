@@ -256,8 +256,8 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (isWeb(change.url) && requestsGuarded()) {
     // Its request was already looked at, and a redirect does not count. Unless Firefox never showed it (isolation.js).
     const wasFirst = firstPage.delete(tabId);
-    newTabs.delete(tabId);
     if (notLookedAt(tabId, tab, wasFirst)) serial(() => moveShown(tabId, change.url, wasFirst));
+    else newTabs.delete(tabId);
     return;
   }
   if (isWeb(change.url) && firstPage.delete(tabId)) serial(() => byRule(tabId, change.url));
