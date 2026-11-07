@@ -74,6 +74,7 @@ import subprocess
 import sys
 import time
 import traceback
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from testfirefox import EXT_DIR, EXT_ID, PORT, SIDEBERY_ID, TestFirefox  # noqa: E402
@@ -1763,7 +1764,7 @@ def alone_isolation(m):
     r = m.js(ISOLATION_JS + """const all = (await storage(args[0], ["syncedTabs"])).syncedTabs, folder = args[1];
       const inFolder = Object.entries(all).filter(([k, e]) => e.parentKey === folder);
       return {folder: all[folder].cookieStoreId, inFolder: inFolder.map(([k, e]) => [new URL(e.url).pathname, e.cookieStoreId]), unsaved: containersOf("/unsaved"), ghost: inFolder.map(([k]) => wins().flatMap(w => w.gBrowser.tabs.filter(t => value(w, t, "syncKey") === k).map(t => [t.userContextId, url(t).includes("ghost.html") || !t.linkedPanel])))};""", EXT_ID, key)
-    check("a folder moved to another space goes there, its tab with it, unloaded", moved == {"moved": 1, "stayed": 1} and r["folder"] == f"firefox-container-{other}" and [x[1] for x in r["inFolder"]] == [f"firefox-container-{other}"] and r["ghost"][0] == [[other, True]], f"{moved} {r}")
+    check("a folder moved to another space goes there, its tab with it, unloaded", moved == {"moved": 1, "stayed": 1} and r["folder"] == f"firefox-container-{other}" and [x[1] for x in r["inFolder"]] == [f"firefox-container-{other}"] and r["ghost"][0] and all(x == [other, True] for x in r["ghost"][0]), f"{moved} {r}")
     check("a page holding unsaved input stays, where it was", r["unsaved"] == [space], str(r))
     m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
     extension_message(m, {"type": "flush"})
@@ -2018,8 +2019,164 @@ def alone_requests(m):
     rules()
     m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
     stats = extension_message(m, {"type": "stats"})
-    check("nothing is kept of the tabs that have gone", stats["sizes"]["settled"] == 0 and stats["sizes"]["slipped"] == 0, str(stats["sizes"]))
+    check("nothing is kept of the tabs that have gone", stats["sizes"]["settled"] == 0, str(stats["sizes"]))
     no_problems(m, "after all this")
+    press(m, "1", CTRL)
+    time.sleep(1)
+
+
+def alone_crossing(m):
+    # Every other way a page gets loaded than the ones alone_isolation looks at, each with
+    # the server recording what left the browser: a request must carry the cookie of its own
+    # space from the first one on, and no page may end up outside a space.
+    base = m.pages
+    press(m, "1", CTRL)
+    time.sleep(1)
+    space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
+    other = 2 if space != 2 else 3
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["webRequest", "webRequestBlocking"], ["<all_urls>"])
+    visit(m, space, f"{base}/set-cookie?v=cross-here")
+    visit(m, other, f"{base}/set-cookie?v=cross-there")
+    here, there = "login=cross-here", "login=cross-there"
+    m.js(ISOLATION_JS + """Services.prefs.setBoolPref("dom.disable_open_during_load", false); await closeAll("/set-cookie"); return 1;""")
+    # (The page sending a tab on names where in a form that a check for that address doesn't find.)
+    sent_to = lambda path: urllib.parse.quote(base + path, safe="")
+
+    def only(part, cookie, what):
+        got = seen(m, part)
+        check(what, len(got) >= 1 and all(x["cookie"] == cookie for x in got), f"{part}: {got}")
+
+    def where(part):
+        return m.js(ISOLATION_JS + """await until(() => containersOf(args[0]).length, 6000); await wait(800); return containersOf(args[0]);""", part)
+
+    # A page opening another.
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "rule-opened", "space": f"firefox-container-{other}"}]})
+    m.js(ISOLATION_JS + """inTab(args[0], args[1]); return 1;""", space, f"{base}/open?to={sent_to('/r/opened')}")
+    r = where("/r/opened")
+    only("/r/opened", here, "a page opening a tab: it goes out with its space's cookie")
+    check("and the tab stays in that space", r == [space], str(r))
+    m.js(ISOLATION_JS + """inTab(args[0], args[1]); return 1;""", space, f"{base}/open?to={sent_to('/r/rule-opened')}")
+    r = where("/r/rule-opened")
+    only("/r/rule-opened", there, "a page opening a tab that a rule sends elsewhere: only the rule's space's cookie is sent, from the first request on")
+    check("and it is in the rule's space, once", r == [other], str(r))
+    m.js(ISOLATION_JS + """inTab(args[0], args[1]); return 1;""", space, f"{base}/popup?to={sent_to('/r/in-popup')}")
+    r = where("/r/in-popup")
+    only("/r/in-popup", here, "a page opening a window of its own: its space's cookie")
+    check("and that window's tab is in the space", r == [space], str(r))
+    m.js(ISOLATION_JS + """for (const w of wins()) if (w.gBrowser.tabs.some(t => url(t).includes("/r/in-popup"))) await close(w); return 1;""")
+    extension_message(m, {"type": "settings:rules", "rules": []})
+
+    # With no container, in every way Firefox has of opening something by itself.
+    def no_container(script, part, what, *args):
+        m.js(ISOLATION_JS + script, f"{base}{part}", *args)
+        r = where(part)
+        only(part, here, f"{what}: every request carries the active space's cookie, never none")
+        check(f"{what}: its tab is in the active space, once", r == [space], str(r))
+
+    no_container("""main().openTrustedLinkIn(args[0], "tab", {inBackground: true}); return 1;""", "/r/link-tab", "a link opened as a tab")
+    no_container("""main().openTrustedLinkIn(args[0], "window"); return 1;""", "/r/link-window", "a link opened as a window")
+    m.js(ISOLATION_JS + """for (const w of wins()) if (w.gBrowser.tabs.some(t => url(t).includes("/r/link-window"))) await close(w); return 1;""")
+    no_container("""const t = main().gBrowser.addTrustedTab("about:blank", {inBackground: true}); await wait(300); typed(t, args[0]); return 1;""", "/r/from-blank", "an address in a blank tab")
+    no_container("""main().gBrowser.addTrustedTab("view-source:" + args[0], {inBackground: true}); return 1;""", "/r/view-source", "a page's source")
+    m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); return 1;""", f"{base}/redirect?to={sent_to('/r/after-hop')}")
+    r = where("/r/after-hop")
+    only("redirect?", here, "a link that redirects: its first hop carries the space's cookie")
+    only("/r/after-hop", here, "and so does where it ends up")
+    check("and its tab is in the active space", r == [space], str(r))
+    sidebar_page(m, """await page.browser.windows.create({type: "popup", url: args[0]}); await wait(300); return 1;""", f"{base}/r/ext-popup")
+    r = where("/r/ext-popup")
+    only("/r/ext-popup", here, "a window another extension opens: the active space's cookie")
+    check("and the page is in the active space, not left in that window", r == [space], str(r))
+    # A burst, as when a bookmark folder opens.
+    m.js(ISOLATION_JS + """const w = main(); for (let i = 0; i < 15; i++) w.gBrowser.addTrustedTab(args[0] + i, {inBackground: true}); await until(() => containersOf("/r/burst-").length === 15, 15000); await wait(1000); return 1;""", f"{base}/r/burst-")
+    r = m.js(ISOLATION_JS + """return containersOf("/r/burst-");""")
+    check("a burst of links: each is in the space, once", r == [space] * 15, str(r))
+    only("/r/burst-", here, "and none went out without the space's cookie")
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
+
+    # A tab Firefox restores unloaded, loading only when selected, with no container.
+    r = m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.addTrustedTab("about:blank", {inBackground: true}); await wait(600);
+      w.SessionStore.setTabState(t, JSON.stringify({entries: [{url: args[0], triggeringPrincipal_base64: '{"3":{}}', title: "Unloaded"}], lastAccessed: 1, index: 1, userContextId: 0}));
+      await wait(1500);
+      return {unloaded: t.hasAttribute("pending"), ctx: t.userContextId};""", f"{base}/r/resting")
+    check("a restored tab with no container waits, sending nothing", r == {"unloaded": True, "ctx": 0} and not seen(m, "/r/resting"), f"{r} {seen(m, '/r/resting')}")
+    m.js(ISOLATION_JS + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/r/resting")); return 1;""")
+    r = where("/r/resting")
+    only("/r/resting", here, "selected, it loads with the active space's cookie")
+    check("and in the active space", r == [space], str(r))
+
+    # A tab unloaded in a space loads there, even if a rule has come to want its address.
+    visit(m, space, f"{base}/r/unloaded-here")
+    time.sleep(2.5)
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "unloaded-here", "space": f"firefox-container-{other}"}]})
+    m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("/r/unloaded-here")); w.gBrowser.discardBrowser(t, true); await wait(400); w.gBrowser.selectedTab = t; await wait(1800); return 1;""")
+    r = where("/r/unloaded-here")
+    only("/r/unloaded-here", here, "an unloaded tab selected: its own space's cookie")
+    check("and no rule moves it", r == [space], str(r))
+
+    # Dragged out to a window of its own and back: no request at all, and the same container.
+    before = len(seen(m, "/r/unloaded-here"))
+    r = m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("/r/unloaded-here")); const count = wins().length; w.gBrowser.replaceTabWithWindow(t); await wait(5000);
+      const out = {windows: wins().length - count, where: containersOf("/r/unloaded-here")};
+      const from = wins().find(x => x !== w && x.gBrowser.tabs.some(y => url(y).includes("/r/unloaded-here")));
+      if (from) { w.gBrowser.adoptTab(from.gBrowser.tabs.find(y => url(y).includes("/r/unloaded-here")), {tabIndex: w.gBrowser.tabs.length}); await wait(3000); }
+      out.back = containersOf("/r/unloaded-here");
+      return out;""")
+    check("a tab dragged to a window of its own and back keeps its container", r["where"] == [space] and r["back"] == [space], str(r))
+    check("and sends nothing for it, rule or no rule", len(seen(m, "/r/unloaded-here")) == before, str(seen(m, "/r/unloaded-here")))
+    extension_message(m, {"type": "settings:rules", "rules": []})
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); for (const w of wins()) if (w !== main() && !w.__smoke && !w.__extra && !w.gBrowser.tabs.some(t => t.linkedPanel && t.selected && url(t).startsWith("http"))) await close(w); return 1;""")
+
+    # Between windows: a live tab pulled in, and a placeholder loading its own page.
+    made = m.js(H + """if (wins().some(w => w !== main())) return false; const w = main().OpenBrowserWindow(); await wait(5000); w.__extra = true; return true;""")
+    time.sleep(3)
+    visit(m, space, f"{base}/r/pulled")
+    time.sleep(3)
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "/r/pulled", "space": f"firefox-container-{other}"}]})
+    count = len(seen(m, "/r/pulled"))
+    r = m.js(ISOLATION_JS + """const live = main().gBrowser.tabs.find(x => url(x).includes("/r/pulled")), k = key(main(), live);
+      const w = wins().find(x => x !== main()), t = w.gBrowser.tabs.find(x => key(w, x) === k);
+      if (!t) return {placeholder: false};
+      w.focus(); await wait(300); w.gBrowser.selectedTab = t; await wait(3000);
+      return {placeholder: true, here: w.gBrowser.tabs.filter(x => url(x).includes("/r/pulled")).map(x => x.userContextId), all: containersOf("/r/pulled")};""")
+    check("a live tab pulled into another window keeps its container", r.get("here") == [space] and r.get("all") == [space], str(r))
+    check("and sends nothing for it", len(seen(m, "/r/pulled")) == count, str(seen(m, "/r/pulled")))
+    folder = sidebar_page(m, """send({type: "newFolder", space: "firefox-container-" + args[0], name: "Crossing"}); await wait(1000);
+      return [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".head .title").textContent === "Crossing").dataset.key;""", space)
+    tab = m.js(ISOLATION_JS + """const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs"); return ExtensionParent.apiManager.global.tabTracker.getId(wins().flatMap(w => w.gBrowser.tabs).find(x => url(x).includes("/r/pulled")));""")
+    sidebar_page(m, """send({type: "moveTab", tabId: args[0], folder: args[1], before: null}); await wait(1500); return 1;""", tab, folder)
+    time.sleep(1.5)
+    r = m.js(ISOLATION_JS + """const [w, t] = wins().flatMap(w => w.gBrowser.tabs.filter(x => url(x).includes("/r/pulled")).map(x => [w, x]))[0], k = key(w, t);
+      w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(2500);
+      const [w2, g] = wins().flatMap(w => w.gBrowser.tabs.filter(x => key(w, x) === k).map(x => [w, x]))[0] ?? [];
+      if (!g) return {saved: false};
+      w2.focus(); await wait(300); w2.gBrowser.selectedTab = g; await until(() => url(g).includes("/r/pulled"), 6000); await wait(800);
+      return {saved: true, ctx: g.userContextId, all: containersOf("/r/pulled")};""")
+    check("a placeholder loading its own page does so in its space, and no rule takes it", r.get("ctx") == space and r.get("all") == [space], str(r))
+    only("/r/pulled", here, "with that space's cookie")
+    extension_message(m, {"type": "settings:rules", "rules": []})
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", folder)
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); if (args[0]) await close(wins().find(w => w.__extra)); main().focus(); return 1;""", made)
+
+    # What Firefox shows no extension at all: its restricted addresses (addons.mozilla.org
+    # and the like). Here the test server's own name is made one, with its own cookie.
+    hidden = "http://localhost:" + base.rsplit(":", 1)[1]
+    visit(m, space, f"{hidden}/set-cookie?v=cross-hidden")
+    restricted = m.js(ISOLATION_JS + """Services.prefs.setStringPref("extensions.webextensions.restrictedDomains", "localhost"); await wait(500); return WebExtensionPolicy.isRestrictedURI(Services.io.newURI(args[0]));""", hidden)
+    if not restricted:
+        print("SKIP  a restricted address (Firefox did not take the test's one)", flush=True)
+    else:
+        m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); return 1;""", f"{hidden}/r/hidden-link")
+        r = m.js(ISOLATION_JS + """await until(() => containersOf("/r/hidden-link").some(c => c), 8000); await wait(800); return containersOf("/r/hidden-link");""")
+        check("a restricted address with no container: it can't be stopped, but it doesn't stay outside a space", r == [space], str(r))
+        got = [x["cookie"] for x in seen(m, "/r/hidden-link")]
+        check("it goes out once with no login, and then with the space's", got == ["", "login=cross-hidden"], str(got))
+        extension_message(m, {"type": "settings:rules", "rules": [{"url": "/r/hidden-rule", "space": f"firefox-container-{other}"}]})
+        m.js(ISOLATION_JS + """inTab(args[0], args[1]); return 1;""", space, f"{hidden}/r/hidden-rule")
+        r = m.js(ISOLATION_JS + """await until(() => containersOf("/r/hidden-rule").includes(args[0]), 8000); await wait(800); return containersOf("/r/hidden-rule");""", other)
+        check("and a first page there still follows a rule, once it shows", r == [other], str(r))
+        extension_message(m, {"type": "settings:rules", "rules": []})
+    m.js(ISOLATION_JS + """Services.prefs.clearUserPref("extensions.webextensions.restrictedDomains"); Services.prefs.clearUserPref("dom.disable_open_during_load"); await closeAll("localhost"); await closeAll("127.0.0.1"); return 1;""")
     press(m, "1", CTRL)
     time.sleep(1)
 
@@ -2204,12 +2361,21 @@ def alone_isolation_start(m):
     extension_message(m, {"type": "flush"})
     time.sleep(1)
     # The first start since the permission came while Tidier ran: Firefox does not remember the
-    # listener yet, so the page goes out, and is moved once Tidier has started.
-    m.restart(f"{base}/r/link-too-soon")
+    # listener yet, so the page goes out, and is moved once Tidier has started. A pinned page
+    # with no container too: Firefox loads those at once when it restores them.
+    def page_with_no_container(address, **more):
+        return {"entries": [{"url": address, "title": "x", "triggeringPrincipal_base64": '{"3":{}}'}], "index": 1, "lastAccessed": 1, "hidden": False, "attributes": {}, "userContextId": 0, **more}
+
+    def with_pinned(state):
+        state["windows"][0]["tabs"].insert(0, page_with_no_container(f"{base}/r/pinned-too-soon", pinned=True))
+        state["windows"][0]["selected"] = state["windows"][0].get("selected", 1) + 1
+    m.restart(f"{base}/r/link-too-soon", session=with_pinned)
     time.sleep(12)
     r = m.js(ISOLATION_JS + """return containersOf("link-too-soon");""")
     check("in the first start after the permission, a page that got out is moved to a space", r == [space], str(r))
-    m.js(ISOLATION_JS + """await closeAll("link-too-soon"); return 1;""")
+    r = m.js(ISOLATION_JS + """return wins().flatMap(w => w.gBrowser.tabs.filter(t => url(t).includes("pinned-too-soon")).map(t => [t.userContextId, t.pinned]));""")
+    check("and so is a pinned one, still pinned", r == [[space, True]], str(r))
+    m.js(ISOLATION_JS + """await closeAll("link-too-soon"); await closeAll("pinned-too-soon"); return 1;""")
     extension_message(m, {"type": "flush"})
     time.sleep(1)
     m.restart(f"{base}/r/link-at-start")
@@ -2228,6 +2394,55 @@ def alone_isolation_start(m):
     check("a tab Firefox restores is not moved by a rule, nor when you reload it", r.get("restored") == [space] and r.get("reloaded") == [space], str(r))
     extension_message(m, {"type": "settings:rules", "rules": []})
     m.js(ISOLATION_JS + """await closeAll("/r/"); return 1;""")
+    extension_message(m, {"type": "flush"})
+    time.sleep(1)
+
+    # A session holding pages with no container: selected (Firefox loads it at once), pinned
+    # (the same) and in the background (only when selected). Held, all of them.
+    def with_pages(state):
+        tabs = state["windows"][0]["tabs"]
+        tabs.insert(0, page_with_no_container(f"{base}/r/restored-pinned", pinned=True))
+        tabs.append(page_with_no_container(f"{base}/r/restored-behind"))
+        tabs.append(page_with_no_container(f"{base}/r/restored-selected"))
+        state["windows"][0]["selected"] = len(tabs)
+    m.restart(session=with_pages)
+    time.sleep(12)
+    r = m.js(ISOLATION_JS + """const w = main(); return {selected: containersOf("restored-selected"), pinned: wins().flatMap(w => w.gBrowser.tabs.filter(t => url(t).includes("restored-pinned")).map(t => [t.userContextId, t.pinned])), behind: w.gBrowser.tabs.filter(t => url(t).includes("restored-behind")).map(t => [t.userContextId, !!t.linkedPanel])};""")
+    check("a restored page with no container, selected, is in the space", r["selected"] == [space], str(r))
+    check("a pinned one too, still pinned", r["pinned"] == [[space, True]], str(r))
+    for part in ("restored-selected", "restored-pinned"):
+        got = seen(m, part)
+        check(f"{part}: every request carries the space's cookie, from the first one on", got and all(x["cookie"] == "login=at-start" for x in got), str(got))
+    check("one in the background waits, sending nothing", r["behind"] == [[0, False]] and not seen(m, "restored-behind"), f"{r} {seen(m, 'restored-behind')}")
+    r = m.js(ISOLATION_JS + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("restored-behind")); await until(() => containersOf("restored-behind").some(c => c), 6000); await wait(800); return containersOf("restored-behind");""")
+    check("selected, it loads in the space", r == [space], str(r))
+    got = seen(m, "restored-behind")
+    check("with its cookie, from the first request on", got and all(x["cookie"] == "login=at-start" for x in got), str(got))
+    m.js(ISOLATION_JS + """await closeAll("/r/restored-"); return 1;""")
+
+    # A space's proxy: Firefox decides on it as it opens a request, before any extension has
+    # run at a start. Here this is the first start since it was set, the hardest one: only an
+    # address nothing can reach but the proxy shows that it went that way. Going directly it
+    # would never reach the server.
+    third = next(c for c in (1, 2, 3) if c not in (space, other))
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["proxy"], ["<all_urls>"])
+    extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}", "proxy": {"type": "http", "host": "127.0.0.1", "port": base.rsplit(":", 1)[1]}})
+    time.sleep(1)
+    far = "http://proxied.invalid/r/proxied-at-start"
+    r = m.js(ISOLATION_JS + """const w = main(), t = inTab(args[0], args[1]); await until(() => url(t) === args[1], 8000); await wait(2500); w.gBrowser.selectedTab = t; await wait(1500); return url(t);""", third, far)
+    check("a page in a space with a proxy goes through it", r == far and all(x["proxied"] for x in seen(m, "proxied-at-start")), f"{r} {seen(m, 'proxied-at-start')}")
+    extension_message(m, {"type": "flush"})
+    time.sleep(1)
+    before = len(seen(m, "proxied-at-start"))
+    m.restart()
+    time.sleep(12)
+    got = seen(m, "proxied-at-start")[before:]
+    r = m.js(ISOLATION_JS + """const w = main(); return {selected: url(w.gBrowser.selectedTab), ctx: w.gBrowser.selectedTab.userContextId};""")
+    check("restored at a start, that page still reaches the server, through the proxy", got and all(x["proxied"] for x in got) and r == {"selected": far, "ctx": third}, f"{r} {got}")
+    extension_message(m, {"type": "isolation:network", "id": f"firefox-container-{third}"})
+    m.js(ISOLATION_JS + """await closeAll("proxied.invalid"); return 1;""")
+    press(m, "1", CTRL)
+    time.sleep(1)
     no_problems(m, "after a start by a link")
 
 
@@ -2243,7 +2458,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_isolation, alone_requests, alone_idle, alone_update, alone_end, alone_restart, alone_isolation_start)
+                alone_settings, alone_copy, alone_isolation, alone_requests, alone_crossing, alone_idle, alone_update, alone_end, alone_restart, alone_isolation_start)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

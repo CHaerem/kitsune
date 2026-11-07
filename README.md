@@ -350,7 +350,21 @@ Guaranteed, with the permission for it (`isolation.js`, `whereItBelongs`):
 - **A tab does not move because of where it passes through.** A link followed inside a
   page and a redirect do not count: with Sidebery's rules, which look at everything a
   tab loads, a sign-in passing through an address took your tab with it. A reload,
-  Firefox restoring a tab, a popup, and a tab you moved by hand stay too.
+  Firefox restoring a tab, a popup, and a tab you moved by hand stay too, and so does
+  going back to such an address.
+- **Nothing is lost for it.** Only a tab holding nothing is closed, and only once the new
+  one is there. An address you type in a tab showing a page, or in a saved tab, an essential
+  or a tab in a folder, opens in its space, and that tab stays as it was. A tab outside
+  any container is opened again as what it was: in its folder, with its saved address, in
+  the same place in every window. If it cannot be opened at all, the line says the address.
+- **No rule can hold up a page.** A rule's regular expression runs in time that grows
+  with the address and never more (`rulematch.js`): on Firefox's own engine `/(a+)+$/`
+  takes days on an address of forty a's, while every page in every tab waits, and an
+  extension cannot stop it. That leaves out look-around and back-references, which a rule
+  about an address hardly ever needs; the settings page says so, and such a rule does
+  nothing. A rule for a space that is gone also does nothing, and says so there. Whatever
+  else goes wrong, a request is let through after ten seconds. A navigation costs
+  microseconds here, and a tab is only looked up when it may have to move.
 
 Not guaranteed:
 
@@ -359,6 +373,11 @@ Not guaranteed:
   in spaces, but the site does see it.
 - A page you reach by a link inside another stays in that space, with that space's
   login, whatever a rule says about its address: that is the point of the line above.
+- A frame with `sandbox` can send its page on with no name on the request, which looks
+  just like an address you type, so that page's tab can be sent where a rule says. After
+  three in ten seconds a tab stays where it is, so two such pages cannot go on for ever.
+- Going back through an address a rule has, after Firefox has restarted, opens it in the
+  rule's space: which addresses a tab passed through is not kept over a restart.
 - **A space's logins are separate; Firefox's other data is not.** History, bookmarks,
   saved passwords and downloads are per Firefox. Private windows are left alone, and
   `about:` pages, extensions' pages and files have no space. Firefox's own requests
@@ -395,6 +414,7 @@ Not guaranteed:
 - `archive.js` – archiving of unused tabs.
 - `shortcuts.js` – ⌘⇧C, copy the address.
 - `spaces.js` – spaces: hiding, switching, new tabs and links, rules.
+- `rulematch.js` – whether a rule matches an address, in time that can't blow up.
 - `isolation.js`, `settings/spaces.js`, `sidebar/isolation.js` – nothing goes out in the wrong container; a
   space's proxy and user agent; signing out; new, edited and deleted spaces; a vanished
   container brought back; a copy of a tab, and a folder, to another space.

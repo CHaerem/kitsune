@@ -133,23 +133,14 @@ function typedTooFast() {
 // here, would otherwise mean no page loads anywhere, with no sign of why. Far above
 // any real wait, and the timer only runs while a request is being looked at.
 const GUARD_LIMIT_MS = 10000;
-const slipped = new Set(); // tabs with no container whose page was let through: moved when it shows
 function beforeTopLevelRequest(details) {
   const look = { given: false };
   let timer;
-  const limit = new Promise(resolve => {
-    timer = setTimeout(() => {
-      look.given = true;
-      if (details.cookieStoreId === NO_CONTAINER && tidierAlone) slipped.add(details.tabId);
-      resolve({});
-    }, GUARD_LIMIT_MS);
-  });
+  const limit = new Promise(resolve => { timer = setTimeout(() => { look.given = true; resolve({}); }, GUARD_LIMIT_MS); });
+  // (A page with no container that gets through either way is moved once it shows: notLookedAt.)
   const answer = lookAtRequest(details, look).catch(err => { noteError(err); return {}; });
   return Promise.race([answer, limit]).finally(() => clearTimeout(timer));
 }
-browser.tabs.onUpdated.addListener((tabId, change) => {
-  if (isWeb(change.url) && slipped.delete(tabId)) serial(moveStragglers);
-}, { properties: ["url"] });
 
 // A page whose request this listener never saw. Firefox hides those to its own restricted
 // addresses from every extension (addons.mozilla.org, accounts.firefox.com and the like),
@@ -385,7 +376,7 @@ function unguardRequests() {
   if (guarding) browser.webRequest?.onBeforeRequest.removeListener(beforeTopLevelRequest);
   guarding = false;
 }
-browser.tabs.onRemoved.addListener(tabId => { requestOfTab.delete(tabId); settled.delete(tabId); slipped.delete(tabId); });
+browser.tabs.onRemoved.addListener(tabId => { requestOfTab.delete(tabId); settled.delete(tabId); });
 
 async function guardAfterReload() {
   if (!await browser.permissions.contains?.(ISOLATION_PERMISSIONS).catch(() => false)) return;

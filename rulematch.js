@@ -73,7 +73,7 @@ const { ruleMatches, ruleProblem } = (() => {
       if (peek() === "?") {
         if (source.startsWith("?:", i)) i += 2;
         else if (/^\?<[^=!]/.test(source.slice(i, i + 3))) i = source.indexOf(">", i) + 1;
-        else throw new Unusable("look-around");
+        else throw new Unusable(/^\?(<?[=!])/.test(source.slice(i, i + 3)) ? "look-around" : "other");
       }
       const inner = alternatives();
       i++; // ) : Firefox's parser has seen that it is there
