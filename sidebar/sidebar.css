@@ -39,6 +39,9 @@ body {
 .tile:hover { background: var(--hover); }
 .tile.active { background: var(--selected); box-shadow: 0 0 0 1.5px var(--accent) inset; }
 .tile img, .tile .letter { width: 18px; height: 18px; }
+/* An image is draggable by itself: grabbed by its icon, a row would be dragged as a small
+ * picture, with the icon's address for whatever it is dropped on. */
+.tile img, .row img { pointer-events: none; }
 .tile.unloaded img { opacity: .55; }
 
 /* Folders and tabs. */
@@ -145,9 +148,21 @@ body {
 #menu .line { height: 1px; margin: 4px 8px; background: var(--hover); }
 #menu .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--color); }
 .menu-for { background: var(--hover); }
-.drop-before { box-shadow: 0 -2px 0 0 var(--accent); }
-.drop-after { box-shadow: 0 2px 0 0 var(--accent); }
+/* Where a drop lands: a thin line in the gap, which takes no room and so moves nothing.
+ * (::after, since a row's or tile's ::before is taken by its news dot.) */
+.row, .tile, .folder { position: relative; }
+.drop-before::after, .drop-after::after, .drop-left::after, .drop-right::after {
+  content: ""; position: absolute; background: var(--accent); border-radius: 1px; pointer-events: none;
+}
+.drop-before::after, .drop-after::after { left: 8px; right: 8px; height: 2px; }
+.drop-before::after { top: -1px; }
+#tabs > :first-child.drop-before::after { top: 0; } /* the list would clip it */
+.drop-after::after { bottom: -1px; }
+.drop-left::after, .drop-right::after { top: 4px; bottom: 4px; width: 2px; }
+.drop-left::after { left: -4px; }
+.drop-right::after { right: -4px; }
 .drop-into { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius); }
+#space-name.drop-into { outline-offset: 1px; } /* its text sits close to its top */
 .cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
 
 /* The quiet line (note.js). It lies over the end of the list, so nothing moves when it

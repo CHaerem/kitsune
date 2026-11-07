@@ -21,6 +21,7 @@ const tabItem = (t, title) => ({
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
   sound: ownSound(t), soundTabId: t.id, // what a row shows; with Tidier alone, the real page's (addSounds)
   news: hasNews(t.id),
+  page: isWeb(t.url) || isGhostUrl(t.url), // else a new tab page or the like, which only has a place among the tabs (drag.js)
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
@@ -140,13 +141,29 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
   else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space, msg.leaving);
-  else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
+  else if (msg.type === "pin") await pinFromSidebar(msg.tabId, msg.pinned, msg.before);
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
   else if (msg.type === "tabAction") await tabAction(windowId, msg); // tabactions.js
   else if (msg.type === "renameTab") await renameTab(msg.tabId, msg.name);
   else if (msg.type === "unloadSpace") await unloadSpace(msg.space);
   else if (msg.type === "renameSpace") await renameSpace(msg.space, msg.name);
   viewSoon(windowId);
+}
+
+// A tab dropped on a tile is an essential at that place: Firefox pins it after the
+// others, and onPinned (essentials.js) gives it its place in the list as it adds it. Moving
+// it there afterwards would show the tile at the end first, and then jump.
+//
+// A tab moved or pinned a moment ago is still in the sets that make the listeners ignore
+// Tidier's own changes. This one is yours, and ignored it would leave the tab both an
+// essential and a tab with placeholders in the other windows, for good.
+async function pinFromSidebar(tabId, pinned, before) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.pinned === pinned) return; // closed or pinned meanwhile: no event will use a place
+  busy.delete(tabId);
+  syncBusy.delete(tabId);
+  if (pinned && before) pinPlaces.set(tabId, before);
+  await browser.tabs.update(tabId, { pinned }).catch(() => pinPlaces.delete(tabId));
 }
 
 // An essential's tile moved: moving its tab is what the rest of Tidier listens to.
@@ -156,6 +173,7 @@ async function moveEssential(windowId, tabId, beforeId) {
   if (!tab) return;
   let index = before ? before.index : tabs.at(-1).index;
   if (before && tab.index < before.index) index--;
+  busy.delete(tabId); // yours, also right after its pin (see pinFromSidebar)
   if (index !== tab.index) await browser.tabs.move(tabId, { index });
 }
 
