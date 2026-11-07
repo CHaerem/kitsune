@@ -117,7 +117,7 @@ async function sidebarAction(windowId, msg) {
 // one window, and an essential is in every window. (A placeholder stands for its page.)
 async function pinFromSidebar(tabId, pinned) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
-  if (tab && (!pinned || isWeb(tab.url) || isGhostUrl(tab.url))) await browser.tabs.update(tabId, { pinned });
+  if (tab && (!pinned || isWeb(tab.url) || isGhostUrl(tab.url))) await browser.tabs.update(tabId, { pinned }).catch(() => {});
 }
 
 // An essential's tile moved: moving its tab is what the rest of Tidier listens to.
@@ -127,7 +127,7 @@ async function moveEssential(windowId, tabId, beforeId) {
   if (!tab) return;
   let index = before ? before.index : tabs.at(-1).index;
   if (before && tab.index < before.index) index--;
-  if (index !== tab.index) await browser.tabs.move(tabId, { index });
+  if (index !== tab.index) await browser.tabs.move(tabId, { index }).catch(() => {});
 }
 
 // The toolbar button shows or hides the sidebar: without a sidebar, a window has

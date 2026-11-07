@@ -1477,3 +1477,49 @@ test("a window closed before it has finished starting holds nothing up", async (
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("a tab closed at the last moment stops nothing: unpinned, pinned or moved in the sidebar, or selected by a pull", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = ["e", "f"].map(key => ({ key, url: `https://${key}.example/`, cookieStoreId: C1, title: key, icon: "x" }));
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  const e = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const f = ff.addTab(w.id, { url: GHOST("essential", "f"), pinned: true, cookieStoreId: C1 }, { essentialKey: "f" });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  const refused = id => { throw new Error(`Invalid tab ID: ${id}`); };
+
+  const { removeTabValue } = x.b.sessions;
+  x.b.sessions.removeTabValue = async id => refused(id);
+  await x.js(`serial(() => onUnpinned(${JSON.stringify(ff.snap(e))}))`);
+  x.b.sessions.removeTabValue = removeTabValue;
+
+  const { update, move } = x.b.tabs;
+  x.b.tabs.update = async id => refused(id);
+  await x.js(`serial(() => pinFromSidebar(${a.id}, true))`);
+  x.b.tabs.update = update;
+  x.b.tabs.move = async id => refused(id);
+  await x.js(`serial(() => moveEssential(${w.id}, ${e.id}, null))`);
+  x.b.tabs.move = move;
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a tab closed as a pull leaves it for that tab does not stop the pull", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const there = ff.addWindow();
+  const calm = ff.addTab(there.id, { url: "https://b.example/" });
+  const live = ff.addTab(there.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(here.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  const update = x.b.tabs.update;
+  x.b.tabs.update = async (id, p) => { if (id === calm.id) throw new Error(`Invalid tab ID: ${id}`); return update(id, p); };
+  ff.select(ghost.id);
+  await wait(1500);
+  assert.equal(ff.tabs.get(live.id).windowId, here.id, "the live tab has come here");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});

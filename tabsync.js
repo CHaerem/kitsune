@@ -583,7 +583,7 @@ async function pull(ghostId) {
       const oldTabs = await browser.tabs.query({ windowId: fromWindow, hidden: false, discarded: false });
       const calm = oldTabs.find(t => t.id !== live.id && t.cookieStoreId === live.cookieStoreId) ||
         oldTabs.find(t => t.id !== live.id);
-      if (calm) await browser.tabs.update(calm.id, { active: true });
+      if (calm) await browser.tabs.update(calm.id, { active: true }).catch(() => {});
     }
     // Bookkeeping too. A tab moved before it was ever loaded (a live folder's pull
     // request) can arrive without its sessions values, so they are set again. Any of
@@ -650,7 +650,7 @@ async function applyMoves(windowId, ids) {
       const parentRep = parentKey ? reps.get(parentKey) : undefined;
       if (!rep || rep.active || syncRoleByTab.get(rep.id) !== "ghost" || (parentKey && parentRep === undefined)) continue;
       syncBusy.add(rep.id); forget(rep.id);
-      await browser.tabs.remove(rep.id);
+      await browser.tabs.remove(rep.id).catch(() => {});
       const ghost = await createRep(w.id, key, entry, parentRep, rep.index);
       if (!ghost) continue;
       replaced.add(key); gone.push(key);

@@ -229,7 +229,7 @@ async function onUnpinned(tab) {
   const key = await keyOf(tab);
   if (!key) return;
   keyByTab.delete(tab.id);
-  await browser.sessions.removeTabValue(tab.id, TAB_KEY);
+  await browser.sessions.removeTabValue(tab.id, TAB_KEY).catch(() => {}); // refused for a tab closed since
   const list = await getList();
   const entry = list.find(e => e.key === key);
   setList(list.filter(e => e.key !== key));
