@@ -1,16 +1,99 @@
-:root { color-scheme: light dark; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
-body { max-width: 640px; margin: 32px auto; padding: 0 16px; }
-h1 { font-size: 22px; margin-bottom: 24px; }
-h2 { font-size: 15px; margin: 0 0 8px; }
-section { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid color-mix(in srgb, CanvasText 12%, transparent); }
-.hint { color: color-mix(in srgb, CanvasText 60%, transparent); margin: 0 0 10px; }
-.notice { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, orange 18%, transparent); margin-bottom: 10px; }
-.line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
-.line input[type=text] { flex: 1; min-width: 0; }
-.line select { max-width: 40%; } /* a long space's name must not push the address out of its line */
+/* The settings page, on the same surface as the sidebar (tokens.css): one flat column,
+ * with room to keep the subjects apart, no boxes and no lines. What can be changed or
+ * pressed is a soft fill on the surface; white is kept for the one field you are in. */
+html { background: var(--frame); }
+body {
+  box-sizing: border-box; max-width: 540px; margin: 0 auto; padding: 56px 24px 64px;
+  color: var(--text); line-height: 20px;
+}
+h1 { margin: 0 0 32px; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -.01em; }
+h2 { margin: 0 0 2px; font-size: var(--size); line-height: 20px; font-weight: 600; }
+section { margin-bottom: 36px; }
+
+/* Everything said about a subject is in one ink, a step below what you can change. */
+p { margin: 0 0 10px; color: var(--muted); }
+p:empty { display: none; }
+section > :last-child, section > :has(+ p:empty:last-child) { margin-bottom: 0; }
+ul, ol { margin: 0 0 12px; padding-left: 18px; color: var(--muted); }
+li { margin-bottom: 4px; }
+li:has(button) { margin-top: 10px; list-style-position: outside; }
+label { color: var(--muted); }
+#version { margin: 0; font-size: var(--size-small); color: var(--faint); }
+code { padding: 1px 4px; border-radius: 4px; background: var(--tile); font: 12px ui-monospace, Menlo, monospace; color: var(--text); }
+.notice { padding: 8px 10px; margin: 0 0 8px; border-radius: var(--radius); background: var(--tile); color: var(--text); }
+#notices:has(.notice) { margin-bottom: 28px; }
+
+/* The controls: soft fills, nothing of the browser's default look. */
+button, input, select { font: inherit; letter-spacing: inherit; color: var(--text); box-sizing: border-box; }
+button, input[type=text], input[type=number], select, label:has(input[type=file]) {
+  height: 30px; border: 0; border-radius: var(--radius); background-color: var(--tile);
+  transition: background-color var(--quick), box-shadow var(--quick), transform var(--quick);
+}
+button:hover, input[type=text]:hover, input[type=number]:hover, select:hover, label:has(input[type=file]):hover { background-color: var(--tile-hover); }
+button, label:has(input[type=file]) { padding: 0 12px; }
+button:active, label:has(input[type=file]):active { transform: scale(.98); }
+/* A button keeps its distance from the next, also when they wrap. */
+section > button, #move-back > button, #merge > button, li > button { margin: 0 2px 8px 0; }
+
+input[type=text], input[type=number], select { padding: 0 10px; appearance: none; }
+input[type=text]:focus, input[type=number]:focus, select:focus {
+  outline: none; background-color: var(--selected); box-shadow: 0 0 0 1.5px var(--accent-line);
+}
+::placeholder { color: var(--faint); }
+select {
+  padding-right: 26px; background-repeat: no-repeat; background-position: right 6px center; background-size: 16px;
+  background-image: light-dark(url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23857f79' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 6.5L8 10l3.5-3.5' fill='none' stroke='%23a5a09a' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"));
+}
+input[type=number] { appearance: textfield; width: 52px; margin: 0 4px; text-align: center; }
+input[type=checkbox] {
+  appearance: none; flex: none; width: 16px; height: 16px; margin: 0; border-radius: 5px; background-color: var(--press);
+  background-position: center; background-size: 16px; background-repeat: no-repeat;
+  transition: background-color var(--quick);
+}
+input[type=checkbox]:checked {
+  background-color: var(--text);
+  background-image: light-dark(url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.25L7 10.75l4.5-5.5' fill='none' stroke='%23fff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.25L7 10.75l4.5-5.5' fill='none' stroke='%231f1f23' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"));
+}
+/* A file field is a button with what it is for on it: the browser's own says "Browse…"
+ * and "no file selected", which say nothing. The field stays, unseen, under its label. */
+label:has(input[type=file]) {
+  position: relative; display: inline-flex; align-items: center; box-sizing: border-box; color: var(--text);
+  max-width: 100%; height: auto; min-height: 30px; padding-block: 5px;
+}
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+label:has(input:focus-visible) { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+
+/* A line of controls: they wrap when the page is too narrow to share it. */
+.line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 4px; color: var(--text); }
+.line input[type=text] { flex: 1 1 200px; min-width: 0; }
+.line select { max-width: 100%; }
+
+/* Spaces: a dot and a name. The name has only a trace of a fill at rest, enough to say
+ * it can be changed, and is as wide as a name needs. */
+#spaces .line { margin-bottom: 2px; flex-wrap: nowrap; gap: 10px; }
+#spaces .line > span { flex: none; width: 8px; height: 8px; border-radius: 50%; background: currentColor; font-size: 0; }
+#spaces input[type=text] { flex: 0 1 240px; background-color: color-mix(in srgb, var(--tile) 50%, transparent); }
+#spaces input[type=text]:hover { background-color: var(--tile); }
+#spaces input[type=text]:focus { background-color: var(--selected); }
+
+/* Rules: removing one is always there, but in the faintest ink until you come for it. */
+#rules:not(:empty) { margin-bottom: 8px; }
+#rules button {
+  width: 28px; height: 28px; flex: none; padding: 0; margin: 0; background: none; color: var(--faint);
+  font-size: 0; line-height: 0; display: flex; align-items: center; justify-content: center;
+}
+#rules button::before { content: ""; width: var(--icon); height: var(--icon); background: currentColor; mask: var(--icon-close) center / 14px no-repeat; }
+#rules button:hover { background: var(--press); color: var(--text); }
+
+#merge { margin-top: 12px; }
+#merge-spaces { margin-bottom: 8px; }
+#merge-spaces .line { flex-wrap: nowrap; gap: 8px; color: var(--muted); }
+
+/* What other parts of the page add: a file field under its line, a heading inside a
+ * subject, and a row of ticks. */
 .file-input { display: block; margin-top: 4px; }
-button, input, select { font: inherit; }
-h3 { font-size: 14px; font-weight: 500; margin: 14px 0 6px; }
+h3 { margin: 14px 0 6px; font-size: var(--size); line-height: 20px; font-weight: 500; }
 .ticks { display: flex; flex-wrap: wrap; gap: 0 16px; }
 [hidden] { display: none !important; }
 

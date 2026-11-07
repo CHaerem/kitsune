@@ -530,6 +530,8 @@ Not guaranteed:
 - `moveover.js`, `settings/` – the settings page, and moving a browser over from Sidebery.
 - `tools/fix_spaces.py` – put tabs back in their own Sidebery space (in your
   own Firefox, which it restarts).
+- `tools/shoot.py` – pictures of what Tidier draws, for working on its look: every
+  space and width, light and dark, hover, menus, empty spaces, the settings page.
 - `tests/` – the smoke test, the test Firefox and its fixtures.
 - `.github/workflows/smoke.yml`, `tools/setup-ci-keys.sh` – the smoke test on GitHub.
 - `.github/workflows/release.yml`, `tools/release.py`, `tools/setup-amo-key.sh` –
