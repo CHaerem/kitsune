@@ -1479,7 +1479,8 @@ def alone_bridge(m):
     # native host, and Firefox. No Sidebery, no gh, no network: the page is the test server's.
     sock = f"{m.config_home}/tidier/bridge.sock"
     host = os.path.join(EXT_DIR, "native", "tidier-bridge.py")
-    running = lambda: subprocess.run(["pgrep", "-f", host], capture_output=True).returncode == 0
+    # This Firefox's own child: another test Firefox running from the same folder has a host of its own.
+    running = lambda: subprocess.run(["pgrep", "-P", str(m.js("return Services.appinfo.processID;")), "-f", host], capture_output=True).returncode == 0
 
     def until(test, seconds=8):
         for _ in range(int(seconds * 10)):
@@ -1816,8 +1817,9 @@ def bridge_shot(m, name, path="/sidebar/sidebar.html"):
 
     shoot("")
     m.js("Services.prefs.setIntPref('layout.css.prefers-color-scheme.content-override', 1); return 1;")
-    # (Without the look from dotfiles, whose tints per space are for a dark theme.)
-    ext_page(m, path, """for (const style of doc.head.querySelectorAll("style")) style.remove(); await wait(500); return 1;""")
+    # (Without the look from dotfiles, whose tints per space are for a dark theme, and without
+    # the fade to a new colour, which does not run in a tab that is not in front.)
+    ext_page(m, path, """for (const style of doc.head.querySelectorAll("style")) style.remove(); doc.documentElement.style.transition = "none"; await wait(500); return 1;""")
     shoot("-light")
     m.js("Services.prefs.clearUserPref('layout.css.prefers-color-scheme.content-override'); return 1;")
 

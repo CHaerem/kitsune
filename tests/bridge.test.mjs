@@ -822,6 +822,10 @@ test("what shows is where it works, and an agent's long address does not fill th
   assert.notEqual(x.js("agentLastSpace"), WORK, "not on a space it may not touch");
   await host.call("open_tab", { url: `https://${"a".repeat(200000)}.example/` });
   assert.ok(x.js("agentLine").length < 150);
+  // An agent cannot make the line say it is somewhere else.
+  const work = tabIn(ff, HOME);
+  await host.call("read_page", { tab: work.id, url: "https://harmless.example/" });
+  assert.equal(x.js("agentLine"), "read home.example");
   x.kill();
 });
 

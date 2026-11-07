@@ -591,7 +591,9 @@ function agentDid(name, ctx, refused) {
   const tool = Object.hasOwn(BRIDGE_TOOLS, name) ? BRIDGE_TOOLS[name] : null;
   // Only the name of a site: nothing a page wrote gets here.
   if (!tool) return;
-  const where = bridgeHost(ctx.args.url ?? ctx.tab?.url).slice(0, 100); // an agent chooses what it passes as an address
+  // An address only from the tools that go to one: the line must show where it really is,
+  // whatever else an agent passes along. Capped, since it chooses what it passes as an address.
+  const where = bridgeHost((name === "open_tab" || name === "navigate" ? ctx.args.url : null) ?? ctx.tab?.url).slice(0, 100);
   // (A tab just opened has no address yet.)
   const text = refused ? `refused: ${name}${where ? " on " + where : ""}` : `${tool.says} ${where || (tool.on === "tab" ? "a page" : "")}`.trim();
   agentLine = text;
