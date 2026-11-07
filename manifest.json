@@ -33,7 +33,10 @@
     "webRequestBlocking",
     "<all_urls>",
     "proxy",
-    "browsingData"
+    "browsingData",
+    "search",
+    "history",
+    "bookmarks"
   ],
   "options_ui": {
     "page": "settings/settings.html",
@@ -75,7 +78,8 @@
       "news.js",
       "archivelist.js",
       "archive.js",
-      "shortcuts.js"
+      "shortcuts.js",
+      "commandbar.js"
     ],
     "persistent": true
   },
@@ -91,7 +95,9 @@
     "space-2": { "description": "Go to the second space" },
     "space-3": { "description": "Go to the third space" },
     "space-4": { "description": "Go to the fourth space" },
-    "space-5": { "description": "Go to the fifth space" }
+    "space-5": { "description": "Go to the fifth space" },
+    "command-bar": { "description": "Open or close the command bar" },
+    "command-bar-t": { "description": "The command bar's second key, once Firefox lets go of it" }
   },
   "icons": {
     "48": "icon.svg",

@@ -918,8 +918,9 @@ async function leaveTabsOf(keys) {
 
 // The command bar's table, where it is there (commandbar.js). Looked for once things
 // have loaded, since the order of the scripts decides nothing then.
+// (commandbar.js loads after this file; this runs once startIsolation has read storage, by then it is there.)
 function addToCommandBar() {
-  if (typeof BAR_COMMANDS === "undefined" || BAR_COMMANDS.some(c => c.name === "clear-site-cookies")) return;
+  if (BAR_COMMANDS.some(c => c.name === "clear-site-cookies")) return;
   BAR_COMMANDS.push(
     { name: "clear-site-cookies", label: "Clear this site's cookies in this space",
       when: ctx => hostsGiven && ctx.picked.length === 1 && !!ctx.tab,
