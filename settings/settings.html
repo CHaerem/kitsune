@@ -33,11 +33,15 @@
     <h2>Spaces</h2>
     <p class="hint">A space is a Firefox container, with its own logins.</p>
     <div id="spaces"></div>
+    <div class="line after-spaces">
+      <button id="new-space" hidden>New space</button>
+      <button id="allow-isolation" class="quiet" hidden title="Without this, a page's first request can go out in the wrong container before it is opened again in the right one.">Let Tidier stop pages loading in the wrong space</button>
+    </div>
   </section>
 
   <section>
     <h2>Rules</h2>
-    <p class="hint">An address always opens in a given space. Text to find in the address, or /a regular expression/. Looked at for a tab's first page only.</p>
+    <p class="hint">An address always opens in a given space. Text to find in the address, or /a regular expression/ (no look-around or back-references). Looked at for a tab's first page and an address you choose, never for a link inside a page or a redirect.</p>
     <div id="rules"></div>
     <button id="add-rule">Add a rule</button>
   </section>
@@ -61,6 +65,8 @@
   </section>
 
   <p class="hint" id="version"></p>
+  <script src="../rulematch.js"></script>
+  <script src="spaces.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

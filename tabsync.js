@@ -299,13 +299,14 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   const lists = {
     toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
-    activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
+    activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers, requestOfTab,
     unruled,
     earlyKeys,
     quietNotes, closeGroups,
     closingOrder,
     successorDue,
     newsMarks, newsSeen,
+    settled,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
@@ -1010,6 +1011,7 @@ async function start(delayMs) {
   const step = fn => Promise.resolve().then(fn).then(() => true, err => { noteError(err); return false; });
   await step(readAlone);
   await serial(async () => {
+    await step(bringBackSpaces); // isolation.js: before anything is opened in a container that is gone
     await step(closeOldFolderPages); // moveover.js
     await step(initList);
     // Without the roles every tab looks unsynced, and reconcileAll would act on that.
@@ -1025,6 +1027,7 @@ async function start(delayMs) {
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
+  serial(moveStragglers); // isolation.js: once new tabs are registered again
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
 }

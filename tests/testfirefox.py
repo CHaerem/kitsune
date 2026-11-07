@@ -31,6 +31,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 import zipfile
 
 from marionette import FIREFOX, Marionette
@@ -84,17 +85,51 @@ PAGES = {
     "/slow-icon": ICON_PAGE,  # answers after SLOW_ICON_S, the same page every time, so a load changes nothing else in the tab
     # There at once and still loading for SLOW_ICON_S, and its title changes meanwhile.
     "/drip": "<title>Dripping</title><script>setTimeout(() => { document.title = 'Dripped'; }, 1200);</script>a page that takes its time",
+    "/see-cookie": "<title>?</title><script>document.title = 'cookie=' + document.cookie;</script>what a page can read",
+    "/go": "<title>Go</title><script>location.replace(new URLSearchParams(location.search).get('to'));</script>a page sending you on, as a link does",
+    # A page opening another by itself, as a tab and as a window of its own (alone_crossing).
+    "/open": "<title>Open</title><script>window.open(new URLSearchParams(location.search).get('to'));</script>opens a tab",
+    "/popup": "<title>Popup</title><script>window.open(new URLSearchParams(location.search).get('to'), 'x', 'width=400,height=400');</script>opens a window",
+    # Back to this asks the server again: a page with an unload handler is not kept in the back-forward cache.
+    "/no-bfcache": "<title>Asked again</title><script>addEventListener('unload', () => {});</script>a page Firefox asks for again on going back",
+    # Two pages sending each other on with no page's name on the request: a sandboxed frame's top.location has none.
+    "/pp-one": "<title>One</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-two'</script>\"></iframe>",
+    "/pp-two": "<title>Two</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-one'</script>\"></iframe>",
 }
 
 
 def serve_pages():
+    # Every request is recorded with what came with it, for the check that matters most:
+    # what the server sees is what really left the browser (alone_isolation). Also what
+    # comes through it as a proxy, whose request line has the whole address.
+    #   /r/anything       a plain page
+    #   /set-cookie?v=x   sets a login cookie
+    #   /redirect?to=...  a redirect, the way a sign-in passes through an address
+    #   /bounce/one, two  redirects to each other, until Firefox gives up
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            body = PAGES.get(self.path.split("?")[0])
-            if self.path.startswith("/slow-icon"):
+            url = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(url.query)
+            self.server.requests.append({"path": self.path, "cookie": self.headers.get("Cookie", ""), "agent": self.headers.get("User-Agent", ""), "proxied": bool(url.scheme)})
+            if url.path == "/redirect" or url.path.startswith("/bounce/"):
+                self.send_response(302)
+                self.send_header("Location", query["to"][0] if url.path == "/redirect" else "/bounce/one" if url.path.endswith("two") else "/bounce/two")
+                self.end_headers()
+                return
+            body = PAGES.get(url.path)
+            if url.path.startswith("/slow-icon"):
                 time.sleep(SLOW_ICON_S)
+            if url.path.startswith("/r/"):
+                body = "<title>Recorded</title>a recorded page"
+            elif url.path == "/set-cookie":
+                body = "<title>Cookie set</title>a login"
             self.send_response(200 if body else 404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            # Never from a cache: a tab Firefox restores would otherwise send nothing, and a
+            # check that saw nothing go out would prove nothing.
+            self.send_header("Cache-Control", "no-store")
+            if url.path == "/set-cookie":
+                self.send_header("Set-Cookie", f"login={query['v'][0]}; Path=/; Max-Age=86400; SameSite=Lax")
             self.end_headers()
             if self.path.split("?")[0] == "/slow":  # its address is known at once, and it goes on loading
                 self.wfile.flush()
@@ -108,8 +143,50 @@ def serve_pages():
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+# Firefox's session file: a header, the size, and one LZ4 block. Reading has to follow
+# the format; writing doesn't compress, which a block may do.
+def read_session(path):
+    raw = open(path, "rb").read()
+    src, out, i = raw[12:], bytearray(), 0
+
+    def extended(n, i):
+        if n == 15:
+            while True:
+                i += 1
+                n += src[i - 1]
+                if src[i - 1] != 255:
+                    break
+        return n, i
+    while i < len(src):
+        token = src[i]
+        i += 1
+        n, i = extended(token >> 4, i)
+        out += src[i:i + n]
+        i += n
+        if i >= len(src):
+            break
+        offset = src[i] | src[i + 1] << 8
+        i += 2
+        n, i = extended(token & 15, i)
+        for _ in range(n + 4):
+            out.append(out[-offset])
+    return json.loads(bytes(out))
+
+
+def write_session(path, state):
+    data = json.dumps(state).encode()
+    n, head = len(data) - 15, bytearray([0xF0])
+    while n >= 255:
+        head.append(255)
+        n -= 255
+    head.append(n)
+    with open(path, "wb") as f:
+        f.write(b"mozLz40\0" + len(data).to_bytes(4, "little") + bytes(head) + data)
 
 
 def sidebery_xpi():
@@ -154,11 +231,14 @@ class TestFirefox:
         self.alone = alone  # Tidier alone (PLAN.md): no Sidebery, and the setting declared in managed storage
         self.dir = self.proc = self.m = self.pages = None
 
-    def restart(self):
+    def restart(self, url=None, session=None):
         """Quit the test Firefox and start it again with the same profile, so
         the session is restored. Only when Tidier is installed for real
         (m.can_restart): a temporary add-on is gone after a restart. The same
-        Marionette object is kept, connected to the new Firefox."""
+        Marionette object is kept, connected to the new Firefox. With `url`,
+        Firefox is started by that link, as when another app opens one with
+        Firefox closed. With `session`, that function changes what Firefox will
+        restore, while it is not running."""
         self.m.quit()
         try:
             self.proc.wait(30)
@@ -166,7 +246,12 @@ class TestFirefox:
             self.proc.kill()
             self.proc.wait(10)
         m = self.m
-        self._start()
+        if session:
+            path = f"{self.dir}/sessionstore.jsonlz4"
+            state = read_session(path)
+            session(state)
+            write_session(path, state)
+        self._start(url)
         m.__dict__.update(self.m.__dict__)
         self.m = m
         self.m.js(USE_TEST_MANAGED_STORAGE, f"{self.dir}/managed")
@@ -224,7 +309,7 @@ class TestFirefox:
         self.fake_prs = f"{self.dir}/fake-prs.json"
         json.dump({}, open(self.fake_prs, "w"))
 
-    def _start(self):
+    def _start(self, url=None):
         with socket.socket() as probe:
             if probe.connect_ex(("127.0.0.1", self.port)) == 0:
                 # Two runs on one port get in each other's way, and only show as
@@ -233,10 +318,20 @@ class TestFirefox:
         env = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "MOZ_NO_REMOTE": "1", "TIDIER_FAKE_PRS": self.fake_prs}
         log = f"{self.dir}/firefox.log"
         with open(log, "ab") as out:
-            self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir],
+            self.proc = subprocess.Popen([FIREFOX, "--headless", "--marionette", "--no-remote", "--profile", self.dir, *([url] if url else [])],
                                          env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
+            # Marionette looks at the window's selected tab as it connects. With a link at the
+            # start, or a page with no container restored, that tab can be just then being
+            # replaced by one in a space (alone_isolation_start).
+            for attempt in range(10):
+                try:
+                    self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
+                    break
+                except RuntimeError:
+                    if attempt == 9:
+                        raise
+                    time.sleep(1)
         except OSError as err:
             # Without Firefox's own words this is only "Connection refused".
             lines = open(log, errors="replace").read().strip().splitlines()[-15:]
@@ -245,6 +340,7 @@ class TestFirefox:
         if not self.pages:
             self.pages = serve_pages()
         self.m.pages = f"http://127.0.0.1:{self.pages.server_address[1]}"
+        self.m.page_requests = self.pages.requests
         self.m.update_xpi = self._newer_xpi
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
@@ -277,7 +373,9 @@ class TestFirefox:
         m.restart = self.restart
         time.sleep(8)  # Tidier starts: essentials, tab sync, live folders
         if self.alone:
-            m.js(AFTER_TIDIER_ALONE, EXT_ID)
+            # TIDIER_ALONE_ALL_PERMISSIONS: every group with what you would give, the optional
+            # access for isolation included (alone_isolation otherwise gives it itself).
+            m.js(AFTER_TIDIER_ALONE, EXT_ID, bool(os.environ.get("TIDIER_ALONE_ALL_PERMISSIONS")))
         else:
             # Tidier's sidebar opens by itself when installed, as a sidebar does; here Sidebery stays the sidebar.
             m.js('await Services.wm.getMostRecentWindow("navigator:browser").SidebarController.show("_3c078156-979c-498b-8990-85f7987dd929_-sidebar-action"); return 1;')
@@ -339,10 +437,10 @@ SEED_TABS_ALONE = """
 # What you click once in the sidebar, the same way (permissions.request needs a
 # click, which a test has no way to make), and Tidier's sidebar shown.
 AFTER_TIDIER_ALONE = """
-  const [id] = args;
+  const [id, everything] = args;
   const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
   const ext = WebExtensionPolicy.getByID(id).extension;
-  await ExtensionPermissions.add(id, {permissions: ["tabHide"], origins: []}, ext);
+  await ExtensionPermissions.add(id, everything ? {permissions: ["tabHide", "webRequest", "webRequestBlocking"], origins: ["<all_urls>"]} : {permissions: ["tabHide"], origins: []}, ext);
   const w = Services.wm.getMostRecentWindow("navigator:browser");
   await w.SidebarController.show("_6844a953-9931-4334-9ff6-257c246485cb_-sidebar-action");
   return 1;

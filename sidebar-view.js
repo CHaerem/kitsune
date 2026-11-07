@@ -38,7 +38,7 @@ const tabIsLoading = t => t.status === "loading" && !t.discarded && !isGhostUrl(
 // yet, so the record's comes next, before a letter.
 const tabItem = (t, title, entry) => ({
   id: t.id, title: title || t.title || t.url,
-  icon: t.favIconUrl || (tidierAlone && entry?.icon) || null,
+  icon: iconForView(t, entry), // isolation.js
   tip: tidierAlone ? tabTip(t, entry) : undefined,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
   sound: ownSound(t), soundTabId: t.id, // what a row shows; with Tidier alone, the real page's (addSounds)

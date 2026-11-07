@@ -74,6 +74,9 @@ A first version of all of it works in the test Firefox, without Sidebery.
       you are, one place for new tabs, closed folders that rest, sound and news marks, honest
       dragging, safe moves. Sidebery has hundreds of options; each became one fixed
       behaviour or nothing.
+- [x] **Container session isolation**, as strong as Sidebery's: nothing goes out in the wrong
+      container, a space's own proxy and user agent, signing out, spaces made, changed and deleted in
+      Tidier, a vanished container brought back, a copy of a tab and a folder to another space.
 - [ ] **The command bar**, as in Arc: one key, one field, everything from it. Shortcuts as in Arc.
 - [ ] **Finding archived tabs**, a small window for links from other apps, and link preview.
 - [ ] **A refined design**: judged from screenshots, in light and dark, at every width.
@@ -135,6 +138,12 @@ Changed by saying so. All of them can be reversed.
 - Essentials stay pinned tabs, so other spaces' essentials stay in ⌃Tab; Firefox
   cannot hide a pinned tab.
 - A link opened from a tab in a folder is an ordinary tab, as in Arc (Tidier alone).
-- A link's first request may go out without a container before it is opened in its
-  space. It carries no login, and needs no access to all websites, so README's "no
-  host permissions" stays.
+- No page's first request goes out in the wrong container: it is stopped before it
+  leaves, as Sidebery does. That takes access to all websites, so it is optional, asked
+  for in the same click as hiding tabs. Without it a link's first request goes out with
+  no container before it is opened in its space, as before: it carries no login.
+- An address that belongs in another space opens there, and the tab it was typed in stays
+  if it holds anything: a page's history or a saved tab is not lost for it. A rule's
+  regular expression runs on a small engine of Tidier's own, since Firefox's can take for
+  ever on every navigation. That engine has no look-around or back-references: such a rule
+  does nothing, and the settings page says so.

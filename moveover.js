@@ -40,6 +40,7 @@ async function moveOver() {
   saveSynced(all);
   await flushWrites();
   await browser.storage.local.set({ tidierAlone: true, importedFolds: [] });
+  await guardAfterReload();
   browser.runtime.reload();
 }
 
@@ -77,6 +78,7 @@ async function moveBack() {
   await flushWrites();
   await browser.tabs.show((await browser.tabs.query({ hidden: true })).map(t => t.id)).catch(() => {});
   await resetSpaceKeys(); // Sidebery's again
+  stopIsolation();
   await browser.storage.local.set({ tidierAlone: false });
   browser.runtime.reload();
 }

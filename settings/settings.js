@@ -25,27 +25,29 @@ async function refresh() {
   $("version").textContent = "Version " + state.version;
 }
 
-function drawSpaces() {
-  $("spaces").replaceChildren(...state.spaces.map(s => {
-    const name = el("input", { type: "text", value: s.name });
-    name.onchange = () => ask("space", { id: s.id, changes: { name: name.value } });
-    return el("div", { className: "line" }, el("span", { textContent: "●", style: `color:${s.color}` }), name);
-  }));
-}
-
 function drawRules() {
   const save = () => ask("rules", { rules: [...$("rules").children].map(l => ({ url: l.querySelector("input").value.trim(), space: l.querySelector("select").value })) });
   $("rules").replaceChildren(...state.rules.map(rule => ruleLine(rule, save)));
 }
 function ruleLine(rule, save) {
   const text = el("input", { type: "text", value: rule.url, placeholder: "address, or /regular expression/" });
-  const space = el("select", {}, ...state.spaces.map(s => el("option", { value: s.id, textContent: s.name, selected: s.id === rule.space })));
-  // A rule whose space is gone: with no option of its own it would show the first space,
-  // and saving any rule would quietly send its addresses there, with other logins.
-  if (rule.space && !state.spaces.some(s => s.id === rule.space)) space.prepend(el("option", { value: rule.space, textContent: "A space that is gone", selected: true }));
+  // A space that is gone is shown as that. With only the ones there are, the first would
+  // look chosen, and the next save would send the rule somewhere you never said.
+  const gone = !!rule.space && !state.spaces.some(s => s.id === rule.space);
+  const space = el("select", {},
+    ...(gone ? [el("option", { value: rule.space, textContent: "A space that is gone", selected: true })] : []),
+    ...state.spaces.map(s => el("option", { value: s.id, textContent: s.name, selected: s.id === rule.space })));
   const remove = el("button", { textContent: "×", title: "Remove" });
-  const line = el("div", { className: "line" }, text, space, remove);
-  text.onchange = space.onchange = save;
+  const why = el("p", { className: "hint rule-problem" });
+  // Why a rule does nothing, as it is typed: otherwise a rule would just never work.
+  const showWhy = () => {
+    why.textContent = ruleProblem(text.value.trim()) ?? (gone && space.value === rule.space ? "Its space is gone, so the rule does nothing." : "");
+    why.hidden = !why.textContent;
+  };
+  showWhy();
+  const line = el("div", { className: "line" }, text, space, remove, why);
+  text.oninput = showWhy;
+  text.onchange = space.onchange = () => { showWhy(); save(); };
   remove.onclick = () => { line.remove(); save(); };
   return line;
 }
@@ -57,9 +59,10 @@ $("add-rule").onclick = () => {
 $("archive-hours").onchange = e => ask("archiveHours", { hours: e.target.value });
 $("allow-hiding").onclick = () => browser.permissions.request({ permissions: ["tabHide"] }).then(refresh);
 $("move-over").onclick = async () => {
-  // Asked here: the permission needs your click. Without it, tabs are simply not hidden yet.
+  // Asked here, in one go: the permissions need your click. Without them, tabs are simply
+  // not hidden yet, and a page's first request can go out in the wrong container.
   browser.sidebarAction.open(); // also needs your click: Firefox brings it back after Tidier starts again
-  await browser.permissions.request({ permissions: ["tabHide"] }).catch(() => {});
+  await browser.permissions.request({ permissions: ["tabHide", "webRequest", "webRequestBlocking"], origins: ["<all_urls>"] }).catch(() => {});
   await ask("moveOver");
 };
 $("do-move-back").onclick = () => ask("moveBack");

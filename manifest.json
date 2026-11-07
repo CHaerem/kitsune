@@ -28,7 +28,12 @@
     "menus.overrideContext"
   ],
   "optional_permissions": [
-    "tabHide"
+    "tabHide",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>",
+    "proxy",
+    "browsingData"
   ],
   "options_ui": {
     "page": "settings/settings.html",
@@ -51,6 +56,7 @@
       "tabsync.js",
       "folders.js",
       "livefolders.js",
+      "rulematch.js",
       "spaces.js",
       "spaceactions.js",
       "newtabs.js",
@@ -62,6 +68,7 @@
       "tabnames.js",
       "moveover.js",
       "quiet.js",
+      "isolation.js",
       "sidebar-view.js",
       "sounds.js",
       "news.js",

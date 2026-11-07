@@ -68,8 +68,8 @@ export class FakeFirefox {
     Object.assign(t, { url, title, discarded: false, status: "complete" });
     const s = this.snap(t);
     const on = this.ext?.b.tabs.onUpdated;
-    on?.fire(id, { status: "loading", url }, s);
-    on?.fire(id, { url }, s);
+    on?.fire(id, { status: "loading", url }, { ...s, status: "loading" });
+    on?.fire(id, { url }, { ...s, status: "loading" }); // as Firefox: the address changes while it loads
     on?.fire(id, { title }, s);
     on?.fire(id, { status: "complete" }, s);
   }
@@ -163,7 +163,7 @@ export class FakeFirefox {
       getTabValue: async (id, k) => { if (ff.hooks.getTabValue) await ff.hooks.getTabValue(id, k); need(id); return ff.values.get(id)?.[k]; },
       setTabValue: async (id, k, v) => { need(id); const o = ff.values.get(id) || {}; o[k] = v; ff.values.set(id, o); },
       removeTabValue: async (id, k) => { need(id); const o = ff.values.get(id); if (o) delete o[k]; },
-      getWindowValue: async () => undefined, setWindowValue: async () => {},
+      getWindowValue: async (id, k) => ff.windowValues?.[`${id} ${k}`], setWindowValue: async (id, k, v) => { (ff.windowValues ??= {})[`${id} ${k}`] = v; },
       getRecentlyClosed: async () => ff.recentlyClosed || [],
       forgetClosedTab: async (windowId, sessionId) => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.tab?.sessionId !== sessionId); },
     };
@@ -190,9 +190,10 @@ export class FakeFirefox {
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
     b.permissions = { onAdded: ev(), onRemoved: ev() };
     b.sidebarAction = { toggle: async () => {} };
+    addIsolationApis(ff, b);
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };
-    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {} });
+    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {}, localStorage: ff.pageStorage });
     const files = JSON.parse(readFileSync(new URL("manifest.json", REPO), "utf8")).background.scripts;
     for (const f of files) {
       const src = readFileSync(new URL(f, REPO), "utf8");
@@ -210,3 +211,52 @@ export class FakeFirefox {
   }
 }
 export const GHOST = (k, key) => `moz-extension://tidier/ghost.html?kind=${k}&key=${encodeURIComponent(key)}`;
+
+// What isolation.js uses, for tests/isolation.test.mjs. As in Firefox, an API behind an
+// optional permission is not there at all until the permission is: ff.granted, or
+// ff.grant() while running. The page's localStorage survives a boot, as it does.
+function addIsolationApis(ff, b) {
+  ff.granted ??= new Set();
+  ff.cookies ??= []; // [{ storeId, domain, name, value, path, ... }]
+  const store = (ff.pageStorageData ??= {});
+  ff.pageStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+  const apis = () => {
+    if (ff.granted.has("webRequest")) b.webRequest ??= { onBeforeRequest: ev(), onBeforeSendHeaders: ev() };
+    if (ff.granted.has("proxy")) b.proxy ??= { onRequest: ev() };
+    if (ff.granted.has("browsingData")) b.browsingData ??= { remove: async (o, kinds) => { ff.log.push(["browsingData", o, kinds]); ff.cookies = ff.cookies.filter(c => c.storeId !== o.cookieStoreId); } };
+  };
+  apis();
+  ff.grant = (...names) => { names.forEach(n => ff.granted.add(n)); apis(); b.permissions.onAdded.fire({ permissions: names, origins: [] }); };
+  b.permissions.contains = async ({ permissions = [], origins = [] }) => [...permissions, ...origins].every(p => ff.granted.has(p));
+  b.contentScripts ??= { register: async () => ({ unregister: async () => {} }) }; // what else access to all websites starts (littlewindow.js)
+  // Answers a top-level request as Firefox would ask it: undefined if nothing listens.
+  ff.request = async ({ tabId, url, requestId = "r" + (ff.nextRequest = (ff.nextRequest || 0) + 1), originUrl, type = "main_frame", method = "GET" }) => {
+    const t = ff.tabs.get(tabId);
+    const listener = b.webRequest?.onBeforeRequest.ls[0];
+    if (!listener || !listener.filter.types.includes(type)) return undefined;
+    ff.requests = (ff.requests || 0) + 1;
+    return listener.f({ tabId, url, requestId, originUrl, type, method, incognito: !!t?.incognito, cookieStoreId: t?.cookieStoreId });
+  };
+  b.cookies = {
+    getAll: async ({ storeId, url, domain }) => ff.cookies.filter(c => c.storeId === storeId && (
+      domain ? (c.domain.replace(/^\./, "") === domain || c.domain.endsWith("." + domain))
+        : url ? (new URL(url).hostname === c.domain.replace(/^\./, "") || new URL(url).hostname.endsWith("." + c.domain.replace(/^\./, ""))) : true)),
+    remove: async ({ storeId, name, url }) => { ff.cookies = ff.cookies.filter(c => !(c.storeId === storeId && c.name === name && url.includes(c.domain.replace(/^\./, "")))); },
+    set: async ({ storeId, name, value, url, domain }) => { ff.cookies.push({ storeId, name, value, domain: domain ?? new URL(url).hostname, path: "/", secure: url.startsWith("https"), hostOnly: !domain, firstPartyDomain: "" }); },
+  };
+  ff.identities ??= {}; // container -> { name, color, icon }
+  const identity = id => ({ cookieStoreId: id, name: id, color: "blue", colorCode: "#000", icon: "circle", iconUrl: "x.svg", ...ff.identities[id] });
+  const ci = b.contextualIdentities;
+  ci.query = async () => { if (ff.containersOff) throw new Error("Contextual identities are currently disabled"); return [...ff.containers].filter(c => c !== "firefox-default").map(identity); };
+  ci.create = async ({ name, color, icon }) => {
+    if (ff.badColors?.includes(color)) throw new Error(`Invalid color name ${color}`);
+    ff.containerCount = Math.max(ff.containerCount || 0, ...[...ff.containers].map(c => Number(c.split("-").pop()) || 0)) + 1;
+    const id = `firefox-container-${ff.containerCount}`;
+    ff.containers.add(id);
+    ff.identities[id] = { name, color, icon };
+    ci.onCreated.fire({ contextualIdentity: identity(id) });
+    return identity(id);
+  };
+  ci.update = async (id, changes) => { Object.assign((ff.identities[id] ??= {}), changes); ci.onUpdated.fire({ contextualIdentity: identity(id) }); return identity(id); };
+  ci.remove = async id => { const old = identity(id); ff.containers.delete(id); ci.onRemoved.fire({ contextualIdentity: old }); return old; };
+}
