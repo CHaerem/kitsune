@@ -19,6 +19,7 @@ const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
 const tabItem = (t, title) => ({
   id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
+  sound: ownSound(t), soundTabId: t.id, // what a row shows; with Tidier alone, the real page's (addSounds)
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
@@ -57,6 +58,7 @@ async function viewFor(windowId) {
     const record = all[rowKey.get(t.id)];
     (folder ? folder.tabs : loose).push(tabItem(t, record?.name || record?.title));
   }
+  if (tidierAlone) await addSounds({ essentials, folders, tabs: loose, spaces, space }, windowId);
   return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, note: noteFor(windowId), spaces, space, essentials, folders, tabs: loose };
 }
 
@@ -108,6 +110,8 @@ browser.runtime.onConnect.addListener(port => {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (msg.type === "undo") {
       await undoNote(windowId, msg.note); // quiet.js: taken at once, carried out in the queue
+    } else if (msg.type === "goToSound") {
+      await goToSound(windowId, msg.tabId); // sounds.js; like select, not behind what the queue is doing
     } else if (tidierAlone) {
       // Rows are drawn before Tidier has started; what you do with them waits for that,
       // since a move before the roles are read would act on a row, not on its tab.

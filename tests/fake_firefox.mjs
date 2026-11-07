@@ -85,7 +85,8 @@ export class FakeFirefox {
       TAB_ID_NONE: -1,
       onCreated: ev(), onUpdated: ev(), onRemoved: ev(), onMoved: ev(), onActivated: ev(), onAttached: ev(), onDetached: ev(),
       query: async (q = {}) => { if (ff.hooks.query) await ff.hooks.query(q); let out = [...ff.wins.values()].flatMap(w => ff.list(w.id));
-        for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId"]) if (q[k] !== undefined) out = out.filter(t => t[k] === q[k]);
+        for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId", "audible"]) if (q[k] !== undefined) out = out.filter(t => t[k] === q[k]);
+        if (q.muted !== undefined) out = out.filter(t => !!t.mutedInfo?.muted === q.muted);
         if (q.currentWindow) out = out.filter(t => t.windowId === ff.focused);
         return out; },
       get: async id => ff.snap(need(id)),
@@ -111,7 +112,7 @@ export class FakeFirefox {
         if (p.active) ff.select(id);
         if (p.pinned !== undefined && p.pinned !== t.pinned) { t.pinned = p.pinned; b.tabs.onUpdated.fire(id, { pinned: p.pinned }, ff.snap(t)); }
         if (p.openerTabId !== undefined) t.openerTabId = p.openerTabId;
-        if (p.muted !== undefined) t.mutedInfo = { muted: p.muted };
+        if (p.muted !== undefined) { t.mutedInfo = { muted: p.muted }; b.tabs.onUpdated.fire(id, { mutedInfo: t.mutedInfo }, ff.snap(t)); }
         if (p.successorTabId !== undefined) t.successorTabId = p.successorTabId;
         if (p.url) { ff.log.push(["update-url", id, p.url]); ff.navigate(id, p.url); }
         return ff.snap(t);
@@ -154,6 +155,7 @@ export class FakeFirefox {
       getAll: async ({ populate } = {}) => [...ff.wins.values()].map(w => ({ id: w.id, type: w.type, incognito: w.incognito, focused: ff.focused === w.id, ...(populate ? { tabs: ff.list(w.id) } : {}) })),
       get: async id => { const w = ff.wins.get(id); if (!w) throw new Error(`Invalid window ID: ${id}`); return { id, type: w.type, incognito: w.incognito, focused: ff.focused === id }; },
       getLastFocused: async () => { const w = ff.wins.get(ff.focused); return w ? { id: w.id, focused: true } : { id: -1, focused: false }; },
+      update: async (id, p) => { if (!ff.wins.has(id)) throw new Error(`Invalid window ID: ${id}`); if (p.focused) ff.focused = id; return { id }; },
     };
     b.sessions = {
       onChanged: ev(),

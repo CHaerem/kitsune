@@ -76,6 +76,7 @@ PAGES = {
     "/plain": "<title>Plain</title>a plain page",
     "/slow": "<title>Slow</title>a page that takes a while",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+    "/titled": "<script>document.title = decodeURIComponent(location.search.slice(1));</script>a page with the title in its address",
 }
 
 
