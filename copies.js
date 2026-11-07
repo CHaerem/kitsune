@@ -212,5 +212,8 @@ async function mergeCopy(copy, spaces) {
 
   await reconcileAll();
   await ensureAllWindows();
+  // A folder can come in closed, and what came with it was just made as tabs: it rests
+  // like any closed folder, or its tabs stay in the list and in ⌃Tab until you switch.
+  if (tidierAlone) await showSpaceEverywhere(); // foldrest.js
   return { essentials: newEssentials.length, folders, tabs, rules: newRules.length, spaces: made.length };
 }
