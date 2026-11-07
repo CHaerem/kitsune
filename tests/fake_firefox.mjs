@@ -174,9 +174,17 @@ export class FakeFirefox {
     b.alarms = { create() {}, onAlarm: ev() };
     b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
       sendNativeMessage: () => reject("no host") };
-    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(c => ({ cookieStoreId: c, name: c, colorCode: "#000", icon: "circle" })),
-      get: async id => { if (id === "firefox-default" || !ff.containers.has(id)) throw new Error(`Invalid contextual identity: ${id}`); return { cookieStoreId: id, name: id, colorCode: "#000", icon: "circle" }; },
-      onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
+    const identity = c => ({ cookieStoreId: c, name: c, colorCode: "#000", color: "blue", icon: "circle", ...ff.identities?.[c] }); // ff.identities: names and looks other than the id
+    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(identity), onCreated: ev(), onUpdated: ev(), onRemoved: ev(),
+      get: async id => { if (id === "firefox-default" || !ff.containers.has(id)) throw new Error(`Invalid contextual identity: ${id}`); return identity(id); },
+      create: async ({ name, color, icon }) => {
+        if (ff.badColors?.includes(color)) throw new Error(`Invalid color name ${color}`);
+        const id = `firefox-container-${1 + Math.max(0, ...[...ff.containers].map(c => Number(c.split("-").pop()) || 0))}`;
+        ff.containers.add(id);
+        (ff.identities ||= {})[id] = { name, color, icon };
+        b.contextualIdentities.onCreated.fire({ contextualIdentity: identity(id) });
+        return identity(id);
+      } };
     b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
     b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };

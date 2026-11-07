@@ -283,7 +283,7 @@ test("names travel with a copy", async () => {
   const w = ff.addWindow({ focused: true });
   ff.addTab(w.id, { url: "about:home", active: true });
   const x = await start(ff);
-  await x.js("mergeCopy")({ data: {
+  await x.js("mergeCopy")({ tidier: "1.6", data: {
     essentials: [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "Sign in", icon: "x", name: "Jira" }],
     syncedTabs: { F: folder("Kept"), s: savedEntry("https://a.example/board", "Board", { name: "Sprint board" }) },
   } });

@@ -26,7 +26,7 @@ async function folderState(id) {
 }
 const saveFolderState = async () => liveFolderState.set(await liveFolderState.get());
 
-const groupName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, ""));
+const groupName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "").replace(/(?::id:|%3Aid%3A).*$/, "")); // (":id:" from older Sidebery)
 
 // Sidebery's group page URL, taken from an existing folder: Sidebery's own
 // extension URL is not otherwise visible to other extensions.

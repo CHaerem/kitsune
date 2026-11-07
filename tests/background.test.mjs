@@ -459,7 +459,7 @@ test("a copy is taken in by merging: only the chosen spaces, and nothing removed
   ff.addTab(w.id, { url: "https://mine.example/", active: true, cookieStoreId: C1 }, { syncKey: "mine", syncRole: "live" });
   const x = await run(ff);
   const C2 = "firefox-container-2";
-  const copy = { data: {
+  const copy = { tidier: "1.6", data: {
     essentials: [
       { key: "e1", url: "https://e1.example/", cookieStoreId: C1, title: "E1" },
       { key: "e2", url: "https://e2.example/", cookieStoreId: C2, title: "E2" },
@@ -474,7 +474,7 @@ test("a copy is taken in by merging: only the chosen spaces, and nothing removed
     },
   } };
   const r = await x.js("mergeCopy")(copy, [C1]);
-  assert.deepEqual({ ...r }, { essentials: 1, folders: 1, tabs: 1 });
+  assert.deepEqual({ ...r }, { essentials: 1, folders: 1, tabs: 1, rules: 0, spaces: 0 });
   await wait(1000);
   assert.deepEqual(ff.store.essentials.map(e => e.key).sort(), ["e1", "here"]);
   assert.deepEqual(Object.keys(ff.synced).sort(), ["F", "kept", "mine"]);
@@ -650,12 +650,12 @@ test("Sidebery's rules and order of spaces come from its export", async () => {
   const x = await run(ff);
   const r = await x.js("importSidebery")({
     containers: {
-      "firefox-container-1": { id: "firefox-container-1", reopenRulesActive: true, reopenRules: [{ active: true, url: "/^https:\\/\\/a\\//" }, { active: false, url: "off" }] },
-      "firefox-container-2": { id: "firefox-container-2", reopenRulesActive: false, reopenRules: [{ active: true, url: "ignored" }] },
+      "firefox-container-1": { id: "firefox-container-1", name: "firefox-container-1", reopenRulesActive: true, reopenRules: [{ active: true, type: 1, url: "/^https:\\/\\/a\\//" }, { active: false, type: 1, url: "off" }] },
+      "firefox-container-2": { id: "firefox-container-2", name: "firefox-container-2", reopenRulesActive: false, reopenRules: [{ active: true, type: 1, url: "ignored" }] },
     },
     sidebar: { nav: ["p2", "p1", "settings"], panels: { p1: { newTabCtx: "firefox-container-1" }, p2: { newTabCtx: "firefox-container-2" } } },
   });
-  assert.deepEqual({ ...r }, { rules: 1, order: 2 });
+  assert.deepEqual([r.rules, r.order, r.panelsLeftOut, r.folds], [1, 2, 0, null]);
   await wait(500);
   assert.deepEqual(ff.store.rules, [{ url: "/^https:\\/\\/a\\//", space: "firefox-container-1" }]);
   assert.deepEqual(ff.store.spaceOrder, ["firefox-container-2", "firefox-container-1"]);

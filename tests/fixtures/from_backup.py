@@ -7,8 +7,8 @@ Run it again when you change spaces or containers. It reads a Sidebery backup
 (default: the newest in ~/Library/Application Support/Firefox/oppsett-backup)
 and Firefox' containers.json, and writes:
 
-  sidebery.json   – Sidebery's spaces, settings and containers; the container
-                    rules (reopenRules) are dropped, since they hold addresses.
+  sidebery.json   – Sidebery's spaces, settings and containers; the rules with
+                    an address (reopenRules, moveRules) are dropped.
                     Sidebery's CSS is not here: the tests take it from dotfiles.
   containers.json – the containers (colours, icons), from your profile.
 
@@ -33,6 +33,7 @@ for c in b["containers"].values():
 # Space ids and names from the container each space opens new tabs in.
 renamed = {}
 for old, p in list(b["sidebar"]["panels"].items()):
+    p["moveRules"] = [r for r in p.get("moveRules", []) if not r.get("url")]  # they hold addresses too
     n = p.get("newTabCtx", "").rsplit("-", 1)[-1]
     renamed[old] = new = f"space{n}" if n.isdigit() else old
     p.update(id=new, name=f"Space {n}" if n.isdigit() else p.get("name", ""))

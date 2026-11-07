@@ -1,0 +1,88 @@
+{
+ "ver": "5.6.1",
+ "containers": {
+  "firefox-container-1": {
+   "id": "firefox-container-1", "cookieStoreId": "firefox-container-1", "name": "Space 1", "icon": "fingerprint", "color": "blue", "colorCode": "#37adff",
+   "reopenRulesActive": true,
+   "reopenRules": [
+    {"id": "r1", "active": true, "type": 1, "url": "reopen.example.org"},
+    {"id": "r2", "active": false, "type": 1, "url": "switched-off.example.org"},
+    {"id": "r3", "active": true, "type": 2, "url": "excluded.example.org"}
+   ]
+  },
+  "firefox-container-2": {
+   "id": "firefox-container-2", "cookieStoreId": "firefox-container-2", "name": "Space 2", "icon": "briefcase", "color": "orange", "colorCode": "#ff9f00",
+   "reopenRulesActive": false,
+   "reopenRules": [{"id": "r4", "active": true, "type": 1, "url": "not-active.example.org"}]
+  }
+ },
+ "sidebar": {
+  "nav": ["p2", "p1", "loose", "settings"],
+  "panels": {
+   "p1": {
+    "type": 2, "id": "p1", "name": "One", "newTabCtx": "firefox-container-1",
+    "moveRules": [
+     {"id": "m1", "active": true, "containerId": "firefox-container-1"},
+     {"id": "m2", "active": true, "url": "/^https:\\/\\/moved\\.example\\.org\\//"},
+     {"id": "m3", "active": false, "url": "switched-off-too.example.org"},
+     {"id": "m4", "active": true, "url": "reopen.example.org"}
+    ]
+   },
+   "p2": {
+    "type": 2, "id": "p2", "name": "Two", "newTabCtx": "firefox-container-2",
+    "moveRules": [{"id": "m5", "active": true, "url": "two.example.org"}]
+   },
+   "loose": {
+    "type": 2, "id": "loose", "name": "No container", "newTabCtx": "none",
+    "moveRules": [{"id": "m6", "active": true, "url": "nowhere.example.org"}]
+   },
+   "idle": {"type": 2, "id": "idle", "name": "No rules", "newTabCtx": "none", "moveRules": []}
+  }
+ },
+ "snapshots": [
+  {
+   "id": "older", "time": 1000,
+   "containers": {},
+   "sidebar": {},
+   "tabs": [
+    [
+     [
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Reading", "title": "Reading", "panelId": "p1", "containerId": "firefox-container-1", "folded": true},
+      {"url": "https://a.example.org/", "title": "A", "panelId": "p1", "lvl": 1, "containerId": "firefox-container-1"},
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Open", "title": "Open", "panelId": "p1", "containerId": "firefox-container-1"},
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Both", "title": "Both", "panelId": "p1", "containerId": "firefox-container-1", "folded": true}
+     ],
+     [
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Reading", "title": "Reading", "panelId": "p2", "containerId": "firefox-container-2"}
+     ]
+    ],
+    [
+     [
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Reading", "title": "Reading", "panelId": "p1", "containerId": "firefox-container-1", "folded": true},
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Both", "title": "Both", "panelId": "p1", "containerId": "firefox-container-1"}
+     ]
+    ]
+   ]
+  },
+  {
+   "id": "newer", "time": 2000,
+   "containers": -1,
+   "sidebar": -1,
+   "tabs": [
+    [
+     [
+      -1,
+      -1,
+      -1,
+      -1,
+      {"url": "moz-extension://00000000-0000-4000-8000-000000000000/sidebery/group.html#Later~!abcdefghijkl!ch!~", "title": "Later", "panelId": "p1", "containerId": "firefox-container-1", "folded": true}
+     ],
+     [-1]
+    ],
+    [
+     [-1, -1]
+    ]
+   ]
+  }
+ ]
+}

@@ -7,5 +7,7 @@ section { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid co
 .notice { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, orange 18%, transparent); margin-bottom: 10px; }
 .line { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .line input[type=text] { flex: 1; min-width: 0; }
+.line select { max-width: 40%; } /* a long space's name must not push the address out of its line */
+.file-input { display: block; margin-top: 4px; }
 button, input, select { font: inherit; }
 [hidden] { display: none !important; }

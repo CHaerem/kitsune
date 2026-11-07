@@ -261,7 +261,7 @@ const firstPage = new Set(); // tabs that have not shown a web page yet
 function ruleMatches(rule, url) {
   const re = /^\/(.+)\/([a-z]*)$/.exec(rule);
   if (!re) return url.includes(rule);
-  try { return new RegExp(re[1], re[2]).test(url); } catch (err) { return false; }
+  try { return new RegExp(re[1], re[2]).test(url); } catch (err) { return url.includes(rule); } // "/docs/print" is text with a slash, not flags
 }
 
 async function byRule(tabId, url) {
