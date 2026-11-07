@@ -186,7 +186,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
-      await browser.tabs.create({ windowId, cookieStoreId: msg.space, index: tidierAlone ? await topOfToday(windowId, msg.space) : undefined });
+      await browser.tabs.create({ windowId, cookieStoreId: msg.space, index: tidierAlone ? await topOfToday(windowId, msg.space) : undefined }).catch(ifGone);
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (msg.type === "undo") {
@@ -255,7 +255,7 @@ async function moveEssential(windowId, tabId, beforeId) {
   let index = before ? before.index : tabs.at(-1).index;
   if (before && tab.index < before.index) index--;
   busy.delete(tabId); // yours, also right after its pin (see pinFromSidebar)
-  if (index !== tab.index) await browser.tabs.move(tabId, { index });
+  if (index !== tab.index) await browser.tabs.move(tabId, { index }).catch(ifGone);
 }
 
 // The toolbar button shows or hides the sidebar: without a sidebar, a window has

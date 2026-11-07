@@ -146,4 +146,5 @@ async function moveToSpace(tabId, space, leaving = []) {
   // (A live folder's pull request counts as closed, or the next search brings it back.)
   if (key) await closeEverywhere(key);
   else await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPages([url]); // you moved it: ⌘⇧T must not bring it back in the space it left
 }

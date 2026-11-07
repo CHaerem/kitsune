@@ -46,7 +46,8 @@ async function spaceOf(windowId, tabs, spaces) {
     // (spaceRemoved, safemoves.js), and then nothing else would show this space's tabs.
     showSpaceSoon(windowId);
   }
-  activeSpace.set(windowId, space);
+  // Asked for a window that has closed meanwhile, nothing would remove it from here again.
+  if (activeSpace.get(windowId) !== space && await browser.windows.get(windowId).catch(() => null)) activeSpace.set(windowId, space);
   return space;
 }
 
@@ -130,11 +131,13 @@ async function usedLastOf(tabs) {
 // Switching: back to the tab you used last in that space, else a new tab there.
 async function switchSpace(windowId, space) {
   const last = await lastUsedIn(windowId, space);
+  if (!await browser.windows.get(windowId).catch(() => null)) return; // closed meanwhile
   activeSpace.set(windowId, space); // before the tab is selected, so onActivated agrees
-  await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {}); // setSpace below sees no change, and would leave an older space to come back after a restart
+  // And written here, since setSpace below now sees no change: this is what a restart reads.
+  await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {});
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
-  else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space });
-  await setSpace(windowId, space);
+  else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space }).catch(ifGone);
+  if (activeSpace.has(windowId)) await setSpace(windowId, space); // else closed meanwhile
 }
 
 // The n-th space on the bar (⌃1, ⌃2, ...).
@@ -165,7 +168,8 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
     // No longer selected, its own event is on its way: going through every tab selected
     // for a moment (each page an Undo brings back) would show each one's space in turn.
-    if (!tab?.active) { viewSoon(windowId); return; }
+    // (A tab that has moved to another window since does not decide this window's space.)
+    if (!tab?.active || tab.windowId !== windowId) { viewSoon(windowId); return; }
     if (tab.cookieStoreId === NO_CONTAINER) { await setSuccessor(tab); viewSoon(windowId); return; }
     if (littleHolds(tab)) { viewSoon(windowId); return; } // littlewindow.js
     if (isHiddenSpace(tab.cookieStoreId)) { viewSoon(windowId); return; } // what is left open of a hidden space is shown in every space (hiddenspaces.js)
@@ -275,6 +279,22 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
 }, { properties: ["url"] });
 browser.tabs.onRemoved.addListener(tabId => { newTabs.delete(tabId); firstPage.delete(tabId); });
 
+// A tab opened while Tidier was starting, seen only now (seeUnseenTabs, tabsync.js). A
+// link that started Firefox has no container, and would stay in none. Returns whether it
+// is being opened again, which then gets seen as a new tab.
+function seenLateInSpace(tab) {
+  if (!tidierAlone || tab.pinned || tab.incognito) return false;
+  if (!isWeb(tab.url)) { if (!isGhostUrl(tab.url)) firstPage.add(tab.id); return false; }
+  if (tab.cookieStoreId !== NO_CONTAINER) return false;
+  // A loaded page is moved by moveStragglers (isolation.js), which keeps what the record
+  // knows of it, and a known one is stopped when it loads: reopened here as well, it would
+  // become another tab.
+  if (!tab.discarded || syncKeyByTab.has(tab.id)) return false;
+  // (With no space to go to it stays where it is, and is a tab like any other.)
+  serial(async () => { await byRule(tab.id, tab.url); registerSoon(tab.id); });
+  return true;
+}
+
 // --- Rules: an address always opens in a given space (Arc's Air Traffic Control) ---
 // A rule is text to find in the address, or /a regular expression/. It is looked at
 // for a tab's first page only (and, with the permission, when you type or choose an
@@ -308,20 +328,24 @@ async function byRule(tabId, url) {
   const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: await indexWhenReopened(tab, rule.space) }).catch(err => ruleFailed(rule, err));
   if (!opened) return intoSpace(tabId); // closing it now would lose the link (safemoves.js)
   await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPages([url]); // the same as in intoSpace, below
 }
 
 // (The tab stays in newTabs until it is gone, so no view draws it meanwhile: reopensSoon.)
 async function intoSpace(tabId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
-  if (!tab || tab.cookieStoreId !== NO_CONTAINER) return;
+  if (!tab || tab.pinned || tab.cookieStoreId !== NO_CONTAINER) return; // (pinned meanwhile: an essential now)
   const win = await browser.windows.get(tab.windowId).catch(() => null);
   // (A new window's first tab can come before the window is announced.)
   const space = activeSpace.get(tab.windowId) ?? activeSpace.get(focusedWindowId);
   if (!win || win.type !== "normal" || !space) return;
   const url = NEW_TAB_PAGES.has(tab.url) ? undefined : tab.url;
   if (url !== undefined && !isWeb(url)) return;
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: await indexWhenReopened(tab, space) });
+  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: await indexWhenReopened(tab, space) }).catch(ifGone);
   await browser.tabs.remove(tab.id).catch(() => {});
+  // The page is open in its space: in Recently Closed it would come back by ⌘⇧T, a second
+  // time, instead of the tab you closed.
+  if (url) await forgetClosedPages([url]);
 }
 
 // --- When Tidier starts ------------------------------------------------------
@@ -334,14 +358,30 @@ async function startSpaces() {
   if (!tidierAlone) return takeKeysBackIfGiven(); // keys-commands.js
   await giveKeys().catch(noteError); // here and not in the manifest, so that they are not taken from Sidebery while it is in use; keys must not stop the rest
   await startLittleWindow(); // littlewindow.js
-  for (const w of await normalWindows()) {
-    const tabs = await browser.tabs.query({ windowId: w.id });
-    const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
-    const space = await spaceOf(w.id, tabs, await spaceList(used));
-    await showSpace(w.id);
-    const active = tabs.find(t => t.active);
-    if (active && (active.cookieStoreId === space || active.cookieStoreId === NO_CONTAINER)) await setSuccessor(active);
-  }
+  for (const w of await normalWindows()) await startSpaceIn(w.id);
   await leaveHiddenSpaces(); // a window restored on a tab of a space that is hidden now
   await closeHiddenTabs(); // hiddenspaces.js: restored with the session
 }
+async function startSpaceIn(windowId) {
+  const tabs = await browser.tabs.query({ windowId });
+  const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
+  const spaces = await spaceList(used);
+  const space = await spaceOf(windowId, tabs, spaces);
+  await showSpace(windowId);
+  const active = tabs.find(t => t.active);
+  if (active && (active.cookieStoreId === space || active.cookieStoreId === NO_CONTAINER)) await setSuccessor(active);
+  // The selected tab decides. What the window remembers can be behind (a job cut off by an
+  // update or a crash), and it would show you a list without the tab you are looking at.
+  else if (active && spaces.some(s => s.id === active.cookieStoreId)) {
+    await setSpace(windowId, active.cookieStoreId);
+    await setSuccessor(active);
+  }
+}
+// A window that opens with no other window to take its space from (reopened after the
+// last one closed), or whose first tab has no container, still has one: without it the
+// tabs of every space stay shown, and a new tab opens in no space, until a sidebar asks.
+// After the tabs it gets (tabsync.js adds its job first).
+browser.windows.onCreated.addListener(win => {
+  if (!tidierAlone || !started || win.type !== "normal" || win.incognito) return;
+  setTimeout(() => serial(() => startSpaceIn(win.id)), NEW_WINDOW_DELAY_MS);
+});

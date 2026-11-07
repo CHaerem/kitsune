@@ -5695,6 +5695,48 @@ def copy_for_claude(m, tab):
       const o = {}; try { t.getTransferData("text/plain", o); return o.value.QueryInterface(Ci.nsISupportsString).data; } catch (e) { return ""; }""")
 
 
+def alone_chaos(m):
+    # Tidier tells its own moves and closes from yours by marks it takes away when Firefox
+    # answers (a pull: beingPulled, a sort: ownMoves, a close: removeTabs). That rests on Firefox
+    # telling of what happened before it answers the call, which only a real Firefox can show.
+    r = ext_page(m, "/settings/settings.html", """
+      const b = page.browser, seen = {attached: 0, moved: 0, pinned: 0, removed: 0}, late = [];
+      const [space] = await b.contextualIdentities.query({});
+      const here = (await b.windows.getCurrent()).id, other = await b.windows.create({url: "about:blank"});
+      await wait(2000);
+      const t = await b.tabs.create({windowId: here, url: "https://example.org/?smoke-event-order", active: false, cookieStoreId: space.cookieStoreId});
+      await wait(3000);
+      const count = kind => id => { if (id === t.id) seen[kind]++; };
+      const listeners = [[b.tabs.onAttached, count("attached")], [b.tabs.onMoved, count("moved")], [b.tabs.onRemoved, count("removed")],
+        [b.tabs.onUpdated, (id, change) => { if (id === t.id && "pinned" in change) seen.pinned++; }]];
+      for (const [event, f] of listeners) event.addListener(f);
+      const answered = (kind, n) => { if (seen[kind] < n) late.push(kind + " " + n); };
+      for (let i = 1; i <= 6; i++) { await b.tabs.move(t.id, {windowId: i % 2 ? other.id : here, index: -1}); answered("attached", i); await wait(300); }
+      const first = (await b.tabs.query({windowId: here, pinned: true})).length; // a move out of the pinned part is ignored
+      for (let i = 1; i <= 6; i++) { await b.tabs.move(t.id, {index: i % 2 ? first : -1}); answered("moved", i); await wait(100); }
+      await b.tabs.update(t.id, {pinned: true}); answered("pinned", 1); await wait(300);
+      await b.tabs.update(t.id, {pinned: false}); answered("pinned", 2); await wait(800);
+      await b.tabs.remove(t.id); answered("removed", 1);
+      for (const [event, f] of listeners) event.removeListener(f);
+      await b.windows.remove(other.id); await wait(1500);
+      return {late, seen};""")
+    check("Firefox tells of a move or a close before it answers the call", r.get("late") == [] and r["seen"]["attached"] == 6, str(r))
+    # What the unit tests cannot show: that a real page Tidier closes reaches Recently Closed
+    # under the address it had, and is found there.
+    r = m.js(H + """const w = main(), mark = "smoke-chaos-link";
+      const closed = () => w.SessionStore.getClosedTabDataForWindow(w).map(c => c.state.entries?.[c.state.index - 1]?.url || "").filter(u => u.includes(mark)).length;
+      w.gBrowser.addTrustedTab("https://example.org/?" + mark, {inBackground: true});  // no container, as from another app
+      const inSpace = () => w.gBrowser.tabs.filter(t => url(t).includes(mark) && t.userContextId);
+      for (let i = 0; i < 100 && !inSpace().length; i++) await wait(100);
+      await wait(1500);  // a copy left there would be there by now
+      const here = w.gBrowser.tabs.filter(t => url(t).includes(mark)), spaces = here.map(ctxOf), first = closed();
+      w.gBrowser.removeTab(here[0]);
+      for (let i = 0; i < 100 && !closed(); i++) await wait(100);
+      return {spaces, first, then: closed()};""")
+    check("a link from another app is opened in a space, and its first copy is not in Recently Closed", len(r["spaces"]) == 1 and r["spaces"][0] != "firefox-default" and r["first"] == 0, str(r))
+    check("closed a moment later, ⌘⇧T brings it back", r["then"] == 1, str(r))
+
+
 def alone_idle(m):
     # What the groups before did can still have a timer running, started by what they did:
     # the quiet line (10 s) and a placeholder's new title (up to a minute, refreshGhostsSoon).
@@ -9254,6 +9296,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_sync_hide,
                 alone_bridge,
                 alone_many,
+                alone_chaos,
                 alone_idle, alone_update, alone_folds_rest_kept, alone_end, alone_restart, alone_folds_rest_kept, alone_isolation_start, alone_little_restart)
 
 

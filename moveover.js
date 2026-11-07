@@ -52,8 +52,8 @@ async function closeOldFolderPages() {
   const pages = (await browser.tabs.query({})).filter(t => isSideberyGroup(t.url));
   if (!pages.length) return; // as at every start but the first: reading every tab's values is left for the start itself
   await loadRoles();
-  pages.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-  await browser.tabs.remove(pages.map(t => t.id)).catch(noteError);
+  pages.forEach(t => forget(t.id));
+  await removeTabs(pages.map(t => t.id), syncBusy).catch(noteError);
 }
 
 // Back to Sidebery: you enable it first, since its folder pages are its own. Each

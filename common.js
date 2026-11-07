@@ -62,8 +62,10 @@ async function readAlone() {
 // Read at once too, and not only when Tidier starts (tabsync.js), seconds later: a sidebar
 // open when Firefox starts asks for its first view long before that. Drawn without the
 // setting, its rows could not be dragged until it was closed, and its folders, tabs and
-// spaces all moved when the setting came (viewFor, sidebar-view.js).
-const aloneRead = readAlone().catch(noteError);
+// spaces all moved when the setting came (viewFor, sidebar-view.js). And first in the
+// queue: Tidier starts a moment after its page loads, and a job in that moment (a tab you
+// pinned, say) would otherwise work as if Sidebery were there. (serial notes an error.)
+const aloneRead = serial(readAlone).catch(() => {});
 
 // Something you should know and would otherwise not see, such as a live folder that
 // has stopped: shown on Tidier's button (in the Extensions menu) and in its sidebar.
@@ -78,6 +80,22 @@ function setNotice(kind, text) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// A tab or window can close at any moment, between one call and the next, and Firefox then
+// refuses the next call about it. That is no error, and must not stop the job halfway: the
+// tab is simply gone. Anything else Firefox refuses still counts.
+const isGone = err => /^Invalid (tab|window) ID/.test(err?.message);
+const ifGone = err => { if (!isGone(err)) throw err; };
+// Closed one by one: Firefox refuses a whole list if one of them has already closed. `marks`
+// tells the listeners it is Tidier closing them; a tab that closed before it was marked gets
+// no event that would unmark it, so that is done here. (The event comes before the answer.)
+async function removeTabs(ids, marks) {
+  ids.forEach(id => marks?.add(id));
+  try {
+    await Promise.all(ids.map(id => browser.tabs.remove(id).catch(ifGone)));
+  } finally {
+    ids.forEach(id => marks?.delete(id));
+  }
+}
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
 const sameSite = (a, b) => {
@@ -91,6 +109,13 @@ const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/
 const GHOST_PAGE = browser.runtime.getURL("ghost.html");
 const ghostUrl = (kind, key) => `${GHOST_PAGE}?kind=${kind}&key=${encodeURIComponent(key)}`;
 const isGhostUrl = url => (url || "").startsWith(GHOST_PAGE);
+// What a placeholder stands for, from its own address: a tab's session values can be lost
+// (Firefox loses them for an unloaded tab moved to another window), this cannot.
+const placeholderOf = url => {
+  if (!isGhostUrl(url)) return {};
+  const params = new URL(url).searchParams;
+  return { kind: params.get("kind"), key: params.get("key") };
+};
 
 // Placeholders we close ourselves would show up in Recently Closed Tabs, and
 // ⌘⇧T would bring one back instead of the tab you closed. Only real pages
@@ -99,35 +124,50 @@ const isGhostUrl = url => (url || "").startsWith(GHOST_PAGE);
 // looked for again whenever that list changes, for FORGET_MS. (An essential
 // copy's address may end in "&placed=N", see essentials.js.)
 //
+// The same goes for a real page Tidier closed because it is open elsewhere (opened again in
+// its space, say). That is looked for only until it is found, and not for long: a moment
+// later you may close the page itself, and that one ⌘⇧T must bring back.
+//
 // Closing many tabs changes that list once per tab, and a look makes Firefox copy
 // everything in it, also a closed window with all its tabs. So nobody waits for a look,
 // one runs at a time, and if the list changed meanwhile, another follows after a rest in
 // proportion to what this one took. With a few tabs that rest is hardly anything. It has
-// a limit, well below FORGET_MS: past that a placeholder would no longer be looked for,
+// a limit, well below FORGET_PAGE_MS: past that a placeholder would no longer be looked for,
 // and would stay in the list, on a machine that is merely busy.
-const FORGET_MS = 10000, FORGET_REST = 9, FORGET_LONGEST_REST_MS = 1000;
-const toForget = new Map(); // placeholder URL -> until when to look for it
+const FORGET_MS = 10000, FORGET_PAGE_MS = 3000, FORGET_REST = 9, FORGET_LONGEST_REST_MS = 1000;
+const toForget = new Map(); // address -> { until when to look for it, whether once is enough }
 let forgetTimer = null, forgetBusy = false, forgetAgain = false;
 function forgetClosedPlaceholders(kind, keys) {
   // A synced tab's placeholder is a "ghost", or "lazy" if it stands for a pull request
   // never opened (createLiveItem); ⌘⇧T would bring that back with nothing to show.
   const kinds = kind === "ghost" ? ["ghost", "lazy"] : [kind];
-  for (const k of keys) for (const x of kinds) toForget.set(ghostUrl(x, k), Date.now() + FORGET_MS);
+  forgetClosed(keys.flatMap(k => kinds.map(x => ghostUrl(x, k))), FORGET_MS, false);
+}
+const forgetClosedPages = urls => forgetClosed(urls, FORGET_PAGE_MS, true);
+function forgetClosed(urls, ms, once) {
+  if (!urls.length) return;
+  for (const url of urls) toForget.set(url, { until: Date.now() + ms, once });
+  // So the list empties also if nothing else changes: at the last of them.
   clearTimeout(forgetTimer);
-  forgetTimer = setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
+  const last = Math.max(...[...toForget.values()].map(f => f.until));
+  forgetTimer = setTimeout(forgetClosedNow, last - Date.now() + 100);
   forgetClosedNow();
 }
 async function forgetClosedNow() {
   if (forgetBusy) { forgetAgain = true; return; }
-  for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
+  for (const [url, { until }] of toForget) if (until < Date.now()) toForget.delete(url);
   if (!toForget.size) return;
   forgetBusy = true;
   const t0 = performance.now();
-  const ours = url => toForget.has(url) || toForget.has(url?.split("&placed=")[0]);
+  // (An essential copy's address may end in "&placed=N", see essentials.js.)
+  const ours = url => toForget.has(url) ? url : [...toForget.keys()].find(p => url?.startsWith(p + "&"));
   try {
     const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
     for (const t of closed.map(item => item.tab).filter(Boolean)) {
-      if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+      const found = ours(t.url);
+      if (found === undefined) continue;
+      if (toForget.get(found)?.once) toForget.delete(found);
+      await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
     }
   } finally {
     // The rest counts as busy, so that what changes during it waits for the look after it.
@@ -331,7 +371,13 @@ function storedValue(storageKey, empty) {
     timer = null;
     unwritten.delete(write);
     lastWrite = Date.now();
-    return browser.storage.local.set({ [storageKey]: value });
+    // Refused (a full disk, say): tried again later, or only memory would have it, and a
+    // start would lose what no other change happened to write.
+    return browser.storage.local.set({ [storageKey]: value }).catch(err => {
+      noteError(err);
+      unwritten.add(write);
+      timer ??= setTimeout(write, LAZY_WRITE_MS);
+    });
   };
   return {
     async get() {
