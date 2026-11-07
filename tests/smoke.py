@@ -2722,9 +2722,13 @@ def sidebar_press(m, find):
     sidebar_page(m, "return 1;")
     m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("/sidebar/sidebar.html")); w.focus();
       if (w.gBrowser.selectedTab !== t) { w.gBrowser.selectedTab = t; await wait(500); } return 1;""")
-    at = sidebar_page(m, f"""const e = {find}; if (!e) return null;
-      e.scrollIntoView({{block: "center"}});
-      const box = e.getBoundingClientRect(); return {{x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2)}};""")
+    # (The quiet line can lie over the end of the list for its ten seconds, and a row can be
+    # drawn again at any moment, so what is found is found anew each time.)
+    at = sidebar_page(m, f"""const find = () => {find}; if (!find()) return null;
+      find().scrollIntoView({{block: "center"}});
+      const spot = () => {{ const e = find(), box = e?.getBoundingClientRect(), x = box?.left + box?.width / 2, y = box?.top + box?.height / 2; return box && {{x: Math.round(x), y: Math.round(y), free: e.contains(doc.elementFromPoint(x, y))}}; }};
+      for (let i = 0; i < 120 && !spot()?.free; i++) await wait(100);
+      return spot();""")
     if not at:
         return None
     into_page(m, "/sidebar/sidebar.html")
@@ -2991,6 +2995,11 @@ def alone_news(m):
       for (let i = 0; i < 50 && !head; i++) { await wait(100); head = [...doc.querySelectorAll(".folder .head")].find(h => h.title === args[0] + "kept"); }
       send({type: "moveTab", tabId: Number(named("folder").dataset.tab), folder: head.dataset.folderHead, before: null});
       for (let i = 0; i < 50 && !head.parentElement.querySelector(".tab"); i++) await wait(100);
+      // A tab here is the last used, or coming back to this space below selects the newest of these
+      // pages: Firefox counts a tab opened in the background as used then, and a selected tab has no dot.
+      const mine = [...doc.querySelectorAll("#essentials .tile, #tabs .tab")].find(x => !x.title.includes(args[0]) && !x.title.includes("moz-extension:"));
+      mine.click();
+      await when(() => mine.classList.contains("active"));
       // The other space's last used tab is another one, so that going there does not select this page.
       bar(args[2]).click();
       await inSpace(args[2]);
@@ -3020,7 +3029,7 @@ def alone_news(m):
       const t = row.querySelector(".title").getBoundingClientRect(), i = row.querySelector("img, .letter").getBoundingClientRect();
       return {got, dot: dot(row, "::before"), accent: accent(), title: [t.left, t.top, t.width], icon: [i.left, i.top], row: row.getBoundingClientRect().height};""", name)
     check("a background page's new title gives its row a dot", r["got"]["rows"] == ["row Anna wrote"], str(r))
-    shows = lambda d, color: d["content"] != "none" and d["width"] >= 5 and d["height"] >= 5 and d["position"] == "absolute" and d["animation"] == "none" and d["color"] == color
+    shows = lambda d, color: d and d["content"] != "none" and d["width"] >= 5 and d["height"] >= 5 and d["position"] == "absolute" and d["animation"] == "none" and d["color"] == color
     check("the dot is drawn, still, and in the space's colour", shows(r["dot"], r["accent"]), str(r))
     check("the dot moves nothing in the row", all(before[k] == r[k] for k in ("title", "icon", "row")), f"{before} -> {r}")
     set_title(m, page("folder"), f"{name}folder (1) unread")
@@ -3032,9 +3041,9 @@ def alone_news(m):
       // Closed, it rests: an unloaded page says nothing more, and what it said stays.
       await until(h => h.heads.length);
       await when(() => named("folder").classList.contains("unloaded"));
-      const got = has(), seen = selector => doc.querySelector(selector);
+      const got = has(), seen = (selector, pseudo) => { const e = doc.querySelector(selector); return e && dot(e, pseudo); };
       return {...got, rested: named("folder").classList.contains("unloaded"), accent: accent(), other: colour(bar(args[1]).style.getPropertyValue("--color")),
-        head: dot(seen(".folder.collapsed.news > .head"), "::before"), tile: dot(seen(".tile.news"), "::before"), space: dot(seen(".space.news"), "::after")};""", name, there)
+        head: seen(".folder.collapsed.news > .head", "::before"), tile: seen(".tile.news", "::before"), space: seen(".space.news", "::after")};""", name, there)
     check("a closed folder shows that a tab in it has news, also once the tab has unloaded", r.get("heads") == [name + "kept"] and r["rested"] and shows(r["head"], r["accent"]), str(r))
     check("an essential's tile shows it", len(r["tiles"]) == 1 and r["tiles"][0].startswith("tile") and shows(r["tile"], r["accent"]), str(r))
     check("another space's dot shows it, in that space's colour", r["spaces"] == [there] and shows(r["space"], r["other"]), str(r))
