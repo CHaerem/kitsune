@@ -85,11 +85,11 @@ class World {
       }
     }
   }
-  // The page stops without a word. What was made a moment ago is not written yet. A tab is
-  // known again by its address; a folder has none, and is then gone with that moment.
+  // The page stops without a word. What was made a moment ago is not written yet, and goes with
+  // that moment. A tab that is still there gets a new key (`no-key` checks that it does).
   async hardStop() {
     const all = await this.read("getSynced()"), list = await this.read("getList()");
-    for (const [key, e] of Object.entries(all)) if (e.group && !this.ff.store.syncedTabs?.[key]) this.excused.add(key);
+    for (const key of Object.keys(all)) if (!this.ff.store.syncedTabs?.[key]) this.excused.add(key);
     for (const e of list) if (!this.ff.store.essentials?.some(x => x.key === e.key)) this.goneEssentials.add(e.key);
   }
   // You closed `t`, or are about to.

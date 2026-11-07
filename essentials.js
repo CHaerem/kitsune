@@ -537,6 +537,14 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (key) serial(() => oneLoaded(key));
 }, { properties: ["status"] });
 
+// With Sidebery a copy is created unpinned and pinned a moment later (see PIN_SETTLE_MS). If
+// something cut that off, it is pinned now, or closed if its essential has gone meanwhile.
+async function copyNotYetPinned(t) {
+  const { key } = placeholderOf(t.url);
+  if ((await getList()).some(e => e.key === key)) await browser.tabs.update(t.id, { pinned: true }).catch(ifGone);
+  else await removeTabs([t.id], busy);
+}
+
 // At a start, the list and the pinned tabs agree again. A pinned page the list does not know
 // is an essential whose making was cut off: the list is written a moment later, and an update
 // or a crash can come first. A placeholder of an essential that is not there has nothing to
@@ -566,7 +574,7 @@ async function essentialsAgree() {
   for (const t of await browser.tabs.query({ pinned: false })) {
     if (placeholderOf(t.url).kind !== "essential") continue;
     if (tidierAlone) await onUnpinned(t);
-    else await browser.tabs.update(t.id, { pinned: true }).catch(ifGone);
+    else await copyNotYetPinned(t);
   }
   // And a move in the moment a copy appeared is not looked at (see onMoved): the list decides.
   for (const w of await normalWindows()) await sortEssentials(w.id, await getList());
