@@ -1649,6 +1649,25 @@ def alone_quiet_undo(m):
           and all(t in r["rowsThen"] for t in [t for f in r["was"] if f["name"] == "Quiet" for t in f["tabs"]]), str(r))
     check("Undo gives the folder back, with its name, place and tabs", r["folders"] == r["was"], str(r))
 
+    # Clear by a real pointer: it fades in anywhere near the line, and out again away from it.
+    # (Only in the selected tab has the sidebar's page a pointer, so it is selected for this.)
+    m.js(H + """const w = main(); w.__was = w.gBrowser.selectedTab; w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(800); return 1;""")
+    near = sidebar_page(m, """const r = doc.querySelector("#tabs .divider").getBoundingClientRect(), row = doc.querySelector("#tabs > .tab").getBoundingClientRect();
+      return {line: [Math.round(r.left + 30), Math.round(r.top) - 4], away: [Math.round(row.left + 30), Math.round(row.top + row.height / 2)]};""")
+    def pointer_to(at):
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [{"type": "pointerMove", "x": at[0], "y": at[1], "duration": 0, "origin": "viewport"}]}]})
+        m.chrome()
+    OPACITY = """const b = doc.querySelector("#tabs .clear");
+      for (let i = 0; i < 40 && page.getComputedStyle(b).opacity !== args[0]; i++) await wait(50);
+      return page.getComputedStyle(b).opacity;"""
+    pointer_to(near["line"])
+    shows_near = sidebar_page(m, OPACITY, "1")
+    pointer_to(near["away"])
+    goes_away = sidebar_page(m, OPACITY, "0")
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__was; delete w.__was; await wait(800); return 1;""")
+    check("Clear fades in with a real pointer near the line, and out away from it", shows_near == "1" and goes_away == "0", f"{near} {shows_near} {goes_away}")
+
     # Undo from another space: the tabs come back there, and this window stays where it is.
     more_tabs_here(m, "quiet-away")
     # (Going through a space would show its hidden tabs for a moment, too quick for the list.)
@@ -1699,6 +1718,8 @@ def alone_quiet_undo(m):
       return {others, labels, line, left, n, back, shown: note.classList.contains("shown")};""", setup["key"])
     check("the list's menu has Clear too, and it can be undone", "Clear tabs" in r["labels"] and r["line"].endswith("closed") and 1 <= r["left"] <= 2 and r["back"] == r["n"], str(r))
     check("Undo leaves no line behind", r["shown"] is False, str(r))
+    sizes = extension_message(m, {"type": "stats"})["sizes"]
+    check("and nothing is kept for it", sizes["quietNotes"] == 0 and sizes["closeGroups"] == 0, str(sizes))
     # The placeholders with no page have done their work: an update would give each a live
     # tab (reconcileAll), which alone_update would see as a change.
     m.js(H + """await removeWhere((w, t) => args[0].includes(key(w, t))); return 1;""", m.js(NO_PAGE, space))
