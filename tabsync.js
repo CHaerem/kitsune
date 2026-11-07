@@ -351,7 +351,8 @@ async function reconcileAll() {
       // would take over from a live tab Firefox has unloaded, or be unloaded before it has its title.)
       const page = t => !t.discarded && isWeb(t.url);
       const selected = reps.filter(t => page(t) && t.active); // what you are looking at stays
-      const keep = selected.find(t => t.windowId === focusedWindowId) || selected[0] || live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
+      const lookedAt = t => t.active && t.windowId === focusedWindowId; // no page to keep at all: this one opens it (openIfBlank)
+      const keep = selected.find(t => t.windowId === focusedWindowId) || selected[0] || live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(lookedAt) || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
       // Keep title and icon current (older entries have no icon).
       if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keep.favIconUrl || all[key].icon });
@@ -811,6 +812,9 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         await setRole(tab.id, key, "live");
         return { load: true };
       }
+      // Its live tab comes here, also if nothing else is going to bring it: a window reopened
+      // and focused before its tabs were known has had its selection and focus events already.
+      await pull(tab.id);
       return { load: false };
     });
   }

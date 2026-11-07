@@ -1523,3 +1523,28 @@ test("a tab closed as a pull leaves it for that tab does not stop the pull", asy
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("a window reopened and focused before its tabs were known opens its selected tab", async () => {
+  for (const liveElsewhere of [false, true]) {
+    const ff = new FakeFirefox();
+    ff.store.syncedTabs = { a: entry("https://a.example/") };
+    const home = ff.addWindow({ focused: true });
+    ff.addTab(home.id, { url: "about:blank", active: true });
+    const live = liveElsewhere ? ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" }) : null;
+    const x = await run(ff);
+    // Firefox brings the window back with its values; its focus and selection come first.
+    const w = ff.addWindow();
+    const back = ff.addTab(w.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+    ff.focused = w.id;
+    x.b.windows.onFocusChanged.fire(w.id);
+    x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+    await wait(1000);
+    // The placeholder asks once it has loaded, on a busy machine after all that.
+    if (ff.tabs.has(back.id)) await x.send({ type: "ghostShown" }, { tab: ff.snap(ff.tabs.get(back.id)) });
+    await wait(500);
+    const open = ff.list(w.id).find(t => t.active);
+    if (liveElsewhere) assert.equal(open.id, live.id, "the live tab has come here");
+    else assert.equal(open.url, "https://a.example/", "it has opened its page");
+    x.kill();
+  }
+});
