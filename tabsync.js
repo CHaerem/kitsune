@@ -296,7 +296,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     })();
   }
   const lists = {
-    toForget, staleOpener, busy, keyByTab, ownMoves, ownCloses, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
+    toForget, tabsOnTheirWay, staleOpener, busy, keyByTab, ownMoves, pulled, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
   };

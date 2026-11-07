@@ -86,11 +86,24 @@ async function movedAway(tabId, stale) {
 }
 // A new tab, or nothing if its window has closed meanwhile: a window you close at any
 // moment is no error, and must not stop the work for the other windows. Any other
-// refusal is passed on.
-const createTab = props => browser.tabs.create(props).catch(async err => {
-  if (props.windowId !== undefined && !(await browser.windows.get(props.windowId).catch(() => null))) return null;
-  throw err;
-});
+// refusal is passed on. Firefox answers only once a new window has finished starting, and
+// never if it is closed before that: the whole queue would wait for the answer, for a job's
+// time limit, so the closing of the window is an answer too.
+const tabsOnTheirWay = new Set(); // what to do when a window closes (one listener: each new one is a message to Firefox)
+browser.windows.onRemoved.addListener(windowId => { for (const heard of tabsOnTheirWay) heard(windowId); });
+function createTab(props) {
+  const { windowId } = props;
+  const made = browser.tabs.create(props).catch(async err => {
+    if (windowId !== undefined && !(await browser.windows.get(windowId).catch(() => null))) return null;
+    throw err;
+  });
+  let heard;
+  const closed = new Promise(resolve => {
+    heard = id => { if (id === windowId) resolve(null); };
+    tabsOnTheirWay.add(heard);
+  });
+  return Promise.race([made, closed]).finally(() => tabsOnTheirWay.delete(heard));
+}
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
 const sameSite = (a, b) => {

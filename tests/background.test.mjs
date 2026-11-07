@@ -1453,3 +1453,27 @@ test("a ghost made a moment ago is not taken for a page, nor unloaded before it 
   assert.equal(ff.tabs.get(fresh.id).discarded, false, "and the new ghost goes on loading");
   x.kill();
 });
+
+test("a window closed before it has finished starting holds nothing up", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  // Firefox waits for a new window to finish starting, and never answers if it closes first.
+  const create = x.b.tabs.create;
+  x.b.tabs.create = p => p.windowId === w.id && ff.wins.has(w.id) ? new Promise(() => {}) : create(p);
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1000);
+  ff.rm(ff.list(w.id)[0].id, { closing: true });
+  ff.wins.delete(w.id);
+  x.b.windows.onRemoved.fire(w.id);
+  let answered = false;
+  x.js("serial(() => {})").then(() => { answered = true; });
+  await wait(3000);
+  assert.ok(answered, "the queue goes on");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});

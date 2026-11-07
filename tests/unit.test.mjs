@@ -55,7 +55,7 @@ function sidebery(strip) {
 // --- common.js with a fake browser on top of the model ---------------------
 function loadCommon(model) {
   const browser = {
-    windows: { WINDOW_ID_NONE: -1, getLastFocused: async () => ({ focused: false }), onFocusChanged: { addListener() {} } },
+    windows: { WINDOW_ID_NONE: -1, getLastFocused: async () => ({ focused: false }), onFocusChanged: { addListener() {} }, onRemoved: { addListener() {} } },
     tabs: {
       // Sidebery keeps openerTabId equal to the parent (and clears it at the top).
       query: async () => model.tabs.map(t => ({ id: t.id, index: t.index, pinned: false, windowId: 1,
