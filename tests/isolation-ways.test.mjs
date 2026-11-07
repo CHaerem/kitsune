@@ -100,6 +100,8 @@ test("an unloaded tab outside any container showing its address is not a page: i
   const x = await run(ff);
   const t = ff.addTab(w.id, { url: "https://resting.example/", discarded: true });
   x.b.tabs.onUpdated.fire(t.id, { url: t.url }, ff.snap(t));
+  // (Firefox says it is neither loading nor unloaded just as it takes on the address.)
+  x.b.tabs.onUpdated.fire(t.id, { url: t.url }, { ...ff.snap(t), status: "complete", discarded: false });
   await wait(500);
   assert.ok(ff.tabs.has(t.id));
   assert.equal(opened(ff, w.id, "https://resting.example/").length, 1);
@@ -173,6 +175,43 @@ test("a placeholder of an essential outside any container is left until it loads
   await wait(800);
   assert.ok(ff.tabs.has(copy.id));
   assert.equal(ff.store.essentials[0].cookieStoreId, NONE);
+  x.kill();
+});
+
+test("the space you switch to is the one kept for the next start, or a link that starts Firefox opens in an old one", async () => {
+  const ff = new FakeFirefox();
+  const { w } = aWindow(ff);
+  ff.addTab(w.id, { url: "https://there.example/", cookieStoreId: B });
+  const x = await run(ff);
+  await x.js("switchSpace")(w.id, B);
+  await wait(200);
+  assert.equal(await x.b.sessions.getWindowValue(w.id, "space"), B);
+  await x.js("switchSpace")(w.id, A);
+  await wait(200);
+  assert.equal(await x.b.sessions.getWindowValue(w.id, "space"), A);
+  x.kill();
+  const y = await run(ff);
+  const blank = ff.addTab(w.id, { url: "about:blank" });
+  y.b.tabs.onCreated.fire(ff.snap(blank));
+  assert.equal((await ff.request({ tabId: blank.id, url: "https://link.example/" })).cancel, true);
+  await wait(300);
+  assert.equal(opened(ff, w.id, "https://link.example/")[0].cookieStoreId, A);
+  y.kill();
+});
+
+test("a window whose space has not been read yet goes by its own, not by another window's", async () => {
+  const ff = new FakeFirefox();
+  const { w } = aWindow(ff);
+  const second = ff.addWindow();
+  ff.addTab(second.id, { url: "https://there.example/", cookieStoreId: B, active: true });
+  const x = await run(ff);
+  await x.b.sessions.setWindowValue(second.id, "space", B);
+  x.js("activeSpace").delete(second.id);
+  const blank = ff.addTab(second.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(blank));
+  assert.equal((await ff.request({ tabId: blank.id, url: "https://link.example/" })).cancel, true);
+  await wait(300);
+  assert.equal(opened(ff, second.id, "https://link.example/")[0].cookieStoreId, B);
   x.kill();
 });
 

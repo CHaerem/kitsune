@@ -147,8 +147,10 @@ function beforeTopLevelRequest(details) {
 // and for a moment during an update nothing is listening. All that can be seen is the
 // address showing up in a tab, too late to stop it, but a page left outside any space
 // would stay there for good, and its next login with it. So it is moved as soon as it
-// shows, as without the permission. (spaces.js, from tabs.onUpdated.)
-const notLookedAt = (tabId, tab, wasFirstPage) => tidierAlone && !tab.discarded && !tab.incognito &&
+// shows, as without the permission. (spaces.js, from tabs.onUpdated.) Only while it
+// loads: a tab Firefox restores unloaded takes on its address too, and sends nothing until
+// it is selected, when it is stopped like any other.
+const notLookedAt = (tabId, tab, wasFirstPage) => tidierAlone && tab.status === "loading" && !tab.discarded && !tab.incognito &&
   (tab.cookieStoreId === NO_CONTAINER || (wasFirstPage && !requestOfTab.has(tabId)));
 async function moveShown(tabId, url, wasFirstPage) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
@@ -233,7 +235,10 @@ async function lookAtRequest(details, look) {
 // the window's space yet: the tab Firefox restores can load before that. Never one that
 // has gone: opening in it is refused, and the page would not load at all.
 async function spaceToOpenIn(tab) {
-  const known = [activeSpace.get(tab.windowId), activeSpace.get(focusedWindowId), ...activeSpace.values()].find(spaceIsThere);
+  // Its own window's first, also when that has not been read yet and another's has: going by
+  // the other window here would give a page that window's space, and its login.
+  const kept = await browser.sessions.getWindowValue(tab.windowId, SPACE_KEY).catch(() => undefined);
+  const known = [activeSpace.get(tab.windowId), kept, activeSpace.get(focusedWindowId), ...activeSpace.values()].find(spaceIsThere);
   if (known) return known;
   const tabs = await browser.tabs.query({ windowId: tab.windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);

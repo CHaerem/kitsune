@@ -45,9 +45,14 @@ async function spaceOf(windowId, tabs, spaces) {
   return space;
 }
 
+// Kept apart from whether the active space changed: switching sets that first (switchSpace),
+// and a space not kept would be back to an old one after a restart, with a link that starts
+// Firefox opening there, with that space's login.
+const keptSpace = new Map(); // windowId -> what its sessions value says
 async function setSpace(windowId, space) {
-  if (activeSpace.get(windowId) !== space) {
-    activeSpace.set(windowId, space);
+  activeSpace.set(windowId, space);
+  if (keptSpace.get(windowId) !== space) {
+    keptSpace.set(windowId, space);
     await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {});
   }
   await showSpace(windowId);
@@ -148,6 +153,7 @@ browser.tabs.onAttached.addListener((tabId, { newWindowId }) => showSpaceSoon(ne
 browser.tabs.onUpdated.addListener((tabId, change, tab) => { if (change.pinned === false) showSpaceSoon(tab.windowId); }, { properties: ["pinned"] });
 browser.windows.onRemoved.addListener(windowId => {
   activeSpace.delete(windowId);
+  keptSpace.delete(windowId);
   clearTimeout(showTimers.get(windowId));
   showTimers.delete(windowId);
 });

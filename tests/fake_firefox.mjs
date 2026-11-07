@@ -67,8 +67,8 @@ export class FakeFirefox {
     Object.assign(t, { url, title, discarded: false, status: "complete" });
     const s = this.snap(t);
     const on = this.ext?.b.tabs.onUpdated;
-    on?.fire(id, { status: "loading", url }, s);
-    on?.fire(id, { url }, s);
+    on?.fire(id, { status: "loading", url }, { ...s, status: "loading" });
+    on?.fire(id, { url }, { ...s, status: "loading" }); // as Firefox: the address changes while it loads
     on?.fire(id, { title }, s);
     on?.fire(id, { status: "complete" }, s);
   }
@@ -138,7 +138,7 @@ export class FakeFirefox {
       getTabValue: async (id, k) => { if (ff.hooks.getTabValue) await ff.hooks.getTabValue(id, k); need(id); return ff.values.get(id)?.[k]; },
       setTabValue: async (id, k, v) => { need(id); const o = ff.values.get(id) || {}; o[k] = v; ff.values.set(id, o); },
       removeTabValue: async (id, k) => { need(id); const o = ff.values.get(id); if (o) delete o[k]; },
-      getWindowValue: async () => undefined, setWindowValue: async () => {},
+      getWindowValue: async (id, k) => ff.windowValues?.[`${id} ${k}`], setWindowValue: async (id, k, v) => { (ff.windowValues ??= {})[`${id} ${k}`] = v; },
       getRecentlyClosed: async () => ff.recentlyClosed || [],
       forgetClosedTab: async (windowId, sessionId) => { ff.recentlyClosed = (ff.recentlyClosed || []).filter(c => c.tab?.sessionId !== sessionId); },
     };
