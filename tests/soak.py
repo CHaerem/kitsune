@@ -288,6 +288,7 @@ SETUP = LIB + r"""
   w.focus();
   // Errors from Tidier's pages in the browser console: the sidebar's are not in `problems`.
   const uuid = JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[EXT];
+  popup.__soakCloses = [];
   const errors = popup.__soakErrors = [];
   const listener = {
     observe(m) {
@@ -763,7 +764,7 @@ INVARIANTS = LIB + r"""
   for (const x of tabs) {
     if (x.ghost && x.loaded && !x.selected) bad("a placeholder stays loaded", x.label, (x.pinned ? "essential" : x.role) + " in window " + x.wi + (x.t.getAttribute("busy") ? ", still loading" : "") + (x.hidden ? ", hidden" : "") + (x.key && all[x.key]?.saved ? ", saved" : "") + (x.key && !all[x.key] ? ", not in the record" : "") + ", awaiting " + (await ask({type: "stats"}))?.sizes?.awaitingIcon);
     if (x.ghost && x.selected && x.w === focused) bad("the selected tab is left blank", x.label, x.pinned ? "essential" : x.role);
-    if (x.ghost && /^(moz-extension:|[0-9a-f]{8}-[0-9a-f]{4}-)/.test(x.label || "")) bad("a placeholder shows no title", x.label.slice(0, 40), (x.pinned ? "essential" : x.role) + (x.loaded ? ", loaded" : ", unloaded") + " in window " + x.wi);
+    if (x.ghost && /^(moz-extension:|[0-9a-f]{8}-[0-9a-f]{4}-)/.test(x.label || "")) bad("a placeholder shows no title", (x.key || x.ek || "-").slice(0, 6), (x.pinned ? "essential" : x.role) + (x.loaded ? ", loaded" : ", unloaded") + " in window " + x.wi);
   }
 
   // --- Spaces ---
@@ -872,8 +873,24 @@ SHOW_SIDEBARS = LIB + r"""
   const wanted = ALONE ? "_6844a953-9931-4334-9ff6-257c246485cb_-sidebar-action" : "_3c078156-979c-498b-8990-85f7987dd929_-sidebar-action";
   for (const w of normal()) {
     if (w.SidebarController.currentID !== wanted || w.SidebarController.browser.hidden) { await w.SidebarController.show(wanted); await wait(300); }
+    // Who closes what, for when a tab goes without an action having closed it.
+    if (!w.__soakClosing) {
+      w.__soakClosing = true;
+      w.gBrowser.tabContainer.addEventListener("TabClose", e => {
+        const k = keyOf(w, e.target), log = control()?.__soakCloses;
+        if (!k || !log) return;
+        const from = /ext-tabs|ExtensionParent/.test(new Error().stack || "") ? "by an extension" : "by Firefox or the test";
+        log.push(k.slice(0, 8) + " " + roleOf(w, e.target) + " " + from + (e.detail?.adoptedBy ? " (moved)" : ""));
+        if (log.length > 400) log.shift();
+      });
+    }
   }
   return 1;
+"""
+
+CLOSES_OF = LIB + r"""
+  const log = control().__soakCloses || [];
+  return a.keys.map(k => k.slice(0, 8) + ": " + (log.filter(x => x.startsWith(k.slice(0, 8))).map(x => x.slice(9)).join("; ") || "no close seen"));
 """
 
 ASK = LIB + "return await ask(a.msg);"
@@ -1043,7 +1060,7 @@ class Soak:
                 # With Sidebery, a tab without a container is Sidebery's to reopen in the active
                 # space, which it does by closing that tab; Tidier then closes it everywhere.
                 if self.args.alone or k not in self.prev["noContainer"]:
-                    self.violation("a synced tab is gone, and nothing closed it", self.prev["names"].get(k, k), k)
+                    self.violation("a synced tab is gone, and nothing closed it", self.prev["names"].get(k, k), self.call(CLOSES_OF, keys=[k])[0])
             for k in set(self.prev["essentials"]) - set(r["essentials"]) - self.unpinned:
                 self.violation("an essential is gone, and nothing unpinned it", k)
             for k in set(self.prev["folders"]) - set(r["folders"]) - self.deleted:
