@@ -99,7 +99,9 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
       if (!tab) continue;
       busy.add(tab.id);
       tabs.push({ tab, entry });
-      await tagTab(tab.id, entry.key);
+      // (Refused, it is still known by its address, and must still be pinned: left unpinned it
+      // would be closed as a stray, and made again, and closed.)
+      await tagTab(tab.id, entry.key).catch(noteError);
       // Closed by you before it could be told apart: nothing brought it back.
       if (!keyByTab.has(tab.id)) closedAlready.push(entry.key);
       await sleep(CREATE_GAP_MS);

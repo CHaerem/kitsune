@@ -404,8 +404,9 @@ async function register(tabId) {
     return;
   }
   // An essential's copy, reopened from the moment it looked unpinned (a drag to another window):
-  // every window has its copy, so this one goes.
-  if (tab && !tab.pinned && placeholderOf(tab.url).kind === "essential") {
+  // every window has its copy, so this one goes. (One you unpinned is on its way to its page,
+  // and a slow site can take a while to answer: that one is loading.)
+  if (tab && !tab.pinned && placeholderOf(tab.url).kind === "essential" && tab.status !== "loading") {
     await removeTabs([tab.id], busy);
     await forgetClosedPlaceholders("essential", [placeholderOf(tab.url).key]);
     return;

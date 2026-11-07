@@ -1641,3 +1641,21 @@ test("with Sidebery a start leaves the order of the essentials alone, since Side
   assert.deepEqual(ff.list(w.id).filter(t => t.pinned).map(t => ff.values.get(t.id).essentialKey), order);
   x.kill();
 });
+
+test("an unpinned essential whose page is slow to answer is not closed as a stray", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  const copy = ff.tabs.get(ff.list(b.id).find(y => y.pinned).id);
+  const load = ff.load;
+  ff.load = t => { t.status = "loading"; }; // the page has not answered yet: the tab still shows the placeholder's address
+  ff.updated(copy, { status: "complete" }); // its placeholder finished loading a moment ago
+  await ff.clock.run(100);
+  ff.unpinTab(copy);
+  await ff.clock.idle(60000);
+  ff.load = load;
+  assert.ok(ff.tabs.has(copy.id), "the tab you unpinned is still there");
+  x.kill();
+});
