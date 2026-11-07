@@ -2564,6 +2564,14 @@ def alone_tab_menu(m):
 
 
 def alone_idle(m):
+    # What the groups before did can still have a timer running, started by what they did:
+    # the quiet line (10 s) and a placeholder's new title (up to a minute, refreshGhostsSoon).
+    # Nothing is happening only once those have run out.
+    for _ in range(150):
+        sizes = extension_message(m, {"type": "stats"})["sizes"]
+        if not sizes["quietNotes"] and not sizes["refreshTimers"]:
+            break
+        time.sleep(0.5)
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
         print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)
