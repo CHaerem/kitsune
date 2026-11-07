@@ -162,7 +162,7 @@ export class ChaosFirefox extends FakeFirefox {
           if (this.refuseRate && (this.refusePattern ?? REFUSABLE).test(label) && this.rng() < this.refuseRate) { this.refusals++; throw new Error(`${REFUSED} ${label}`); }
           out = fn();
         } catch (e) { err = e; err.message += ` (${label}${site ? ` at ${site}` : ""})`; } // which call, for whoever reads the failure
-        this.trace(label, JSON.stringify(args)?.slice(0, 120), err ? `-> ERROR ${err.message}` : "");
+        this.trace(label, JSON.stringify(args)?.slice(0, 120), err ? `-> ERROR ${err.message}` : "", site);
         this.send("down", () => { if (gen === this.gen) { if (err) reject(err); else resolve(out); } });
       });
     });

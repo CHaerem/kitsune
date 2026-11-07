@@ -879,7 +879,10 @@ browser.tabs.onUpdated.addListener(tabId => {
 async function closeOrphan(tabId, kind, key) {
   if (!["ghost", "essential", "lazy"].includes(kind) || (await ghostInfo(kind, key))) return;
   const tab = await browser.tabs.get(tabId).catch(() => null);
-  if (!tab || !isGhostUrl(tab.url)) return;
+  // Only if it still is that placeholder: a ghost you pinned becomes an essential's copy, and
+  // the word from the page it was can come after that.
+  const shown = placeholderOf(tab?.url);
+  if (shown.kind !== kind || shown.key !== key) return;
   busy.add(tabId); forget(tabId);
   await removeTabs([tabId], syncBusy);
   busy.delete(tabId);

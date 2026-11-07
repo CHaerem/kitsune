@@ -2002,3 +2002,19 @@ test("a ghost pinned the moment its window comes back is an essential, not a pla
   assert.ok(![...ff.tabs.values()].some(y => y.url.includes("kind=ghost")), "no placeholder of a tab that has gone");
   x.kill();
 });
+
+test("a placeholder's late word that it stands for nothing does not close what the tab has become", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const copy = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  // It was a ghost you pinned: the page of that ghost asked, and the answer took its time.
+  await ff.clock.settled(x.send({ type: "ghostOrphan", kind: "ghost", key: "gone" }, { tab: ff.snap(copy) }));
+  await ff.clock.idle(60000);
+  assert.ok(ff.tabs.has(copy.id), "the essential's copy stays");
+  x.kill();
+});
