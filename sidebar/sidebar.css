@@ -248,3 +248,12 @@ body {
 .notice .ask-no:hover { background: var(--hover); }
 .new-space { position: fixed; right: 8px; bottom: 6px; width: 26px; height: 26px; padding: 0; border: 1px dashed var(--muted); border-radius: 50%; background: var(--frame); color: var(--muted); font: inherit; }
 .new-space[hidden] { display: none; }
+/* A small window that is open (sidebar/littlewindow.js): one quiet row above the bar. */
+#little { flex: none; padding-bottom: 4px; max-height: 30vh; overflow-y: auto; container-type: inline-size; }
+#little:empty { display: none; }
+.little .keep {
+  flex: none; max-width: 60%; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px;
+  height: 22px; padding: 0 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.little .keep:hover { background: var(--hover); color: var(--text); }
+@container (max-width: 240px) { .little .where { display: none; } }

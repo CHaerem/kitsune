@@ -64,6 +64,7 @@
       "safemoves.js",
       "tabactions.js",
       "foldrest.js",
+      "littlewindow.js",
       "copies.js",
       "tabnames.js",
       "moveover.js",

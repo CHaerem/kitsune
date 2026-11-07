@@ -215,7 +215,7 @@ async function lookAtRequest(details, look) {
     return {};
   }
   // A link from another app that a rule sends elsewhere goes to its small window there (littlewindow.js).
-  if (typeof littleTakes === "function" && littleTakes(tabId, url)) return { cancel: true };
+  if (littleTakes(tabId, url)) return { cancel: true };
   reopening.add(tabId);
   try {
     if (await openElsewhere(tab, url, space, popup)) return { cancel: true };
@@ -278,6 +278,7 @@ async function openElsewhere(tab, url, space, popup, leaves = false) {
     opening.then(late => { if (late?.id && !stays) return closeOldTab(tab, late, space); }).catch(() => {});
     return false;
   }
+  await littleAfterReopen(tab, created); // littlewindow.js: Firefox's mark on a link from another app comes after this request
   if (!stays) await closeOldTab(tab, created, space);
   newTabs.delete(tab.id); // only now: until it has gone, no view draws it (reopensSoon, newtabs.js)
   return true;

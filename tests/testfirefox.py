@@ -97,6 +97,7 @@ PAGES = {
     # Two pages sending each other on with no page's name on the request: a sandboxed frame's top.location has none.
     "/pp-one": "<title>One</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-two'</script>\"></iframe>",
     "/pp-two": "<title>Two</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-one'</script>\"></iframe>",
+    "/links": "<title>Links</title><a id='a' href='/links?little-from-a-link' style='font-size:40px'>a link</a><p><a id='new' target='_blank' href='/links?little-new-tab'>a new tab</a><p><a id='sign-in' href='#' onclick=\"window.open('/links?little-sign-in', 'sign-in', 'width=500,height=600'); return false\">sign in</a>",
 }
 
 

@@ -130,6 +130,8 @@ async function switchSpace(windowId, space) {
 async function switchToNth(n) {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
+  // A small window or a sign-in's has no spaces: switching would add a tab that nothing shows.
+  if ((await browser.windows.get(tab.windowId).catch(() => null))?.type !== "normal") return;
   const tabs = await browser.tabs.query({ windowId: tab.windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
   const space = (await spaceList(used))[n];
@@ -162,6 +164,7 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
     // for a moment (each page an Undo brings back) would show each one's space in turn.
     if (!tab?.active) { viewSoon(windowId); return; }
     if (tab.cookieStoreId === NO_CONTAINER) { await setSuccessor(tab); viewSoon(windowId); return; }
+    if (littleHolds(tab)) { viewSoon(windowId); return; } // littlewindow.js
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const next = await nextAfterClosing(windowId, stay);
       if (next) { await browser.tabs.update(next.id, { active: true }).catch(() => {}); return; }
@@ -254,6 +257,7 @@ browser.tabs.onCreated.addListener(tab => {
 });
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (!change.url) return;
+  if (isWeb(change.url) && littleTakes(tabId, change.url)) return; // littlewindow.js
   if (isWeb(change.url) && requestsGuarded()) {
     // Its request was already looked at, and a redirect does not count. Unless Firefox never showed it (isolation.js).
     const wasFirst = firstPage.delete(tabId);
@@ -333,6 +337,7 @@ browser.permissions.onAdded.addListener(() => { if (started) serial(startSpaces)
 async function startSpaces() {
   if (!tidierAlone) return;
   await setSpaceKeys();
+  await startLittleWindow(); // littlewindow.js
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
     const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);

@@ -307,6 +307,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     successorDue,
     newsMarks, newsSeen,
     settled,
+    littles, newBlanks, // littlewindow.js
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.

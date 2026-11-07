@@ -186,9 +186,9 @@ export class FakeFirefox {
         return identity(id);
       } };
     b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
-    b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
+    b.menus = { onShown: ev(), onHidden: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };
-    b.permissions = { onAdded: ev(), onRemoved: ev() };
+    b.permissions = { onAdded: ev(), onRemoved: ev(), contains: async () => false };
     b.sidebarAction = { toggle: async () => {} };
     addIsolationApis(ff, b);
     const errors = [];

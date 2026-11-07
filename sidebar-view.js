@@ -88,7 +88,7 @@ async function viewFor(windowId) {
   // Tabs still loading go apart from their rows: a row is drawn again when anything in it
   // changes, and a load starting and ending must not replace its icon (sidebar/touches.js).
   const loading = tidierAlone ? tabs.filter(tabIsLoading).map(t => t.id) : [];
-  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, note: noteFor(windowId), spaces, space, essentials, folders, tabs: loose, loading };
+  return { alone: tidierAlone, needsHiding: tidierAlone && !browser.tabs.hide, problem: [...notices.values()][0] ?? null, note: noteFor(windowId), spaces, space, essentials, folders, tabs: loose, loading, little: await littleRows(spaces) };
 }
 
 // Which entry of the record each row is. Until Tidier has started (the first seconds after
@@ -175,6 +175,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "renameTab") await renameTab(msg.tabId, msg.name);
   else if (msg.type === "unloadSpace") await unloadSpace(msg.space);
   else if (msg.type === "renameSpace") await renameSpace(msg.space, msg.name);
+  else if (msg.type.startsWith("little:")) await littleAction(windowId, msg); // littlewindow.js
   viewSoon(windowId);
 }
 
