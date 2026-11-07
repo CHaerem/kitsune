@@ -224,6 +224,7 @@ async function normalWindows() {
 //   Sidebery gives it the active panel instead. Seen on a slower machine
 //   (GitHub's), not on a fast Mac.
 const NEW_WINDOW_DELAY_MS = 200;
+const RESTORED_LATE_MS = 3000; // see windows.onCreated in tabsync.js
 const CREATE_GAP_MS = 0;
 const SORT_SETTLE_MS = 1500;
 const PIN_SETTLE_MS = 800;

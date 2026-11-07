@@ -1142,3 +1142,21 @@ test("of two loaded copies, the selected one stays, also in a window you are not
   assert.equal(ff.tabs.get(live.id).discarded, true);
   x.kill();
 });
+
+test("a reopened window whose tabs get their values late is not doubled", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  // Firefox opens the window, and has not set the values of its tabs yet.
+  const w = ff.addWindow();
+  const back = ff.addTab(w.id, { url: GHOST("ghost", "a"), active: true, discarded: true, title: "A", cookieStoreId: C1 });
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1500);
+  assert.equal(ff.urls(w.id).filter(u => u.startsWith("ghost.html")).length, 2, "filled as a new window");
+  ff.values.set(back.id, { syncKey: "a", syncRole: "ghost" });
+  await wait(3000);
+  assert.equal(ff.urls(w.id).filter(u => u.startsWith("ghost.html")).length, 1, "and the double is gone");
+  x.kill();
+});

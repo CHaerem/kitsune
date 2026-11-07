@@ -959,7 +959,12 @@ browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
   setTimeout(() => serial(async () => {
     if (await adoptRestored(win.id)) await reconcileAll();
-    else await fillWindow(win.id, { fresh: true });
+    else {
+      await fillWindow(win.id, { fresh: true });
+      // A reopened window can get its tabs' values later than this, with Firefox busy, and
+      // has then been filled as a new one. Looked at once more, what is doubled goes.
+      setTimeout(() => serial(async () => { if (await adoptRestored(win.id)) await reconcileAll(); }), RESTORED_LATE_MS);
+    }
   }), NEW_WINDOW_DELAY_MS);
 });
 
@@ -971,7 +976,7 @@ async function adoptRestored(windowId) {
   const all = await getSynced();
   let found = false;
   const removed = [];
-  for (const t of await browser.tabs.query({ windowId })) {
+  for (const t of await browser.tabs.query({ windowId }).catch(() => [])) { // (the window may have closed since)
     if (syncKeyByTab.has(t.id)) continue;
     // Refused for a tab closed since the query. That must not leave the window unfilled.
     const [key, role] = await Promise.all([
