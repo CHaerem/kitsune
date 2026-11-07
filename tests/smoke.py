@@ -3876,9 +3876,10 @@ def alone_requests(m):
       typed(t, args[0]); await until(() => containersOf("rule-typed").length); await wait(1500);
       const n = wins().flatMap(x => x.gBrowser.tabs).find(x => url(x).includes("rule-typed"));
       const all = (await storage(args[1], ["syncedTabs"])).syncedTabs, entry = all[JSON.parse(key(w, t))];
-      return {shows: url(t), kept: t.isConnected, ctx: t.userContextId, new: n.userContextId, selected: w.gBrowser.selectedTab === n, beside: w.gBrowser.tabs.indexOf(n) === w.gBrowser.tabs.indexOf(t) + 1, parent: entry.parentKey, saved: entry.saved?.url};""", f"{base}/r/rule-typed", EXT_ID)
+      return {shows: url(t), kept: t.isConnected, ctx: t.userContextId, new: n.userContextId, selected: w.gBrowser.selectedTab === n,
+              first: w.gBrowser.tabs.find(x => !x.pinned && x.userContextId === n.userContextId && !all[JSON.parse(key(w, x) ?? "null")]?.parentKey) === n, parent: entry.parentKey, saved: entry.saved?.url};""", f"{base}/r/rule-typed", EXT_ID)
     check("an address typed in a saved tab that a rule sends elsewhere: the saved tab stays as it was", r["kept"] and "saved-one" in r["shows"] and r["ctx"] == space and r["parent"] == folder and "saved-one" in (r["saved"] or ""), str(r))
-    check("and the address opens selected, in the rule's space, next to it", r["new"] == other and r["selected"] and r["beside"], str(r))
+    check("and the address opens selected, in the rule's space, where new tabs go", r["new"] == other and r["selected"] and r["first"], str(r))
     only("rule-typed", there, "and goes out with that space's cookie, from the first request on")
     press(m, "1", CTRL)
     time.sleep(1)
@@ -4142,6 +4143,10 @@ def alone_crossing(m):
 def alone_archived(m):
     # Tidier's own list of what was closed: reached from the list's menu, on the real
     # sidebar, with Firefox's own mouse where it matters (the × shows on hover only).
+    # Every group before has closed tabs, which are all in it by now: it starts empty here.
+    sidebar_page(m, """const ask = msg => page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify(msg)));
+      for (const {space, url} of await ask({type: "archivedTabs"})) await ask({type: "forgetArchived", item: {space, url}});
+      return 1;""")
     settled = """const settled = async (test, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await test(); if (v || Date.now() - t0 > ms) return v; await wait(50); } };"""
     opened = m.js(H + settled + """if (other()) return false;
       const a = main(), want = a.gBrowser.tabs.filter(t => !t.pinned && role(a, t)).length, w = a.OpenBrowserWindow(); w.__smoke = true;
