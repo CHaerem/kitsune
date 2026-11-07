@@ -1570,3 +1570,21 @@ test("a ghost that shows the page, left when you come back to its window, is unl
   assert.ok(ff.tabs.has(page.id), "not closed");
   x.kill();
 });
+
+test("a reopened window's placeholder whose title comes late, as an address, gets its title back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const back = ff.addTab(w.id, { url: GHOST("ghost", "a"), discarded: true, title: "A", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1500);
+  ff.log.length = 0;
+  ff.tabs.get(back.id).title = "tidier/ghost.html?kind=ghost&key=a";
+  await wait(3000);
+  assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === back.id), "its placeholder is loaded again");
+  x.kill();
+});

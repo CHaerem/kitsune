@@ -981,12 +981,14 @@ browser.windows.onCreated.addListener(win => {
   if (!started || win.type !== "normal" || win.incognito) return;
   setTimeout(() => serial(async () => {
     if (await adoptRestored(win.id)) await reconcileAll();
-    else {
-      await fillWindow(win.id, { fresh: true });
-      // A reopened window can get its tabs' values later than this, with Firefox busy, and
-      // has then been filled as a new one. Looked at once more, what is doubled goes.
-      setTimeout(() => serial(async () => { if (await adoptRestored(win.id)) await reconcileAll(); }), RESTORED_LATE_MS);
-    }
+    else await fillWindow(win.id, { fresh: true });
+    // A reopened window can get its tabs' values later than this, with Firefox busy, and has
+    // then been filled as a new one; looked at once more, what is doubled goes. Its unloaded
+    // tabs' titles can come as late, and those that come as an address are put right here.
+    setTimeout(() => serial(async () => {
+      if (await adoptRestored(win.id)) await reconcileAll();
+      else await titlesBack();
+    }), RESTORED_LATE_MS);
   }), NEW_WINDOW_DELAY_MS);
 });
 
