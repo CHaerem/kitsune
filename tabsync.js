@@ -1103,6 +1103,8 @@ async function seeUnseenTabs() {
     const key = syncKeyByTab.get(t.id);
     if (key) {
       if (t.pinned) serial(async () => { await onPinned(t); await leaveSync(t.id, key); });
+    } else if (t.pinned) {
+      if (isWeb(t.url)) serial(async () => { if (!(await keyOf(t))) await onPinned(t); }); // opened pinned, or its address known only now
     } else if (!seenLateInSpace(t) && syncable(t)) registerSoon(t.id); // seenLateInSpace: spaces.js
   }
 }

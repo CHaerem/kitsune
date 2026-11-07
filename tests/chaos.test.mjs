@@ -477,25 +477,27 @@ async function check(W, phase, { strong }) {
     // Essentials: once in the list, once in every window, in the list's order, loaded once.
     const keys = list.map(e => e.key);
     if (new Set(keys).size !== keys.length) bad("essential-list", `twice in the list: ${keys}`);
+    // (A placeholder's value can be lost in a drag: it is known by its address, see keyOf.)
+    const essentialOf = t => W.value(t, "essentialKey") ?? (isPlaceholder(t.url) && t.url.includes("kind=essential") ? new URLSearchParams(t.url.split("?")[1]).get("key") : undefined);
     for (const w of wins) {
       const pinned = W.tabsOf(w).filter(t => t.pinned);
       for (const e of list) {
-        const n = pinned.filter(t => W.value(t, "essentialKey") === e.key).length;
+        const n = pinned.filter(t => essentialOf(t) === e.key).length;
         if (n !== 1) bad("essential-copies", `${e.key} ${e.url} has ${n} copies in window ${w.id}`);
       }
       for (const t of pinned) {
-        const k = W.value(t, "essentialKey");
+        const k = essentialOf(t);
         if (isWeb(t.url) && !keys.includes(k)) bad("essential-unknown", `pinned tab ${t.id} ${t.url} is no essential (${k})`);
         // (A value that was refused can stay behind on a placeholder: it shows and opens by its address.)
         if (isPlaceholder(t.url) && !keys.includes(k) && !ff.refusals) bad("essential-unknown", `pinned placeholder ${t.id} ${t.url}`);
       }
       // (A move in the moment a copy appears is not looked at: put right at the next start.)
-      const shown = pinned.map(t => W.value(t, "essentialKey")).filter(k => keys.includes(k));
+      const shown = pinned.map(essentialOf).filter(k => keys.includes(k));
       // (With Sidebery the start leaves that to Sidebery's own sorting, which is not here.)
       if (strong && W.alone && shown.join() !== keys.filter(k => shown.includes(k)).join()) bad("essential-order", `window ${w.id} has ${shown}, the list ${keys}`);
     }
     for (const e of list) {
-      const loaded = tabs.filter(t => t.pinned && W.value(t, "essentialKey") === e.key && !t.discarded && isWeb(t.url));
+      const loaded = tabs.filter(t => t.pinned && essentialOf(t) === e.key && !t.discarded && isWeb(t.url));
       if (loaded.length > 1) bad("essential-loaded-twice", `${e.key} ${e.url} is loaded in ${loaded.map(t => t.id)}`);
     }
     // A placeholder costs nothing once settled, and nothing you look at stays blank.

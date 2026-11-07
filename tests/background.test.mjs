@@ -2018,3 +2018,28 @@ test("a placeholder's late word that it stands for nothing does not close what t
   assert.ok(ff.tabs.has(copy.id), "the essential's copy stays");
   x.kill();
 });
+
+test("a tab pinned in the last moment of a start is an essential when it has started", async () => {
+  const session = () => {
+    const ff = new ChaosFirefox();
+    const w = ff.addWindow({ focused: true });
+    ff.addTab(w.id, { url: "about:home", active: true });
+    ff.store.syncedTabs = { k: entry("https://k.example/") };
+    ff.addTab(w.id, { url: "https://k.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "k", syncRole: "live" });
+    const x = ff.boot();
+    x.b.runtime.onInstalled.fire({ reason: "update" });
+    return { ff, x, w };
+  };
+  const first = session();
+  while (!first.x.js("started")) await first.ff.clock.step();
+  const startedAt = first.ff.clock.now;
+  first.x.kill();
+  for (let before = 1; before <= 40; before += 3) {
+    const { ff, x, w } = session();
+    await ff.clock.run(startedAt - ff.clock.now - before);
+    ff.openTab(w.id, { url: "https://p.example/", pinned: true, cookieStoreId: C1 });
+    await ff.clock.idle(60000);
+    assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://p.example/"], `pinned ${before} ms before it had started`);
+    x.kill();
+  }
+});
