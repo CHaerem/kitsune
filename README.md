@@ -320,8 +320,10 @@ that). Everything works without them, as it says here:
   reads no page and keeps no record of where you go; all it looks at is the address of a
   tab's next page and the container it is in. Clearing a site's cookies is offered once
   this is given, since the cookies API shows nothing without it.
-- `proxy` (with access to all websites), when a space is first given a proxy, and
-  `browsingData`, when you first sign out of everything in a space.
+- `proxy` (with `webRequest`, `webRequestBlocking` and access to all websites, since at a
+  start a page must be stopped before it goes past the proxy: below, Isolation), when a
+  space is first given a proxy, and `browsingData`, when you first sign out of everything
+  in a space.
 
 No required host permissions and no data collection. The only network use is icons: a
 placeholder with no saved icon tries the site's `/favicon.ico`, and Tidier's sidebar
@@ -346,7 +348,8 @@ Guaranteed, with the permission for it (`isolation.js`, `whereItBelongs`):
   container becomes one of the active space.
 - **A rule's address opens in its space, from the first request on,** on a tab's first
   page and for an address you type or choose. A cookie set in one space is not sent in
-  another.
+  another. If the tab there cannot be opened, the page is not loaded and the line says its
+  address: it is never sent from the wrong space instead.
 - **A tab does not move because of where it passes through.** A link followed inside a
   page and a redirect do not count: with Sidebery's rules, which look at everything a
   tab loads, a sign-in passing through an address took your tab with it. A reload,
@@ -371,8 +374,18 @@ Not guaranteed:
 - **Without the permission,** a link's first request goes out with no container, and
   the tab is then opened again in its space. It carries no login, since those are all
   in spaces, but the site does see it.
+- **Addresses Firefox hides from every extension** (addons.mozilla.org, accounts.firefox.com
+  and a few more) cannot be stopped: no extension sees those requests. One opened with no
+  container goes out with no login, and is moved to a space as soon as it shows, so it
+  doesn't stay outside one (checked). A rule for one works the same way.
+- For a moment during an update of Tidier nothing is listening. A link opened just then
+  goes out with no login, and is moved in the same way (checked).
 - A page you reach by a link inside another stays in that space, with that space's
   login, whatever a rule says about its address: that is the point of the line above.
+- **A rule works for any page.** A page in one space that links to or opens a rule's
+  address gets it opened in the rule's space, with that space's login, as you would want
+  for a link. So a site can reach another space's login that way with a plain request;
+  a form stays where it is. Keep rules to addresses you would follow a link to.
 - A frame with `sandbox` can send its page on with no name on the request, which looks
   just like an address you type, so that page's tab can be sent where a rule says. After
   three in ten seconds a tab stays where it is, so two such pages cannot go on for ever.
@@ -385,7 +398,10 @@ Not guaranteed:
 - **A proxy is not anonymity.** It carries a space's requests, with the names looked up
   there too for SOCKS; a proxy that does not answer means no page rather than going
   directly (checked). Addresses on this machine never go through one: that is Firefox's
-  rule. Sites can still recognise you by the login, or by the browser itself.
+  rule. Sites can still recognise you by the login, or by the browser itself. At a start
+  Firefox decides on the proxy for the tabs it restores before any extension has run; such a
+  page is stopped before anything is sent and asked for again through the proxy (checked),
+  but the name may have been looked up by then.
 - **A user agent is only the header.** A page's scripts can still read the real one.
   Only the spaces that set one are changed, but while any does, each request of every
   space passes Tidier for an instant.

@@ -2040,7 +2040,7 @@ def alone_crossing(m):
     here, there = "login=cross-here", "login=cross-there"
     m.js(ISOLATION_JS + """Services.prefs.setBoolPref("dom.disable_open_during_load", false); await closeAll("/set-cookie"); return 1;""")
     # (The page sending a tab on names where in a form that a check for that address doesn't find.)
-    sent_to = lambda path: urllib.parse.quote(base + path, safe="")
+    sent_to = lambda path: urllib.parse.quote(base + path, safe="").replace("-", "%2D")
 
     def only(part, cookie, what):
         got = seen(m, part)
@@ -2065,6 +2065,8 @@ def alone_crossing(m):
     check("and that window's tab is in the space", r == [space], str(r))
     m.js(ISOLATION_JS + """for (const w of wins()) if (w.gBrowser.tabs.some(t => url(t).includes("/r/in-popup"))) await close(w); return 1;""")
     extension_message(m, {"type": "settings:rules", "rules": []})
+    press(m, "1", CTRL)  # a page's new tab is selected, and the one the rule moved took you along
+    time.sleep(1)
 
     # With no container, in every way Firefox has of opening something by itself.
     def no_container(script, part, what, *args):
@@ -2080,8 +2082,7 @@ def alone_crossing(m):
     no_container("""main().gBrowser.addTrustedTab("view-source:" + args[0], {inBackground: true}); return 1;""", "/r/view-source", "a page's source")
     m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); return 1;""", f"{base}/redirect?to={sent_to('/r/after-hop')}")
     r = where("/r/after-hop")
-    only("redirect?", here, "a link that redirects: its first hop carries the space's cookie")
-    only("/r/after-hop", here, "and so does where it ends up")
+    only("after-hop", here, "a link that redirects: its first hop carries the space's cookie, and so does where it ends up")
     check("and its tab is in the active space", r == [space], str(r))
     sidebar_page(m, """await page.browser.windows.create({type: "popup", url: args[0]}); await wait(300); return 1;""", f"{base}/r/ext-popup")
     r = where("/r/ext-popup")
@@ -2125,7 +2126,7 @@ def alone_crossing(m):
     check("a tab dragged to a window of its own and back keeps its container", r["where"] == [space] and r["back"] == [space], str(r))
     check("and sends nothing for it, rule or no rule", len(seen(m, "/r/unloaded-here")) == before, str(seen(m, "/r/unloaded-here")))
     extension_message(m, {"type": "settings:rules", "rules": []})
-    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); for (const w of wins()) if (w !== main() && !w.__smoke && !w.__extra && !w.gBrowser.tabs.some(t => t.linkedPanel && t.selected && url(t).startsWith("http"))) await close(w); return 1;""")
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
 
     # Between windows: a live tab pulled in, and a placeholder loading its own page.
     made = m.js(H + """if (wins().some(w => w !== main())) return false; const w = main().OpenBrowserWindow(); await wait(5000); w.__extra = true; return true;""")
@@ -2344,6 +2345,9 @@ def alone_isolation_start(m):
         print("SKIP  alone_isolation_start (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
         return
     base = m.pages
+    # To another space and back by the key: that it is the last one is what must be kept for the start.
+    press(m, "2", CTRL)
+    time.sleep(1)
     press(m, "1", CTRL)
     time.sleep(1)
     space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
@@ -2419,6 +2423,19 @@ def alone_isolation_start(m):
     got = seen(m, "restored-behind")
     check("with its cookie, from the first request on", got and all(x["cookie"] == "login=at-start" for x in got), str(got))
     m.js(ISOLATION_JS + """await closeAll("/r/restored-"); return 1;""")
+
+    # An update: for a moment nothing is listening. A link opened then may go out, but with
+    # no login, and every one ends up in a space.
+    r = m.js(ISOLATION_JS + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs"), {FileUtils} = ChromeUtils.importESModule("resource://gre/modules/FileUtils.sys.mjs");
+      const w = main(), install = await AddonManager.getInstallForFile(new FileUtils.File(args[0]));
+      const done = install.install();
+      for (let i = 0; i < 20; i++) { w.gBrowser.addTrustedTab(args[1] + i, {inBackground: true}); await wait(100); }
+      await done; await wait(10000);
+      return containersOf("/r/during-update-");""", m.update_xpi(), f"{base}/r/during-update-")
+    check("links opened during an update are each in the space, once", sorted(r) == [space] * 20, str(r))
+    got = seen(m, "/r/during-update-")
+    check("and each request carried the space's cookie or none, never another's", got and all(x["cookie"] in ("", "login=at-start") for x in got), str(got))
+    m.js(ISOLATION_JS + """await closeAll("/r/during-update-"); return 1;""")
 
     # A space's proxy: Firefox decides on it as it opens a request, before any extension has
     # run at a start. Here this is the first start since it was set, the hardest one: only an

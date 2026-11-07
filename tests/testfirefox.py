@@ -76,6 +76,9 @@ PAGES = {
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
     "/see-cookie": "<title>?</title><script>document.title = 'cookie=' + document.cookie;</script>what a page can read",
     "/go": "<title>Go</title><script>location.replace(new URLSearchParams(location.search).get('to'));</script>a page sending you on, as a link does",
+    # A page opening another by itself, as a tab and as a window of its own (alone_crossing).
+    "/open": "<title>Open</title><script>window.open(new URLSearchParams(location.search).get('to'));</script>opens a tab",
+    "/popup": "<title>Popup</title><script>window.open(new URLSearchParams(location.search).get('to'), 'x', 'width=400,height=400');</script>opens a window",
     # Back to this asks the server again: a page with an unload handler is not kept in the back-forward cache.
     "/no-bfcache": "<title>Asked again</title><script>addEventListener('unload', () => {});</script>a page Firefox asks for again on going back",
     # Two pages sending each other on with no page's name on the request: a sandboxed frame's top.location has none.
@@ -109,6 +112,9 @@ def serve_pages():
                 body = "<title>Cookie set</title>a login"
             self.send_response(200 if body else 404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            # Never from a cache: a tab Firefox restores would otherwise send nothing, and a
+            # check that saw nothing go out would prove nothing.
+            self.send_header("Cache-Control", "no-store")
             if url.path == "/set-cookie":
                 self.send_header("Set-Cookie", f"login={query['v'][0]}; Path=/; Max-Age=86400; SameSite=Lax")
             self.end_headers()
@@ -121,6 +127,47 @@ def serve_pages():
     server.requests = []
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
+
+
+# Firefox's session file: a header, the size, and one LZ4 block. Reading has to follow
+# the format; writing doesn't compress, which a block may do.
+def read_session(path):
+    raw = open(path, "rb").read()
+    src, out, i = raw[12:], bytearray(), 0
+
+    def extended(n, i):
+        if n == 15:
+            while True:
+                i += 1
+                n += src[i - 1]
+                if src[i - 1] != 255:
+                    break
+        return n, i
+    while i < len(src):
+        token = src[i]
+        i += 1
+        n, i = extended(token >> 4, i)
+        out += src[i:i + n]
+        i += n
+        if i >= len(src):
+            break
+        offset = src[i] | src[i + 1] << 8
+        i += 2
+        n, i = extended(token & 15, i)
+        for _ in range(n + 4):
+            out.append(out[-offset])
+    return json.loads(bytes(out))
+
+
+def write_session(path, state):
+    data = json.dumps(state).encode()
+    n, head = len(data) - 15, bytearray([0xF0])
+    while n >= 255:
+        head.append(255)
+        n -= 255
+    head.append(n)
+    with open(path, "wb") as f:
+        f.write(b"mozLz40\0" + len(data).to_bytes(4, "little") + bytes(head) + data)
 
 
 def sidebery_xpi():
@@ -165,13 +212,14 @@ class TestFirefox:
         self.alone = alone  # Tidier alone (PLAN.md): no Sidebery, and the setting declared in managed storage
         self.dir = self.proc = self.m = self.pages = None
 
-    def restart(self, url=None):
+    def restart(self, url=None, session=None):
         """Quit the test Firefox and start it again with the same profile, so
         the session is restored. Only when Tidier is installed for real
         (m.can_restart): a temporary add-on is gone after a restart. The same
         Marionette object is kept, connected to the new Firefox. With `url`,
         Firefox is started by that link, as when another app opens one with
-        Firefox closed."""
+        Firefox closed. With `session`, that function changes what Firefox will
+        restore, while it is not running."""
         self.m.quit()
         try:
             self.proc.wait(30)
@@ -179,6 +227,11 @@ class TestFirefox:
             self.proc.kill()
             self.proc.wait(10)
         m = self.m
+        if session:
+            path = f"{self.dir}/sessionstore.jsonlz4"
+            state = read_session(path)
+            session(state)
+            write_session(path, state)
         self._start(url)
         m.__dict__.update(self.m.__dict__)
         self.m = m
