@@ -209,6 +209,15 @@ test("the items send what the background knows, and Settings needs no message", 
   assert.equal(s.options.length, 1);
 });
 
+test("Archived tabs in a space's menu is that space's list, also of a space you are not in", () => {
+  const s = sidebar();
+  const asked = [];
+  s.ctx.openArchived = space => asked.push(space);
+  s.rightClick("#spaces .space", { space: C2 });
+  s.menus.at(-1).find(i => i[0] === "Archived tabs")[1]();
+  assert.deepEqual(asked, [C2]);
+});
+
 test("Clear acts on the space it was offered for, wherever the window is by the time of the click", () => {
   const s = sidebar();
   s.rightClick("#spaces .space", { space: C1 });

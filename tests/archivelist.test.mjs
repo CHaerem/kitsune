@@ -409,3 +409,14 @@ test("a space you switch to is kept with the window, also after one opened from 
   assert.equal(kept.space, C1, "an older space would come back after a restart");
   x.kill();
 });
+
+test("Clear's tabs can be found in the list, and Undo takes them out again", async () => {
+  const { x, w } = await session([["a", "https://a.example/"], ["b", "https://b.example/"]]);
+  await x.js("clearSpace")(w.id, C1);
+  await wait(300);
+  assert.deepEqual((await listed(x, C1)).map(r => r.url).sort(), ["https://a.example/", "https://b.example/"]);
+  await x.js("serial")(x.js("quietNotes").get(w.id).undo);
+  await wait(300);
+  assert.deepEqual(await listed(x, C1), [], "they are open again");
+  x.kill();
+});
