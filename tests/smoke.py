@@ -2623,7 +2623,12 @@ def alone_restart(m):
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after, on_after = m.js(SNAP_ALONE), m.js(on_now)
-    check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"on {on_before} -> {on_after}; {before} -> {after}")
+    # As many pages, not in the same windows: a window you are not using can be on a placeholder,
+    # which waits unloaded until you use that window (pull, tabsync.js), and Firefox can come
+    # back with that window in front. Its page then comes over, as it would for a click.
+    def wherever(snap):
+        return {**snap, "windows": [{k: v for k, v in w.items() if k != "live"} for w in snap["windows"]], "pages": sum(w["live"] for w in snap["windows"])}
+    check("after a restart with Tidier alone, the same tabs, folders and one space shown", wherever(before) == wherever(after), f"on {on_before} -> {on_after}; {before} -> {after}")
     # Its rows, not only the tabs: in a sidebar page opened now, and in the window's own sidebar.
     r = ext_page(m, "/sidebar/sidebar.html?after-restart", """for (let i = 0; i < 40 && !rows().length; i++) await wait(250);
       const own = page.browser.extension.getViews({type: "sidebar"}).map(v => [...v.document.querySelectorAll("#tabs .tab")]);
