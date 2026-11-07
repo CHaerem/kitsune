@@ -1022,8 +1022,9 @@ async function start(delayMs) {
   });
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
-  // A ghost selected while Tidier was starting was not pulled in, and waits blank.
-  if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
+  // A ghost or an essential's placeholder selected while Tidier was starting has asked
+  // what to do and been told to wait, or not been answered, and waits blank.
+  if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) { pullSelected(focusedWindowId); selectedEssential(focusedWindowId); }
 }
 let startRequested = false;
 function requestStart(delayMs) {

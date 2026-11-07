@@ -482,8 +482,10 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
 // Switching to a window whose selected tab is an essential's placeholder.
 browser.windows.onFocusChanged.addListener(windowId => {
-  if (!started || windowId === browser.windows.WINDOW_ID_NONE) return;
-  serial(async () => {
+  if (started && windowId !== browser.windows.WINDOW_ID_NONE) selectedEssential(windowId);
+});
+function selectedEssential(windowId) {
+  return serial(async () => {
     const [active] = await browser.tabs.query({ windowId, active: true });
     if (!active?.pinned || !isGhostUrl(active.url) || !(await keyOf(active))) return;
     if (await essentialShown(active)) {
@@ -491,7 +493,7 @@ browser.windows.onFocusChanged.addListener(windowId => {
       if (entry) await browser.tabs.update(active.id, { url: entry.url }).catch(() => {});
     }
   });
-});
+}
 
 // A copy started loading its page: the others become placeholders.
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {

@@ -1096,3 +1096,13 @@ test("a tab closed just as it is synced leaves no record, and stops nothing", as
   assert.equal(x.js("problems.join()"), "");
   x.kill();
 });
+
+test("an essential's placeholder selected while Tidier starts opens its page", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  const t = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, active: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  assert.equal(ff.tabs.get(t.id).url, "https://e.example/");
+  x.kill();
+});
