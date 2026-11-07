@@ -168,7 +168,7 @@ def fire_message(m, msg):
     time.sleep(1)
 
 
-def into_page(m, part):
+def into_page(m, part, exact=False):
     """Run the next scripts in the page of the tab with `part` in its address, main()'s first. Its
     handle is asked for, since switching through the tabs until the right one loads every unloaded
     tab on the way (Marionette reads each one's message manager), and then a tab that should stay
@@ -176,8 +176,8 @@ def into_page(m, part):
     it loads in the background, and get a dot."""
     m.chrome()
     handle = m.js(H + """const {NavigableManager} = ChromeUtils.importESModule("chrome://remote/content/shared/NavigableManager.sys.mjs");
-      const t = [main(), ...wins()].flatMap(w => w.gBrowser.tabs).find(t => url(t).includes(args[0]));
-      return t ? NavigableManager.getIdForBrowser(t.linkedBrowser) : null;""", part)
+      const t = [main(), ...wins()].flatMap(w => w.gBrowser.tabs).find(t => args[1] ? url(t) === args[0] : url(t).includes(args[0]));
+      return t ? NavigableManager.getIdForBrowser(t.linkedBrowser) : null;""", part, exact)
     if not handle:
         raise RuntimeError(f"no tab with {part}")
     m.cmd("Marionette:SetContext", {"value": "content"})
@@ -388,13 +388,13 @@ def essential_once(m):
 
 def set_title(m, address, title):
     """Set the title of the (loaded) page at `address`, in its own tab."""
-    m.cmd("Marionette:SetContext", {"value": "content"})
     try:
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if m.cmd("WebDriver:GetCurrentURL") == address:
-                m.cmd("WebDriver:ExecuteScript", {"script": "document.title = arguments[0];", "args": [title]})
-                return True
+        into_page(m, address, exact=True)
+        m.cmd("WebDriver:ExecuteScript", {"script": "document.title = arguments[0];", "args": [title]})
+        return True
+    except RuntimeError as e:
+        if "no tab with" not in str(e):
+            raise
         return False
     finally:
         m.chrome()
@@ -2904,7 +2904,7 @@ def alone_sound(m):
       const first = ticking().title; await until(() => ticking().title !== first); return {{ticks: ticking().title !== first}};""")
     ok = sidebar_click(m, TICKING + '?.querySelector(".sound")', hold=1.5)
     ticked = m.js(H + """const t = main().__ticking; for (let i = 0; i < 40 && !t.muted; i++) await wait(100); return {muted: t.muted, selected: main().gBrowser.selectedTab === t};""")
-    check("a press on a mark mutes, also while its row is being drawn again", ok and r["ticks"] and ticked["muted"] and not ticked["selected"], str((r, ticked)))
+    check("a press on a mark mutes, also while its row is being drawn again", ok and r["ticks"] and ticked["muted"] and not ticked["selected"], str((ok, r, ticked)))
     r = sidebar_page(m, FIND + f"""const ticking = () => {TICKING}; await until(() => ticking()?.querySelector(".sound.muted"));
       const first = ticking().title; await until(() => ticking().title !== first); return {{muted: !!ticking().querySelector(".sound.muted"), ticks: ticking().title !== first}};""")
     check("and what waited is drawn once it is let go", r["muted"] and r["ticks"], str(r))
@@ -3035,7 +3035,7 @@ def alone_news(m):
       const got = has(), seen = selector => doc.querySelector(selector);
       return {...got, rested: named("folder").classList.contains("unloaded"), accent: accent(), other: colour(bar(args[1]).style.getPropertyValue("--color")),
         head: dot(seen(".folder.collapsed.news > .head"), "::before"), tile: dot(seen(".tile.news"), "::before"), space: dot(seen(".space.news"), "::after")};""", name, there)
-    check("a closed folder shows that a tab in it has news, also once the tab has unloaded", r["heads"] == [name + "kept"] and r["rested"] and shows(r["head"], r["accent"]), str(r))
+    check("a closed folder shows that a tab in it has news, also once the tab has unloaded", r.get("heads") == [name + "kept"] and r["rested"] and shows(r["head"], r["accent"]), str(r))
     check("an essential's tile shows it", len(r["tiles"]) == 1 and r["tiles"][0].startswith("tile") and shows(r["tile"], r["accent"]), str(r))
     check("another space's dot shows it, in that space's colour", r["spaces"] == [there] and shows(r["space"], r["other"]), str(r))
 
@@ -3194,6 +3194,7 @@ def alone_touches(m):
       // Tooltips: a placeholder knows its real address only from the record.
       const ghost = await until(() => doc.querySelector("#tabs .tab.unloaded[title*='/icon']"));
       out.ghostTip = ghost?.title;
+      out.ghostId = Number(ghost?.dataset.tab);
       out.tileTip = doc.querySelector("#essentials .tile")?.title;
 
       // Where to take the pointer, below.
@@ -3203,6 +3204,7 @@ def alone_touches(m):
       const tile = await until(async () => { const t = (await page.browser.tabs.query({windowId: here.id, pinned: true})).find(x => x.url.includes("/icon?tile"));
         const e = t && doc.querySelector(`#essentials .tile[data-tab="${t.id}"]`); return e?.querySelector(icon) && !e.matches(".unloaded") && e; });
 
+      out.tileId = Number(tile?.dataset.tab);
       // The record's icon: a page without one keeps what the tab had, rather than a letter.
       const record = await until(async () => { const r = await rowOf("/icon?record"); return r?.querySelector(icon) && r; });
       if (record) {
@@ -3300,13 +3302,14 @@ def alone_touches(m):
       await until(() => home.matches(".unloaded"));""")
     # A long list has rows below the window, out of reach of a pointer: for this moment the others make way.
     p = sidebar_page(m, until + """
-      const warm = await rowOf("/icon?warm"), ghost = doc.querySelector("#tabs .tab.unloaded[title*='/icon']"), showing = doc.querySelector("#tabs .tab.active, #essentials .tile.active");
-      const tile = doc.querySelector(`#essentials .tile[data-tab="${(await page.browser.tabs.query({windowId: here.id, pinned: true})).find(x => x.url.includes("/icon?tile")).id}"]`);
+      const rowBy = id => doc.querySelector(`#tabs .tab[data-tab="${id}"]`), warm = rowBy(arguments[0]), ghost = rowBy(arguments[1]), showing = doc.querySelector("#tabs .tab.active, #essentials .tile.active");
+      const tile = doc.querySelector(`#essentials .tile[data-tab="${arguments[2]}"]`);
       for (const e of doc.querySelectorAll("#tabs > *")) if (![warm, ghost, showing].some(x => e === x || e.contains(x))) e.style.display = "none";
       doc.getElementById("tabs").scrollTop = 0;
       await wait(100);
       const at = e => { const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; }, box = warm.getBoundingClientRect();
-      return {title: at(warm.querySelector(".title")), close: [box.right - 18, box.top + box.height / 2], ghost: at(ghost), showing: at(showing), nothing: at(doc.getElementById("space-name")), tile: at(tile), ghostTile: at(doc.querySelector("#essentials .tile"))};""")
+      return {title: at(warm.querySelector(".title")), close: [box.right - 18, box.top + box.height / 2], ghost: at(ghost), showing: at(showing), nothing: at(doc.getElementById("space-name")), tile: at(tile), ghostTile: at(doc.querySelector("#essentials .tile"))};""", r.get("warmId"), r.get("ghostId"), r.get("tileId"))
+    check("the rows for the pointer are there", "title" in p, str(p))
     pointer_over(m, p["title"], p["close"], p["ghost"], p["title"], p["showing"], p["close"], p["nothing"], p["title"], p["ghostTile"], p["tile"], p["tile"])
     sidebar_page(m, """for (const e of doc.querySelectorAll("#tabs > *")) e.style.display = ""; return 1;""")
     warmed = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 5; i++) await wait(50); await wait(200); return main().__warmed;")
@@ -5294,6 +5297,7 @@ def alone_stay_put(m):
       // place, so nothing is lost; you land outside, and its row goes with the folder still closed.
       const kept = inFolder()[0], keptId = id(kept), count = inFolder().length; // (unloaded, as a closed folder's tabs are: selecting it loads it)
       await select(kept);
+      await until(() => !kept.classList.contains("unloaded")); // only a loaded tab that closes stays, unloaded: an unloaded one you close is gone
       out.toldOut = await until(async () => { const n = (await tabs.get(keptId)).successorTabId; return n !== undefined && !inFolder().some(r => id(r) === n); });
       await tabs.remove(keptId);
       await until(() => activeRow() && activeRow().dataset.tab !== String(keptId) && inFolder().length === count && !inFolder().some(r => id(r) === keptId));
