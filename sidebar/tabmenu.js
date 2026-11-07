@@ -43,7 +43,7 @@ const TAB_MENU = [
     when: eachTab(t => !!t.address), run: tabs => navigator.clipboard.writeText(tabs.map(t => t.address).join("\n")).catch(err => console.error("Tidier: copy", err)) },
 
   { id: "rename", group: 3, label: () => "Rename",
-    when: tabs => tabs[0].kept && typeof window.renameKept === "function", run: tabs => window.renameKept(tabs[0].id) },
+    when: tabs => tabs[0].kept, run: tabs => renameKept(tabs[0].id) }, // renamekept.js
 
   { id: "essential", group: 4, many: true, label: n => tabsWord(n, "Make essential", "Make # tabs essential"),
     when: eachTab(t => !t.tile && !!t.address), run: tabs => tabAct("essential", tabs) },
@@ -82,7 +82,7 @@ function tabMenuItems(tabs) {
 let tabMenuAsked = 0;
 function openTabMenu(e, id) {
   holdMenu(e);
-  const ids = window.selectedTabs?.(id) ?? [id];
+  const ids = selectedTabs(id); // selection.js
   const asked = ++tabMenuAsked, { clientX: x, clientY: y } = e;
   browser.runtime.sendMessage({ type: "tabMenu", tabIds: ids }).then(tabs => {
     if (asked !== tabMenuAsked || !tabs?.length) return; // a newer click, or the tab is gone

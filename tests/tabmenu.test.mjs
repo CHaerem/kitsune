@@ -29,10 +29,10 @@ const act = async (x, windowId, action, tabIds, more = {}) => {
 };
 
 // --- Which items it offers ----------------------------------------------------------
-function menu({ folders = [], spaces = [{ id: C1, name: "One" }, { id: C2, name: "Two", color: "#123" }], renameKept } = {}) {
+function menu({ folders = [], spaces = [{ id: C1, name: "One" }, { id: C2, name: "Two", color: "#123" }] } = {}) {
   const sent = [], copied = [];
   const clipboard = { writeText: async text => { copied.push(text); } };
-  const ctx = vm.createContext({ view: { folders, spaces, space: C1 }, send: m => sent.push(m), window: renameKept ? { renameKept } : {}, renameNext: false, document: {}, browser: {}, navigator: { clipboard }, console });
+  const ctx = vm.createContext({ view: { folders, spaces, space: C1 }, send: m => sent.push(m), renameNext: false, document: {}, browser: {}, navigator: { clipboard }, console });
   vm.runInContext(readFileSync(new URL("../sidebar/tabmenu.js", import.meta.url), "utf8"), ctx);
   const items = vm.runInContext("tabMenuItems", ctx);
   // Arrays from another context compare as different: these are made here.
@@ -60,25 +60,22 @@ test("a page of Firefox's own can be reloaded and closed, not unloaded or moved"
 });
 
 test("a tile has no folder, space or rule, and can be taken out of the essentials", () => {
-  assert.deepEqual(menu().labels([tile()]), ["Reload", "Mute", "Unload", "|", "Duplicate", "Copy address", "|", "Remove from essentials", "|", "Close"]);
+  assert.deepEqual(menu().labels([tile()]), ["Reload", "Mute", "Unload", "|", "Duplicate", "Copy address", "|", "Rename", "|", "Remove from essentials", "|", "Close"]);
   // Closing a tile that is not loaded would only draw the same placeholder again.
-  assert.deepEqual(menu().labels([tile({ loaded: false })]), ["Duplicate", "Copy address", "|", "Remove from essentials"]);
+  assert.deepEqual(menu().labels([tile({ loaded: false })]), ["Duplicate", "Copy address", "|", "Rename", "|", "Remove from essentials"]);
 });
 
-test("Rename is only on essentials and saved tabs, and only once it can be done", () => {
-  const renameKept = () => {};
-  assert.ok(!menu().labels([tile()]).includes("Rename"), "nothing is offered that does nothing");
-  assert.ok(menu({ renameKept }).labels([tile()]).includes("Rename"));
-  assert.ok(menu({ renameKept }).labels([row({ kept: true, folder: "F" })]).includes("Rename"));
-  assert.ok(!menu({ renameKept }).labels([row()]).includes("Rename"));
-  assert.deepEqual(menu({ renameKept }).labels([row({ kept: true, folder: "F" })]).slice(5, 9), ["Copy address", "|", "Rename", "|"]);
+test("Rename is only on essentials and saved tabs", () => {
+  assert.ok(menu().labels([tile()]).includes("Rename"));
+  assert.ok(menu().labels([row({ kept: true, folder: "F" })]).includes("Rename"));
+  assert.ok(!menu().labels([row()]).includes("Rename"));
+  assert.deepEqual(menu().labels([row({ kept: true, folder: "F" })]).slice(5, 9), ["Copy address", "|", "Rename", "|"]);
 });
 
 test("with several tabs, labels count them, and what takes one tab is left out", () => {
-  const renameKept = () => {};
-  assert.deepEqual(menu({ renameKept }).labels([row({ id: 1 }), row({ id: 2, kept: true, folder: "F" }), row({ id: 3 })]),
+  assert.deepEqual(menu().labels([row({ id: 1 }), row({ id: 2, kept: true, folder: "F" }), row({ id: 3 })]),
     ["Reload 3 tabs", "Mute 3 tabs", "Unload 3 tabs", "|", "Copy 3 addresses", "|", "Make 3 tabs essential", "Move 3 tabs to folder", "Move 3 tabs to space", "|", "Close 3 tabs"]);
-  assert.deepEqual(menu({ renameKept }).labels([tile({ id: 1 }), tile({ id: 2 })]),
+  assert.deepEqual(menu().labels([tile({ id: 1 }), tile({ id: 2 })]),
     ["Reload 2 tabs", "Mute 2 tabs", "Unload 2 tabs", "|", "Copy 2 addresses", "|", "Remove 2 from essentials", "|", "Close 2 tabs"]);
 });
 
@@ -628,6 +625,24 @@ test("Move to space moves the placeholder's page, and you stay", async () => {
   assert.ok(!ff.tabs.has(live.id) && !ff.tabs.has(ghost.id));
   assert.ok([...ff.tabs.values()].some(t => t.url === "https://a.example/page" && t.cookieStoreId === C2));
   assert.equal(ff.list(here.id).find(t => t.active).id, selected);
+  x.kill();
+});
+
+test("Move to space with several: the selected tab goes last, so you never land on one that is leaving", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const other = ff.addTab(w.id, { url: "https://other.example/", cookieStoreId: C1 });
+  const x = await alone(ff);
+  const selected = [];
+  x.b.tabs.onActivated.addListener(({ tabId }) => selected.push(tabId));
+  await act(x, w.id, "space", [a.id, b.id], { space: C2 });
+  await wait(500);
+  assert.ok(!ff.tabs.has(a.id) && !ff.tabs.has(b.id));
+  assert.ok(!selected.includes(b.id), "b has left before you step off a");
+  assert.equal(ff.list(w.id).find(t => t.active).id, other.id);
   x.kill();
 });
 

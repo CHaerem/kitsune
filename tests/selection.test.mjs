@@ -274,9 +274,9 @@ test("tabs already together in that place do not move", async () => {
   assert.equal(await dropping([4, 5], null), 0, "last already");
 });
 
-test("to a space or the essentials they go in order; essentials unpinned in reverse, since each lands first", async () => {
-  const space = await dropOf({ type: "moveToSpace", tabId: 3, space: "b" });
-  assert.deepEqual(space.sent.map(m => m.tabId), [1, 3, 5]);
+test("to the essentials they go in order, unpinned in reverse since each lands first, and to a space the selected tab goes last", async () => {
+  const space = await dropOf({ type: "moveToSpace", tabId: 3, space: "b" }); // you are on 1
+  assert.deepEqual(space.sent.map(m => m.tabId), [3, 5, 1], "you would land on a tab about to leave");
   const pin = await dropOf({ type: "pin", tabId: 3, pinned: true });
   assert.deepEqual(pin.sent.map(m => m.tabId), [1, 3, 5]);
   const unpin = await dropOf({ type: "pin", tabId: 3, pinned: false });

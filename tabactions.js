@@ -114,7 +114,11 @@ const TAB_ACTIONS = {
   newFolder: async (windowId, reals, { space }) => {
     await moveRealsTo(windowId, reals, await createFolder(folderNameFor(reals), space));
   },
-  space: async (windowId, reals, { space }) => { for (const r of reals) await moveToSpace(r.own.id, space); },
+  // The selected tab last: stepping off it onto a tab that is leaving too would select that
+  // one for a moment, and load it if it is a placeholder (moveToSpace, safemoves.js).
+  space: async (windowId, reals, { space }) => {
+    for (const r of [...reals].sort((a, b) => a.tab.active - b.tab.active)) await moveToSpace(r.own.id, space);
+  },
   rule: (windowId, reals) => alwaysOpenHere(windowId, reals[0]),
 };
 
@@ -149,7 +153,7 @@ async function unloadReals(windowId, reals) {
     leaving.delete(tab.id);
     if (tab.active) await browser.tabs.update(tab.id, { active: true }).catch(() => {});
   }
-  if (refused) globalThis.say?.(windowId, refused > 1 ? `${refused} pages hold unsaved input and stayed loaded` : "This page holds unsaved input and stayed loaded");
+  if (refused) say(windowId, refused > 1 ? `${refused} pages hold unsaved input and stayed loaded` : "This page holds unsaved input and stayed loaded");
 }
 
 // Off the selected tab. A placeholder's own last use says nothing, and selecting one
@@ -185,7 +189,7 @@ async function duplicateReal(r) {
     return;
   }
   const props = { windowId: r.own.windowId, cookieStoreId: r.space, url: r.address, active: false, index: r.own.index + 1 };
-  await (globalThis.openUnruled?.(props) ?? browser.tabs.create(props));
+  await openUnruled(props);
 }
 
 // A rule for this site and this space. It goes first, so that it wins over an older rule
@@ -197,7 +201,7 @@ async function alwaysOpenHere(windowId, r) {
   const url = siteRuleText(r.address), before = await rulesList.get();
   rulesList.set([{ url, space: r.space }, ...before.filter(rule => rule.url !== url)]);
   const name = (await containerSpaces()).find(s => s.id === r.space)?.name ?? "this space";
-  globalThis.say?.(windowId, `${new URL(r.address).host.replace(/^www\./, "")} now always opens in ${name}`, { undo: () => rulesList.set(before) });
+  say(windowId, `${new URL(r.address).host.replace(/^www\./, "")} now always opens in ${name}`, { undo: () => rulesList.set(before) });
 }
 
 function siteRuleText(address) {

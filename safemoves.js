@@ -86,7 +86,7 @@ function sayStayed(windowId) {
   stayed++;
   clearTimeout(stayedTimer);
   stayedTimer = setTimeout(() => { stayed = 0; }, STAYED_GROUP_MS);
-  globalThis.say?.(windowId, stayed === 1 ? "One tab holds unsaved input and stayed here" : `${stayed} tabs hold unsaved input and stayed here`);
+  say(windowId, stayed === 1 ? "One tab holds unsaved input and stayed here" : `${stayed} tabs hold unsaved input and stayed here`);
 }
 
 // --- A container removed -----------------------------------------------------------

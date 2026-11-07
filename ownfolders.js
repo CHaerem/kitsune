@@ -123,7 +123,7 @@ async function moveToSpace(tabId, space) {
   const key = syncKeyByTab.get(tabId), live = await pageTab(tab, key);
   const url = isWeb(live?.url) ? live.url : (await getSynced())[key]?.url;
   if (!isWeb(url)) return;
-  const noSpace = () => void globalThis.say?.(tab.windowId, "That space could not be opened, so the tab stayed here");
+  const noSpace = () => void say(tab.windowId, "That space could not be opened, so the tab stayed here");
   // Asked first, since leaving unloads the tab and selects another one. (Only a window
   // closing or a space removed this very moment can still refuse the new tab below.)
   if (await spaceGone(space)) return noSpace();

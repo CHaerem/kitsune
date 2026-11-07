@@ -2114,7 +2114,7 @@ MENU_PAGE = """
   const until = async (test, ms = 10000) => { const t0 = Date.now(); let r; while (!(r = test()) && Date.now() - t0 < ms) await wait(50); return r; };
   const menu = doc.getElementById("menu");
   const shown = () => [...menu.children].map(c => c.classList.contains("line") ? "|" : c.textContent);
-  // Rename is there once it can be done (window.renameKept), and has its own checks.
+  // Rename has its own checks, below and in alone_tab_names.
   const plain = list => list.filter(x => x !== "Rename").filter((x, i, a) => x !== "|" || a[i - 1] !== "|");
   const rowOf = id => doc.querySelector(`[data-tab="${id}"]`);
   const inFolder = id => rowOf(id)?.closest(".folder")?.querySelector(".head .title")?.textContent ?? null;
@@ -2274,6 +2274,20 @@ def alone_tab_menu(m):
         r = sidebar_page(m, MENU_PAGE + """const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Menu kept");
           await rightClick(head); const folder = shown(), list = await rightClick(doc.getElementById("tabs")); menu.hidden = true; return {folder, list};""")
         check("a folder and the empty list keep their own short menus", r["folder"] == ["Rename", "Delete folder (its tabs stay)"] and r["list"][0] == "New folder" and "Reload" not in r["list"], str(r))
+        # Rename on a tile and on a saved tab's row opens the box, ready for typing. (What you
+        # then do in it is for alone_tab_names.) Esc leaves everything as it was.
+        r = sidebar_page(m, MENU_PAGE + """const named = async el => {
+            await rightClick(el);
+            choose("Rename");
+            const box = await until(() => doc.querySelector("input.rename"));
+            const out = {open: !!box, focus: !!box && doc.activeElement === box};
+            box?.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}));
+            await until(() => !doc.querySelector("input.rename"));
+            return {...out, left: !!doc.querySelector("input.rename")};
+          };
+          return {tile: await named(doc.querySelector("#essentials .tile")), row: await named(rowOf(args[0]))};""", b)
+        check("Rename on a tile opens the box, with the focus in it", r["tile"] == {"open": True, "focus": True, "left": False}, str(r))
+        check("Rename on a saved tab's row opens the box, with the focus in it", r["row"] == {"open": True, "focus": True, "left": False}, str(r))
         act(b, "Duplicate")
         r = m.js(MENU_TABS + """const has = () => tabs().filter(x => idOf(x.t) !== args[0] && url(x.t).includes("smoke-menu-b") && x.t.linkedPanel);
           await until(() => has().length && role(has()[0].w, has()[0].t) === "live");

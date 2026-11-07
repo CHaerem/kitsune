@@ -83,12 +83,17 @@
     paint();
   }
 
-  // One close per tab, the selected tab last. Closed first, it would make Firefox select
-  // another that may be about to close too, and a placeholder that is selected starts
+  // The selected tab last, when all of them are leaving. Gone first, it would make Firefox
+  // select another that may be about to leave too, and a placeholder that is selected starts
   // pulling its real tab in (pull, tabsync.js), under a new id, while its close is on the way.
-  function closePicked() {
+  const selectedLast = ids => {
     const selected = id => Number(element(id).classList.contains("active"));
-    const ids = inOrder().sort((a, b) => selected(a) - selected(b));
+    return ids.sort((a, b) => selected(a) - selected(b));
+  };
+
+  // One close per tab.
+  function closePicked() {
+    const ids = selectedLast(inOrder());
     clear();
     for (const tabId of ids) send({ type: "close", tabId });
   }
@@ -112,6 +117,7 @@
   function carry(msg) {
     const ids = inOrder();
     if (msg.pinned === false) ids.reverse();
+    if (msg.type === "moveToSpace") selectedLast(ids); // a move to a space closes them here
     // Dropped on one of the tabs that are moving: the place is in front of the next that is not.
     let before = msg.before;
     while (picked.has(before)) {
