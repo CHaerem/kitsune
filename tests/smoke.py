@@ -1652,6 +1652,7 @@ def alone_little_window(m):
       const same = main().gBrowser.addTrustedTab(args[0] + "same-host", {userContextId: here.userContextId, inBackground: true}); await wait(1500);""" + watch + """
       const got = await around("little-guess-here", args[0] + "guess-here"); w.gBrowser.removeTab(same); await wait(500); return got;""", other)
     check("a link to a site you have a tab on in this space moves as it is, not loaded twice", r.get("opened") == [r.get("on")] and r.get("adopted") == 1 and r.get("space") == r.get("on") and r.get("same"), str(r))
+    check("with its space in its title too", " · " in r.get("title", ""), str(r))
 
     # An essential of another space is always visible to that guess. Selected in that container,
     # the new tab must not take your window there, not even until the page answers.

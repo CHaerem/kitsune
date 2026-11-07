@@ -26,7 +26,7 @@ function withWindows(ff, x) {
     if (ff.refuseWindows) throw new Error("refused");
     if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
     const w = ff.addWindow({ type: p.type ?? "normal" });
-    Object.assign(w, { left: p.left, top: p.top, width: p.width, height: p.height, titlePreface: p.titlePreface });
+    Object.assign(w, { left: p.left, top: p.top, width: p.width, height: p.height, titlePreface: p.tabId ? undefined : p.titlePreface }); // measured: lost with a tab moved in
     ff.log.push(["window", w.id, w.type, p.tabId ?? p.url]);
     b.windows.onCreated.fire(info(w));
     let tab;

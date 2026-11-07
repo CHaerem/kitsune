@@ -161,11 +161,10 @@ const spaceName = async space => (await containerSpaces()).find(s => s.id === sp
 
 async function openLittle(fromWindowId, where, space, pageWidth) {
   const from = await browser.windows.get(fromWindowId).catch(() => null);
-  const made = await browser.windows.create({
-    type: "popup", ...(from ? littleBounds(from, pageWidth) : { width: LITTLE_WIDTH, height: LITTLE_HEIGHT }),
-    titlePreface: `${await spaceName(space) ?? "Tidier"} · `, ...where,
-  });
+  const titlePreface = `${await spaceName(space) ?? "Tidier"} · `;
+  const made = await browser.windows.create({ type: "popup", ...(from ? littleBounds(from, pageWidth) : { width: LITTLE_WIDTH, height: LITTLE_HEIGHT }), titlePreface, ...where });
   littles.set(made.id, fromWindowId);
+  if (where.tabId) await browser.windows.update(made.id, { titlePreface }).catch(() => {}); // with a tab moved in, Firefox drops it on the way
   await browser.sessions.setWindowValue(made.id, LITTLE_KEY, true).catch(() => {});
   viewAllSoon();
   return made;
