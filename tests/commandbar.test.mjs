@@ -975,3 +975,37 @@ test("moving back to Sidebery takes the bar's keys away again", async () => {
   assert.ok(reset.includes("command-bar") && reset.includes("command-bar-t"), reset.join());
   x.kill();
 });
+
+test("closing a selected placeholder closes what the tab menu's rule says, where that is there", async () => {
+  // A saved tab closed unloaded is removed for good; with its page loaded in another window
+  // closing the page itself only unloads it (closeTargetOf, tabactions.js).
+  const ff = new FakeFirefox();
+  const { w, v } = world(ff);
+  const x = await started(ff);
+  const placeholder = ff.list(v.id).find(t => t.url === GHOST("ghost", "there")), page_ = ff.list(w.id).find(t => t.url === "https://there.example/page");
+  x.js(`globalThis.closeTargetOf = async id => (id === ${placeholder.id} ? ${page_.id} : id)`);
+  x.b.runtime.sendMessage = async msg => (msg.type === "commandBarSelection" && msg.windowId === v.id ? [placeholder.id] : undefined);
+  const removed = [], remove = x.b.tabs.remove;
+  x.b.tabs.remove = id => { removed.push(id); return remove(id); };
+  const page = await openBar(ff, x, v.id);
+  await page.tell({ type: "choose", row: { kind: "command", name: "close-tab" } });
+  await wait(100);
+  assert.equal(removed[0], page_.id);
+  x.kill();
+});
+
+test("taking an essential away from a copy Tidier has just made is not missed", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const copy = ff.list(w.id).find(t => t.pinned);
+  ff.tabs.get(copy.id).active = true;
+  ff.tabs.get(ff.list(w.id).find(t => t.url === "https://here.example/").id).active = false;
+  const x = await started(ff);
+  x.js(`busy.add(${copy.id})`);
+  const page = await openBar(ff, x, w.id);
+  assert.equal(page.sent[0].items.find(i => i.name === "toggle-essential").title, "Remove from essentials");
+  await page.tell({ type: "choose", row: { kind: "command", name: "toggle-essential" } });
+  await wait(1500);
+  assert.ok(!ff.store.essentials.length, "it is no essential any more");
+  x.kill();
+});

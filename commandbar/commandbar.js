@@ -246,9 +246,12 @@ list.addEventListener("click", e => {
 // Losing the focus closes it, like Arc's. What counts is the window: inside it the focus can
 // hop away from the page and back (Firefox settles the new window), and then you can simply
 // go on typing, unless it is Firefox's own prompt that has it. A moment later, for a window
-// that is still getting the focus. The window's own event too: with the prompt open the page
-// has already lost the focus, so going to another window brings it no blur, and the bar would
-// stay behind that window with its prompt, until the key closed it instead of opening it.
+// that is still getting the focus.
+//
+// With the prompt open the page has already lost the focus, so going to another window brings
+// it no blur, and the bar would stay behind that window with its prompt, until the key closed
+// it instead of opening it. So then the window's own event counts too, and only then: a new
+// window's focus can pass through "none" on its way here, which must not close the bar.
 function focusWent() {
   setTimeout(async () => {
     if (document.hasFocus()) return;
@@ -258,4 +261,4 @@ function focusWent() {
   }, 50);
 }
 addEventListener("blur", e => { if (e.target === window) focusWent(); });
-browser.windows.onFocusChanged.addListener(focusWent);
+browser.windows.onFocusChanged.addListener(() => { if (asking) focusWent(); });

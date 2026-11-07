@@ -1631,7 +1631,7 @@ def alone_archive(m):
 
 # --- The command bar: real keys, in the window it really opens in. ---------------------
 ENTER, DOWN, UP, TAB = "", "", "", ""
-BAR = H + """const bar = () => wins().find(w => !w.toolbar.visible && w.gBrowser.tabs.some(t => url(t).includes("/commandbar/commandbar.html")));"""
+BAR = H + """const bar = () => wins().find(w => !w.toolbar.visible && w.gBrowser?.tabs.some(t => url(t).includes("/commandbar/commandbar.html")));"""  # (a window just opened has no gBrowser yet)
 # Tidier's own keys in Firefox's list for the window, among them the bar's two, if it has them.
 BAR_KEYS = H + """const w = main(); w.focus(); await wait(300); const mine = [...w.document.querySelectorAll('keyset[id^="ext-keyset"]')].filter(k => k.id.includes("6844a953"));
   return mine.flatMap(k => [...k.children]).map(k => [k.getAttribute("key"), k.getAttribute("modifiers")].join(" ")).filter(k => k === "K accel,shift" || k === "T accel");"""

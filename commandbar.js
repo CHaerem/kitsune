@@ -173,7 +173,7 @@ const BAR_COMMANDS = [
   { name: "new-folder", label: "New folder", ask: () => ({ placeholder: "Name of the new folder" }),
     run: (ctx, name) => createFolder(name || "New folder", ctx.space) },
   { name: "reopen-closed", label: "Reopen closed tab", when: ctx => ctx.closed.length > 0,
-    run: ctx => barReopenClosed(ctx, ctx.closed[0].tab) },
+    run: ctx => barReopenClosed(ctx, barClosedItems(ctx)[0]) },
   { name: "go-to-space", each: ctx => ctx.spaces.filter(s => s.id !== ctx.space).map(s => ({ label: `Go to ${s.name}`, value: s.id, space: s.id })),
     run: (ctx, space) => switchSpace(ctx.windowId, space) },
   { name: "clear-today", label: "Clear today's tabs", when: () => typeof clearSpace === "function", run: ctx => clearSpace(ctx.windowId, ctx.space) },
