@@ -551,6 +551,32 @@ test("closing a saved tab in Tidier's own folder unloads it", async () => {
   x.kill();
 });
 
+test("a saved tab that loaded just after another closed is unloaded when it closes, not gone", async () => {
+  // Closing a tab lands on the next, perhaps an unloaded one, which loads. Tabs closing
+  // together keep the order from when the first closed, but not what was unloaded then.
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = {
+    F: { group: true, own: true, name: "Work", cookieStoreId: C1, parentKey: null, rank: 1 },
+    a: entry("https://a.example/", { parentKey: "F", saved: { url: "https://a.example/", title: "a" } }),
+    b: entry("https://b.example/", { parentKey: "F", saved: { url: "https://b.example/", title: "b" } }),
+  };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  const a = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1, discarded: true }, { syncKey: "b", syncRole: "live" });
+  const x = await alone(ff);
+  await wait(500);
+  ff.rm(a.id);
+  b.discarded = false;
+  x.b.tabs.onUpdated.fire(b.id, { discarded: false }, ff.snap(b));
+  await wait(20);
+  ff.rm(b.id);
+  await wait(1000);
+  assert.ok(ff.synced.b, "still a saved tab");
+  assert.ok(ff.list(w.id).some(y => y.url === GHOST("ghost", "b")));
+  x.kill();
+});
+
 test("a rule opens an address in its space, for a tab's first page only", async () => {
   const ff = new FakeFirefox();
   ff.store.rules = [{ url: "/^https:\\/\\/work\\.example\\//", space: "firefox-container-2" }];

@@ -906,7 +906,11 @@ function closedPlace(windowId, tabId) {
   const i = order.findIndex(t => t.id === tabId);
   if (i < 0) return null;
   const keysOf = list => list.filter(t => t.cookieStoreId === order[i].cookieStoreId).map(t => t.key ?? syncKeyByTab.get(t.id)).filter(Boolean);
-  return { unloaded: order[i].unloaded, before: keysOf(order.slice(0, i).reverse()), after: keysOf(order.slice(i + 1)) };
+  // Whether it was unloaded is as last seen, not as when the first tab closed: closing a tab can
+  // land on an unloaded one, which loads, and closed right after that it is a loaded tab. A saved
+  // one must then go back to its saved address, not away (closeAction).
+  const seen = lastOrder.get(windowId)?.find(t => t.id === tabId) ?? order[i];
+  return { unloaded: seen.unloaded, before: keysOf(order.slice(0, i).reverse()), after: keysOf(order.slice(i + 1)) };
 }
 
 // Selecting a ghost in the window you are using pulls the live tab in. (A pull
