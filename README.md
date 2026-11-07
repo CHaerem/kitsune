@@ -377,7 +377,8 @@ Not guaranteed:
 - **Addresses Firefox hides from every extension** (addons.mozilla.org, accounts.firefox.com
   and a few more) cannot be stopped: no extension sees those requests. One opened with no
   container goes out with no login, and is moved to a space as soon as it shows, so it
-  doesn't stay outside one (checked). A rule for one works the same way.
+  doesn't stay outside one (checked). A rule for one works the same way, and a space's
+  proxy or user agent may not apply there.
 - For a moment during an update of Tidier nothing is listening. A link opened just then
   goes out with no login, and is moved in the same way (checked).
 - A page you reach by a link inside another stays in that space, with that space's
