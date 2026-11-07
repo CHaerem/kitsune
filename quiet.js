@@ -111,12 +111,13 @@ async function closeFromSidebar(windowId, tabId) {
 // One ordinary tab says nothing: ⌘⇧T has it. A saved tab removed for good, or any
 // placeholder with no page anywhere, has no such way back, since a placeholder is
 // forgotten from Recently Closed. A page that asked and that you kept was not closed,
-// which only shows once Firefox has its answer.
+// which only shows once Firefox has its answer. (A double click on a × is two closes of
+// one tab, so each is counted once.)
 function endCloseGroup(group) {
   closeGroups.delete(group.windowId);
   Promise.all(group.removals).then(async () => {
     const gone = [];
-    for (const item of group.items) if (!(await browser.tabs.get(item.tabId).catch(() => null))) gone.push(item);
+    for (const item of new Map(group.items.map(i => [i.key, i])).values()) if (!(await browser.tabs.get(item.tabId).catch(() => null))) gone.push(item);
     const tabs = await group.tabs;
     const undo = () => bringBack(group.windowId, gone, tabs);
     if (gone.length > 1) say(group.windowId, `${gone.length} tabs closed`, { undo });
@@ -153,7 +154,8 @@ async function clearSpace(windowId, space) {
   }
   const closed = items.length === 1 ? "1 tab" : `${items.length} tabs`;
   if (items.length) say(windowId, `${closed} closed${stayed ? `, ${stayed} stayed` : ""}`, { undo: () => bringBack(windowId, items, tabs) });
-  else if (stayed) say(windowId, `${stayed === 1 ? "1 tab" : `${stayed} tabs`} with unsaved input stayed`);
+  // (Clear clicked again, with only those left, must not take away the Undo of the first.)
+  else if (stayed && !quietNotes.get(windowId)?.undo) say(windowId, `${stayed === 1 ? "1 tab" : `${stayed} tabs`} with unsaved input stayed`);
 }
 
 // --- Undo ------------------------------------------------------------------------

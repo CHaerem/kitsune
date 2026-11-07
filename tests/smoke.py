@@ -1651,6 +1651,8 @@ def alone_quiet_undo(m):
 
     # Undo from another space: the tabs come back there, and this window stays where it is.
     more_tabs_here(m, "quiet-away")
+    # (Going through a space would show its hidden tabs for a moment, too quick for the list.)
+    m.js(H + """const w = main(); w.__shows = []; w.__onShow = () => w.__shows.push(Date.now()); w.gBrowser.tabContainer.addEventListener("TabShow", w.__onShow); return 1;""")
     r = sidebar_page(m, """
       const note = doc.getElementById("note"), n = plainTabs().length;
       const chosen = plainTabs().filter(r => !r.classList.contains("active")).slice(-2);
@@ -1664,16 +1666,17 @@ def alone_quiet_undo(m):
       const was = await selected(), seen = [];
       const watch = new page.MutationObserver(() => seen.push(doc.documentElement.dataset.space));
       watch.observe(doc.documentElement, {attributes: true, attributeFilter: ["data-space"]});
-      const shown = note.classList.contains("shown");
+      const shown = note.classList.contains("shown"), t0 = Date.now();
       doc.querySelector("#note .act").click();
       await wait(2500);
       watch.disconnect();
-      const still = was === await selected(), stayed = spaces().find(s => s.active).id === away;
+      const t1 = Date.now(), still = was === await selected(), stayed = spaces().find(s => s.active).id === away;
       doc.querySelector(`#spaces .space[data-space="${home}"]`).click();
       for (let i = 0; i < 50 && plainTabs().length < n; i++) await wait(100);
-      return {shown, away, seen, still, stayed, n, back: plainTabs().length};""")
+      return {shown, away, seen, still, stayed, n, t0, t1, back: plainTabs().length};""")
+    shows = m.js(H + """const w = main(); w.gBrowser.tabContainer.removeEventListener("TabShow", w.__onShow); return w.__shows;""")
     check("Undo from another space brings the tabs back there", r["shown"] and r["back"] == r["n"], str(r))
-    check("and this window stays where it is, with no other space shown for a moment", r["stayed"] and r["still"] and all(x == r["away"] for x in r["seen"]), str(r))
+    check("and this window stays where it is, with no other space shown for a moment", r["stayed"] and r["still"] and all(x == r["away"] for x in r["seen"]) and not [t for t in shows if r["t0"] <= t <= r["t1"]], f"{r} {shows}")
 
     # With no line between folders and tabs, Clear is in the list's menu. Then quiet
     # again, for alone_idle: the line gone, and its timer with it.

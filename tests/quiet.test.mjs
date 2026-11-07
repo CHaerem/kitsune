@@ -112,6 +112,22 @@ test("closes within a moment are one group, and the line offers to undo them", a
   x.kill();
 });
 
+test("a double click on a × is one tab closed", async () => {
+  const ff = new FakeFirefox();
+  const { w } = twoWindows(ff, ["a", "b", "c", "d"]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  const b = tabOf(ff, w.id, "b").id;
+  port.send({ type: "close", tabId: b });
+  port.send({ type: "close", tabId: b });
+  await wait(1000);
+  assert.deepEqual(said(port), [], "one ordinary tab says nothing");
+  for (const k of ["c", "c", "d"]) port.send({ type: "close", tabId: tabOf(ff, w.id, k)?.id ?? ff.nextTab + 1 });
+  await until(() => noteIn(x, w.id), "the line");
+  assert.equal(noteIn(x, w.id).text, "2 tabs closed");
+  x.kill();
+});
+
 test("closes apart from each other are not a group", async () => {
   const ff = new FakeFirefox();
   const { w } = twoWindows(ff, ["a", "b", "c"]);
@@ -339,7 +355,8 @@ test("Clear leaves the selected tab, folders and essentials, in every window", a
   const ff = new FakeFirefox();
   ff.store.essentials = [{ key: "e", url: addr("e"), cookieStoreId: C1, title: "E", icon: "x" }];
   ff.store.syncedTabs = { F: folder("Work", 1), kept: entry(addr("kept"), { parentKey: "F", saved: { url: addr("kept"), title: "K" } }), far: entry(addr("far"), { cookieStoreId: C2 }) };
-  const { w, other } = twoWindows(ff, ["a", "b", "c", "kept"], { active: "b" });
+  // (The last one is selected in the other window, so it says nothing of a folder.)
+  const { w, other } = twoWindows(ff, ["a", "b", "c", "kept", "d"], { active: "b" });
   const far = ff.addTab(w.id, { url: addr("far"), cookieStoreId: C2 }, { syncKey: "far", syncRole: "live" });
   const blank = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
   const settings = ff.addTab(w.id, { url: "about:preferences" });
@@ -349,7 +366,7 @@ test("Clear leaves the selected tab, folders and essentials, in every window", a
   const keysHere = ff.list(w.id).length;
   port.send({ type: "clearSpace", space: C1 });
   await wait(1000);
-  assert.deepEqual(Object.keys(ff.synced).sort(), ["F", "b", "far", "kept"]);
+  assert.deepEqual(Object.keys(ff.synced).sort(), ["F", "b", "d", "far", "kept"]);
   assert.ok(!tabOf(ff, w.id, "a"), "an ordinary tab goes");
   assert.ok(!tabOf(ff, other.id, "a"), "in every window");
   assert.ok(tabOf(ff, w.id, "b").active, "the tab you are on stays");
@@ -390,6 +407,21 @@ test("a page that refuses to unload stays, and the line says how many stayed", a
   await undoOf(x, w.id);
   await wait(500);
   assert.deepEqual(keysOf(ff, w.id), ["a", "b", "c", "d"], "and undo puts back only what went");
+  x.kill();
+});
+
+test("Clear clicked again does not take away the Undo of the first", async () => {
+  const ff = new FakeFirefox();
+  const { w } = twoWindows(ff, ["a", "b", "c", "d"]);
+  ff.refuseDiscard = new Set([tabOf(ff, w.id, "b").id]);
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  port.send({ type: "clearSpace", space: C1 });
+  port.send({ type: "clearSpace", space: C1 });
+  await until(() => noteIn(x, w.id), "the line");
+  await x.js("serial")(() => {});
+  assert.equal(noteIn(x, w.id).text, "1 tab closed, 1 stayed");
+  assert.equal(noteIn(x, w.id).undo, true);
   x.kill();
 });
 
@@ -491,7 +523,10 @@ test("with the setting off, a close only closes and nothing is said or remembere
   const x = await alone(ff, { on: false });
   assert.equal(x.js("tidierAlone"), false);
   const port = sidebar(x, w.id);
-  for (const k of ["b", "c"]) port.send({ type: "close", tabId: tabOf(ff, w.id, k).id });
+  for (const k of ["b", "c"]) {
+    port.send({ type: "close", tabId: tabOf(ff, w.id, k).id });
+    assert.equal(x.js("closeGroups").size, 0, "not even a lookup: nothing is taken together");
+  }
   await wait(1000);
   x.js("say")(w.id, "Nothing to see");
   await realSleep(1);
