@@ -6,6 +6,10 @@
   browser.windows.getCurrent().then(w => { thisWindow = w.id; });
   browser.runtime.onMessage.addListener(msg => {
     if (msg?.type !== "commandBarSelection" || msg.windowId !== thisWindow) return;
-    return Promise.resolve(window.selectedTabs?.(msg.tabId) ?? [msg.tabId]);
+    // The selection also when the tab you are on is not in it: you can be on an essential and
+    // select rows, or take your tab out with a second ⌘-click. selectedTabs(id) only gives the
+    // selection for a tab in it, so it is asked for one that is.
+    const inIt = document.querySelector(".picked[data-tab]");
+    return Promise.resolve(window.selectedTabs?.(inIt ? Number(inIt.dataset.tab) : msg.tabId) ?? [msg.tabId]);
   });
 }

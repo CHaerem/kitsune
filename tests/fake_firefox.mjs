@@ -87,7 +87,7 @@ export class FakeFirefox {
         for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId"]) if (q[k] !== undefined) out = out.filter(t => t[k] === q[k]);
         if (q.currentWindow) out = out.filter(t => t.windowId === ff.focused);
         return out; },
-      get: async id => ff.snap(need(id)),
+      get: id => { if (!Number.isInteger(id)) throw new Error("Incorrect argument types for tabs.get."); return (async () => ff.snap(need(id)))(); }, // as Firefox: at once, not as a refusal
       create: async p => {
         if (!ff.wins.has(p.windowId)) throw new Error(`Invalid window ID: ${p.windowId}`);
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);

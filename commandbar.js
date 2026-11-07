@@ -52,7 +52,7 @@ async function toggleCommandBar(tab) {
     if (!from) { commandBar = null; return; }
     bar.from = from.id;
     bar.snapshot = barSnapshot(bar).catch(err => { noteError(err); return null; }); // ready by the time the page asks
-    const win = await browser.windows.create({ type: "popup", url: BAR_PAGE, allowScriptsToClose: true, width: BAR_WIDTH, height: BAR_HEIGHT, ...barPlaceOver(from) });
+    const win = await browser.windows.create({ type: "popup", url: `${BAR_PAGE}#${bar.pressedAt}`, allowScriptsToClose: true, width: BAR_WIDTH, height: BAR_HEIGHT, ...barPlaceOver(from) });
     bar.id = win.id;
     if (bar.closeOnOpen) await barClose(bar, true);
   } catch (err) {
@@ -85,7 +85,7 @@ async function barForgetClosed() {
   if (Date.now() > barForgetUntil) return;
   const page = browser.runtime.getURL(BAR_PAGE);
   for (const { window: win } of await browser.sessions.getRecentlyClosed().catch(() => [])) {
-    if (win?.tabs?.length === 1 && win.tabs[0].url === page) await browser.sessions.forgetClosedWindow(win.sessionId).catch(() => {});
+    if (win?.tabs?.length === 1 && win.tabs[0].url?.startsWith(page)) await browser.sessions.forgetClosedWindow(win.sessionId).catch(() => {});
   }
 }
 browser.sessions.onChanged.addListener(barForgetClosed);
@@ -138,8 +138,25 @@ async function barContext(windowId) {
 
 // A number in a label, when there are several: "Close 3 tabs".
 const barCount = (ctx, one, many) => ctx.picked.length > 1 ? many.replace("#", ctx.picked.length) : one;
-const barOnlyThisTab = ctx => ctx.picked.length === 1 && !!ctx.tab;
+// Only the tab you are on. One other tab selected in the sidebar is not that: a command
+// with no way to act on the selection is then left out, rather than acting on another tab.
+const barOnlyThisTab = ctx => ctx.picked.length === 1 && ctx.picked[0].id === ctx.tab?.id;
 const barMovable = ctx => ctx.picked.length > 0 && ctx.picked.every(t => !t.pinned);
+// The tab you are on goes last. Closed first, it would make Firefox select another that
+// may be about to go too, and a placeholder that is selected starts pulling its real tab in.
+const barSelectedLast = ctx => [...ctx.picked].sort((a, b) => Number(a.active) - Number(b.active));
+// A row in the bar is opened in its own space where its address is all that is left,
+// so that a page of one space never opens with the logins of another.
+const barInItsSpace = (ctx, row) => (row.space ? { ...ctx, space: row.space } : ctx);
+
+// What the picked tabs can be moved to. "No folder" only for a tab that is in one, and not
+// the folder they are all in already; a command with nothing to choose from is left out.
+function barFolderChoices(ctx) {
+  const now = new Set(ctx.picked.map(t => folderKeyOf(ctx.all, syncKeyByTab.get(t.id))));
+  const folders = foldersOf(ctx.all, ctx.picked[0].cookieStoreId).filter(f => !f.live && !(now.size === 1 && now.has(f.key)));
+  return [...([...now].some(Boolean) ? [{ label: "No folder", value: "" }] : []), ...folders.map(f => ({ label: f.name, value: f.key }))];
+}
+const barSpaceChoices = ctx => ctx.spaces.filter(s => !ctx.picked.every(t => t.cookieStoreId === s.id)).map(s => ({ label: s.name, value: s.id, space: s.id }));
 
 // --- The commands ------------------------------------------------------------------
 // One table: a name (the same as the shortcut's in manifest.json, if it has one, so the
@@ -149,13 +166,14 @@ const barMovable = ctx => ctx.picked.length > 0 && ctx.picked.every(t => !t.pinn
 // A command that does not apply is left out; nothing is ever greyed.
 //
 // `run` is carried out in the queue, and everything goes through what the sidebar uses,
-// so other windows follow.
+// so other windows follow. `free` is for what may wait for you (a page that asks before it
+// closes): all of Tidier would wait with it in the queue, and the sidebar's close is not in it.
 const BAR_COMMANDS = [
   { name: "new-tab", label: "New tab", run: ctx => barOpenTab(ctx) },
   { name: "new-folder", label: "New folder", ask: () => ({ placeholder: "Name of the new folder" }),
     run: (ctx, name) => createFolder(name || "New folder", ctx.space) },
   { name: "reopen-closed", label: "Reopen closed tab", when: ctx => ctx.closed.length > 0,
-    run: ctx => browser.sessions.restore(ctx.closed[0].tab.sessionId) },
+    run: ctx => barReopenClosed(ctx, ctx.closed[0].tab) },
   { name: "go-to-space", each: ctx => ctx.spaces.filter(s => s.id !== ctx.space).map(s => ({ label: `Go to ${s.name}`, value: s.id, space: s.id })),
     run: (ctx, space) => switchSpace(ctx.windowId, space) },
   { name: "clear-today", label: "Clear today's tabs", when: () => typeof clearSpace === "function", run: ctx => clearSpace(ctx.windowId, ctx.space) },
@@ -170,9 +188,16 @@ const BAR_COMMANDS = [
   { name: "unload", label: ctx => barCount(ctx, "Unload this tab", "Unload # tabs"), when: ctx => ctx.picked.some(t => !t.discarded && !isGhostUrl(t.url)), run: barUnload },
   { name: "toggle-essential", label: ctx => ctx.tab.pinned ? "Remove from essentials" : "Make this tab an essential",
     when: ctx => barOnlyThisTab(ctx) && (ctx.tab.pinned || isWeb(ctx.tab.url)),
-    run: ctx => sidebarAction(ctx.windowId, { type: "pin", tabId: ctx.tab.id, pinned: !ctx.tab.pinned }) },
-  { name: "move-to-folder", label: ctx => barCount(ctx, "Move to folder", "Move # tabs to folder"), when: ctx => barMovable(ctx) && ctx.picked.every(t => syncKeyByTab.has(t.id) || isWeb(t.url)),
-    list: ctx => [{ label: "No folder", value: "" }, ...foldersOf(ctx.all, ctx.picked[0].cookieStoreId).filter(f => !f.live).map(f => ({ label: f.name, value: f.key }))],
+    run: ctx => {
+      // A tab Tidier has just moved or made stays marked for a moment, and what makes a pinned
+      // tab an essential ignores a marked tab. This change is yours: missed, the tab would be an
+      // essential and an ordinary tab at once, for good.
+      syncBusy.delete(ctx.tab.id);
+      busy.delete(ctx.tab.id);
+      return sidebarAction(ctx.windowId, { type: "pin", tabId: ctx.tab.id, pinned: !ctx.tab.pinned });
+    } },
+  { name: "move-to-folder", label: ctx => barCount(ctx, "Move to folder", "Move # tabs to folder"), when: ctx => barMovable(ctx) && ctx.picked.every(t => syncKeyByTab.has(t.id) || isWeb(t.url)) && barFolderChoices(ctx).length > 0,
+    list: barFolderChoices,
     placeholder: "Which folder?",
     run: async (ctx, folder) => {
       for (const t of ctx.picked) {
@@ -180,12 +205,18 @@ const BAR_COMMANDS = [
         await sidebarAction(ctx.windowId, { type: "moveTab", tabId: t.id, folder: folder || null });
       }
     } },
-  { name: "move-to-space", label: ctx => barCount(ctx, "Move to space", "Move # tabs to space"), when: barMovable,
-    list: ctx => ctx.spaces.filter(s => !ctx.picked.every(t => t.cookieStoreId === s.id)).map(s => ({ label: s.name, value: s.id, space: s.id })),
+  { name: "move-to-space", label: ctx => barCount(ctx, "Move to space", "Move # tabs to space"),
+    when: ctx => barMovable(ctx) && ctx.addresses.length === ctx.picked.length && barSpaceChoices(ctx).length > 0, // moving is opening it again there: no address, no move
+    list: barSpaceChoices,
     placeholder: "Which space?",
-    run: async (ctx, space) => { for (const t of ctx.picked) await sidebarAction(ctx.windowId, { type: "moveToSpace", tabId: t.id, space }); } },
-  { name: "close-tab", label: ctx => barCount(ctx, "Close this tab", "Close # tabs"), when: ctx => ctx.picked.length > 0,
-    run: async ctx => { for (const t of ctx.picked) await (globalThis.closeFromSidebar?.(ctx.windowId, t.id) ?? browser.tabs.remove(t.id).catch(() => {})); } },
+    run: async (ctx, space) => { for (const t of barSelectedLast(ctx)) await sidebarAction(ctx.windowId, { type: "moveToSpace", tabId: t.id, space }); } },
+  { name: "close-tab", label: ctx => barCount(ctx, "Close this tab", "Close # tabs"), when: ctx => ctx.picked.length > 0, free: true,
+    run: async ctx => {
+      for (const t of barSelectedLast(ctx)) {
+        const target = (await globalThis.closeTargetOf?.(t.id)) ?? t.id; // what a saved placeholder with its page in another window closes (tabactions.js)
+        await (globalThis.closeFromSidebar?.(ctx.windowId, target) ?? browser.tabs.remove(target).catch(() => {}));
+      }
+    } },
   { name: "settings", label: "Settings", run: () => browser.runtime.openOptionsPage() },
 ];
 
@@ -235,6 +266,10 @@ function barCommandRows(ctx, uses, shortcuts) {
 }
 
 // --- What can be found -------------------------------------------------------------
+// Firefox refuses to read the values of a tab closed a moment ago. That one tab is simply
+// not there; the bar must still find all the others.
+const barKeysOf = pinned => Promise.all(pinned.map(t => keyOf(t).catch(() => undefined)));
+
 // Every tab of every space, from the record: a placeholder's own address, title and last
 // use are the placeholder's. Only the tab's real, live copy says when it was last used.
 async function barTabItems(ctx) {
@@ -264,7 +299,7 @@ async function barTabItems(ctx) {
     });
   }
   const pinned = tabs.filter(t => t.pinned);
-  const keys = await Promise.all(pinned.map(keyOf));
+  const keys = await barKeysOf(pinned);
   for (const e of list) {
     const copies = pinned.filter((t, i) => keys[i] === e.key);
     if (!copies.length) continue;
@@ -297,7 +332,7 @@ function barClosedItems(ctx) {
 
 // From Tidier's own list of what archiving closed, when it has one (archivelist.js).
 async function barArchivedItems() {
-  const archived = (await globalThis.archivedTabs?.()) ?? [];
+  const archived = (await globalThis.archivedTabs?.().catch(err => { noteError(err); return null; })) ?? [];
   return archived.map((a, i) => ({
     kind: "archived", id: `archived:${i}:${a.url}`, title: a.title || a.url, url: a.url, icon: a.icon || null, space: a.space ?? null, lastUsed: a.when, why: a.why, archived: { space: a.space, url: a.url },
   }));
@@ -351,17 +386,19 @@ async function barGoToTab(ctx, row) {
   let target;
   if (row.kind === "essential") {
     const pinned = here.filter(t => t.pinned);
-    const keys = await Promise.all(pinned.map(keyOf));
-    target = pinned[keys.indexOf(row.key)];
+    target = pinned[(await barKeysOf(pinned)).indexOf(row.key)];
   } else if (row.key) {
     // (A window still being filled may not have its copy yet.)
-    target = here.find(t => syncKeyByTab.get(t.id) === row.key) ?? await browser.tabs.get(liveTabId(row.key)).catch(() => null);
+    const live = liveTabId(row.key);
+    // (Firefox throws at once on an id that is no number, rather than refusing it later.)
+    target = here.find(t => syncKeyByTab.get(t.id) === row.key) ?? (live === undefined ? null : await browser.tabs.get(live).catch(() => null));
   } else {
     target = await browser.tabs.get(row.tabId).catch(() => null);
   }
-  if (!target) return row.url ? barOpenTab(ctx, row.url) : undefined; // it has gone since the bar opened
-  if (target.windowId !== ctx.windowId) await browser.windows.update(target.windowId, { focused: true });
-  return browser.tabs.update(target.id, { active: true });
+  if (!target) return row.url ? barOpenTab(barInItsSpace(ctx, row), row.url) : undefined; // it has gone since the bar opened
+  // (Either can go between the look above and these. As with a click in the sidebar, that is simply that.)
+  if (target.windowId !== ctx.windowId) await browser.windows.update(target.windowId, { focused: true }).catch(() => {});
+  await browser.tabs.update(target.id, { active: true }).catch(() => {});
 }
 
 async function barGoToFolder(ctx, key) {
@@ -372,20 +409,25 @@ async function barGoToFolder(ctx, key) {
   viewSoon(ctx.windowId);
 }
 
+// Firefox brings a tab back in the window it was closed in. If that is another one, you are
+// taken there: from here it would look as if nothing had happened.
 async function barReopenClosed(ctx, row) {
-  await browser.sessions.restore(row.sessionId).catch(err => (row.url ? barOpenTab(ctx, row.url) : Promise.reject(err)));
+  const back = await browser.sessions.restore(row.sessionId).catch(err => (row.url ? barOpenTab(barInItsSpace(ctx, row), row.url) : Promise.reject(err)));
+  const windowId = back?.tab?.windowId;
+  if (windowId !== undefined && windowId !== ctx.windowId) await browser.windows.update(windowId, { focused: true }).catch(() => {});
 }
 
 // Through its own list when it is there: that takes it off the list too.
 async function barReopenArchived(ctx, row) {
   if (globalThis.reopenArchived) return globalThis.reopenArchived(row.archived, ctx.windowId);
-  return barOpenTab(row.space ? { ...ctx, space: row.space } : ctx, row.url);
+  return barOpenTab(barInItsSpace(ctx, row), row.url);
 }
 
 async function barRunCommand(ctx, row, value) {
   const shared = barSharedCommands().find(c => c.name === row.name);
   const command = BAR_COMMANDS.find(c => c.name === row.name);
   if (shared) await shared.action(ctx.windowId); // goes through the queue by itself where it must
+  else if (command?.free) await command.run(ctx, value ?? row.value);
   else if (command) await serial(() => command.run(ctx, value ?? row.value));
   else return;
   const uses = await barUses.get();
@@ -407,14 +449,18 @@ browser.runtime.onConnect.addListener(port => {
   if (port.name !== "commandbar" || port.sender?.id !== browser.runtime.id) return;
   const windowId = port.sender.tab?.windowId;
   const bar = commandBar;
-  // A bar Firefox brought back with the session, or the page opened by hand. The window
+  // The page carries the key press it was opened for, so nothing else can pass for it while
+  // a bar is still opening: a bar Firefox brought back with the session, or the page opened
+  // by hand, which would make its normal window "the bar", to be closed with it. The window
   // is only removed if it is the bar's own: the page could be a tab in a normal window.
-  if (!bar || (bar.id !== null && bar.id !== windowId)) {
+  if (!bar || !port.sender.url?.endsWith(`#${bar.pressedAt}`)) {
+    barForgetUntil = Date.now() + BAR_FORGET_MS;
     browser.windows.get(windowId).then(win => (win.type === "popup" ? browser.windows.remove(windowId) : browser.tabs.remove(port.sender.tab.id))).catch(() => {});
     return;
   }
   bar.id = windowId; // the page can be here before windows.create has answered
-  bar.snapshot.then(snapshot => port.postMessage(snapshot ?? { pressedAt: bar.pressedAt, items: [], spaces: [] }));
+  // (The port can be gone by then: the key pressed again, say.)
+  bar.snapshot.then(snapshot => port.postMessage(snapshot ?? { pressedAt: bar.pressedAt, items: [], spaces: [] })).catch(() => {});
   port.onMessage.addListener(async msg => {
     if (msg.type === "close") await barClose(bar, msg.refocus);
     else if (msg.type === "asked") await browser.storage.local.set({ [BAR_ASKED]: true });

@@ -90,7 +90,7 @@ async function switchSpace(windowId, space) {
 // The n-th space on the bar (⌃1, ⌃2, ...).
 async function switchToNth(n) {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
+  if (!tab || (await browser.windows.get(tab.windowId).catch(() => null))?.type !== "normal") return; // a small window (the command bar, a sign-in) has no spaces, and would get a tab
   const tabs = await browser.tabs.query({ windowId: tab.windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
   const space = (await spaceList(used))[n];

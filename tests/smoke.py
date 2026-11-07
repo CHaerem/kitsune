@@ -836,6 +836,12 @@ def shortcuts(m):
     press(m, "s", CMD); time.sleep(1.2); back = m.js(look)
     check("⌘S switches compact mode on (sidebar and toolbar hidden, page full width) and off",
           compact[0] < 20 and compact[1] <= 0 and back == start, f"start {start}, ⌘S {compact}, ⌘S again {back}")
+    # With the setting off the command bar exists, but has no key and opens nothing.
+    keys = m.js(BAR_KEYS)
+    press(m, "k", CMD, SHIFT)
+    time.sleep(1)
+    r = m.js(BAR + "return !!bar();")
+    check("with Sidebery the command bar has no key, and ⌘⇧K opens nothing", keys == [] and not r, f"{keys} {r}")
 
 
 def look(m):
@@ -1478,10 +1484,13 @@ def alone_update(m):
         print("SKIP  alone_update (needs Tidier installed for real: Developer Edition, or --xpi)", flush=True)
         return
     before = m.js(SNAP_ALONE)
+    bar_open(m)  # an update can come at any moment, also with the bar open
     m.cmd("Addon:Install", {"path": m.update_xpi(), "temporary": False})
     m.js(H + "await wait(9000); return 1;")
     after = m.js(SNAP_ALONE)
     check("after an update with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+    left = m.js(H + """return wins().filter(w => !w.toolbar.visible).length;""")
+    check("an update with the command bar open leaves no window of it behind", left == 0, str(left))
     r = m.js(H + "return main().SidebarController.currentID;")
     check("after an update, Tidier's sidebar is still the sidebar", "6844a953" in (r or ""), str(r))
 
@@ -1492,10 +1501,14 @@ def alone_restart(m):
         return
     no_problems(m, "before a restart with Tidier alone")
     before = m.js(SNAP_ALONE)
+    bar_open(m)  # quit with the command bar open: Firefox brings popups back with the session
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+    r = m.js(H + """return {left: wins().filter(w => !w.toolbar.visible).length,
+      closed: main().SessionStore.getClosedWindowData().filter(w => w.tabs[0]?.entries?.[0]?.url?.includes("/commandbar/commandbar.html")).length};""")
+    check("a command bar left open at a restart does not come back, and is not kept as a closed window", r == {"left": 0, "closed": 0}, str(r))
 
 
 def more_tabs_here(m, name):
@@ -1619,6 +1632,9 @@ def alone_archive(m):
 # --- The command bar: real keys, in the window it really opens in. ---------------------
 ENTER, DOWN, UP, TAB = "", "", "", ""
 BAR = H + """const bar = () => wins().find(w => !w.toolbar.visible && w.gBrowser.tabs.some(t => url(t).includes("/commandbar/commandbar.html")));"""
+# Tidier's own keys in Firefox's list for the window, among them the bar's two, if it has them.
+BAR_KEYS = H + """const w = main(); w.focus(); await wait(300); const mine = [...w.document.querySelectorAll('keyset[id^="ext-keyset"]')].filter(k => k.id.includes("6844a953"));
+  return mine.flatMap(k => [...k.children]).map(k => [k.getAttribute("key"), k.getAttribute("modifiers")].join(" ")).filter(k => k === "K accel,shift" || k === "T accel");"""
 
 
 def bar_is_open(m):
@@ -2006,6 +2022,114 @@ def alone_command_bar(m):
     time.sleep(1)
 
 
+def alone_bar_edges(m):
+    """Around the bar: other keys, things changing while it is open, a prompt left behind."""
+    start = m.js(H + """const w = main(); w.focus(); await wait(300); return {space: w.gBrowser.selectedTab.userContextId, tabs: w.gBrowser.tabs.length};""")
+    keys = m.js(BAR_KEYS)
+    check("with Tidier alone the command bar has its keys", len(keys) == 2, str(keys))
+
+    # A space key while the bar has the focus: a small window has no spaces, and would get a tab.
+    bar_open(m)
+    bar_keys(m, ["2"], CTRL)
+    time.sleep(1)
+    r = m.js(BAR + """const b = bar(), w = main(); return {tabs: b?.gBrowser.tabs.length, shows: b && url(b.gBrowser.selectedTab), space: w.gBrowser.selectedTab.userContextId, here: w.gBrowser.tabs.length};""")
+    check("a space key with the bar open puts no tab in its window, and changes nothing", r["tabs"] == 1 and "/commandbar/commandbar.html" in (r["shows"] or "") and r["space"] == start["space"] and r["here"] == start["tabs"], f"{r} {start}")
+    bar_keys(m, [ESC])
+    check("and Esc still closes it", wait_for_bar(m, False))
+
+    # ⌘W is one more way out: not kept as a closed window, and the key works at the first press.
+    bar_open(m)
+    try:
+        bar_keys(m, ["w"], CMD)
+    except RuntimeError:  # the window has gone before the key was let go of
+        m.chrome()
+    closed = wait_for_bar(m, False)
+    r = 1
+    for _ in range(50):
+        r = m.js(H + """return main().SessionStore.getClosedWindowData().filter(w => w.tabs[0]?.entries?.[0]?.url?.includes("/commandbar/commandbar.html")).length;""")
+        if not r:
+            break
+        time.sleep(0.1)
+    ready = bar_open(m)
+    check("⌘W closes it, leaves nothing under Recently Closed Windows, and the key opens it again", closed and r == 0 and ready >= 0, f"{closed} {r}")
+    bar_keys(m, [ESC])
+    wait_for_bar(m, False)
+
+    # Enter held down: its repeats must not answer the question its first press brought up.
+    bar_open(m)
+    bar_keys(m, "new folder")
+    bar_rows_until(m, lambda rows: rows and rows[0]["title"] == "New folder")
+    bar_keys(m, [ENTER])
+    time.sleep(0.2)
+    bar_page(m, """for (let i = 0; i < 3; i++) doc.getElementById("field").dispatchEvent(new page.KeyboardEvent("keydown", {key: "Enter", repeat: true, bubbles: true, cancelable: true}));""")
+    time.sleep(0.3)
+    r = bar_page(m, """return {asks: doc.getElementById("field").placeholder};""")
+    check("Enter held down does not answer the question it brought up", bool(r) and "Name" in r["asks"], str(r))
+    bar_keys(m, [ESC])
+    bar_keys(m, [ESC])
+    wait_for_bar(m, False)
+
+    # A tab of another space closed while the bar is open: Enter opens it again, in its own space.
+    other = m.js(H + """const w = main(); w.focus(); const c = [1, 2, 3].find(c => c !== w.gBrowser.selectedTab.userContextId);
+      const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-edge-gone", {userContextId: c, inBackground: true});
+      for (let i = 0; i < 100 && !key(w, t); i++) await wait(100); return c;""")
+    bar_open(m)
+    bar_keys(m, "smoke-edge-gone")
+    rows = bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "tab")
+    m.js(H + """for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (key(w, t) && url(t).includes("smoke-edge-gone")) w.gBrowser.removeTab(t); await wait(300); return 1;""")
+    still = bar_is_open(m)
+    bar_keys(m, [ENTER])
+    closed = wait_for_bar(m, False)
+    r = m.js(H + """const w = main(); let t; for (let i = 0; i < 50 && !t; i++) { await wait(100); t = w.gBrowser.tabs.find(x => url(x).includes("smoke-edge-gone")); }
+      return {space: t?.userContextId, count: w.gBrowser.tabs.filter(x => url(x).includes("smoke-edge-gone")).length};""")
+    check("a tab closed while the bar is open comes back in its own space, never with another space's logins",
+          still and closed and rows and r["space"] == other and r["count"] == 1, f"{rows[:1]} {r} other space {other}")
+    m.js(H + """await removeWhere((w, t) => url(t).includes("smoke-edge-gone") || t.label.includes("smoke-edge-gone")); main().focus(); return 1;""")
+    press(m, str(start["space"]), CTRL)
+    time.sleep(1)
+
+    # Firefox's prompt left open while you go to another window: nothing can answer it there, and no blur comes again.
+    sidebar_page(m, """await page.browser.permissions.remove({permissions: ["history", "bookmarks"]}); await page.browser.storage.local.remove("commandBarAsked");""")
+    m.js(H + """await removeWhere((w, t) => url(t).includes("/sidebar/sidebar.html")); main().focus(); return 1;""")
+    bar_open(m)
+    bar_keys(m, "example")
+    rows = bar_rows_until(m, lambda rows: rows and rows[-1]["kind"] == "ask")
+    bar_keys(m, [UP, ENTER])
+    r = {}
+    for _ in range(50):
+        r = m.js(BAR + """const b = bar(), panel = b?.document.getElementById("notification-popup"); return {open: panel?.state === "open", at: panel ? [panel.screenX - b.screenX, panel.screenY - b.screenY] : null};""")
+        if r["open"]:
+            break
+        time.sleep(0.1)
+    # (With the address bar hidden the prompt has nothing to hang from: Firefox puts it at the corner of the bar's own window.)
+    check("Firefox's prompt shows, at the bar's own window", r["open"] and r["at"] == [0, 0] and bar_is_open(m), f"{rows[-1:]} {r}")
+    m.js(H + "main().focus(); return 1;")
+    check("going to another window with the prompt open closes the bar", wait_for_bar(m, False))
+    ready = bar_open(m)
+    r = bar_page(m, """return !!page.browser.history;""")
+    check("and the key opens it again, with nothing granted", ready >= 0 and r is False, str(r))
+    bar_keys(m, [ESC])
+    wait_for_bar(m, False)
+
+    # The window it was opened from closes under it: what you then choose lands in another.
+    m.js(H + """const w = main().OpenBrowserWindow(); w.__smoke = true; for (let i = 0; i < 200 && !w.gBrowserInit?.delayedStartupFinished; i++) await wait(50); await wait(2500); return 1;""")
+    bar_open(m, "other()")
+    m.js(H + """Services.prefs.setBoolPref("browser.tabs.warnOnClose", false); other().close(); for (let i = 0; i < 50 && other(); i++) await wait(100); return 1;""")
+    still = bar_is_open(m)
+    bar_keys(m, "example.org/?smoke-edge-source")
+    bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "address")
+    bar_keys(m, [ENTER])
+    wait_for_bar(m, False)
+    r = m.js(H + """const w = main(); for (let i = 0; i < 50 && !w.gBrowser.tabs.some(x => url(x).includes("smoke-edge-source")); i++) await wait(100);
+      return {here: w.gBrowser.tabs.filter(x => url(x).includes("smoke-edge-source")).length, windows: wins().length};""")
+    check("the window it was opened from closing leaves the bar working", still and r["here"] == 1 and r["windows"] == 1, str(r))
+    m.js(H + """await removeWhere((w, t) => url(t).includes("smoke-edge-source") || t.label.includes("smoke-edge-source")); main().focus(); return 1;""")
+    press(m, str(start["space"]), CTRL)
+    time.sleep(1)
+    left = m.js(H + """return wins().filter(w => !w.toolbar.visible).length;""")
+    check("no window stays behind after all that", left == 0, str(left))
+
+
 def alone_end(m):
     no_problems(m, "with Tidier alone")
 
@@ -2022,7 +2146,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_command_bar, alone_idle, alone_update, alone_end, alone_restart)
+                alone_settings, alone_copy, alone_command_bar, alone_bar_edges, alone_idle, alone_update, alone_end, alone_restart)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,

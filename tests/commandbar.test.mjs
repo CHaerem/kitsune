@@ -217,7 +217,7 @@ function connectPage(ff, x) {
   const tab = ff.tabs.get(bar.order[0]);
   const listeners = [], gone = [], sent = [];
   const port = {
-    name: "commandbar", sender: { id: "tidier", tab: ff.snap(tab) }, postMessage: m => sent.push(m),
+    name: "commandbar", sender: { id: "tidier", url: tab.url, tab: ff.snap(tab) }, postMessage: m => sent.push(m),
     onMessage: { addListener: f => listeners.push(f) }, onDisconnect: { addListener: f => gone.push(f) },
   };
   for (const { f } of x.b.runtime.onConnect.ls) f(port);
@@ -292,7 +292,7 @@ test("the window opens centred over the one you are in, and the key closes it", 
   const [bar] = barWindows(ff);
   assert.ok(bar);
   assert.equal(bar.left, 100 + (1200 - 640) / 2);
-  assert.equal(ff.tabs.get(bar.order[0]).url, "commandbar/commandbar.html");
+  assert.match(ff.tabs.get(bar.order[0]).url, /^commandbar\/commandbar\.html#\d+$/);
   await pressKey(ff, x, w.id);
   assert.equal(barWindows(ff).length, 0);
   assert.equal(ff.focused, w.id);
@@ -419,15 +419,15 @@ test("pages in no record can be found and gone to, but no empty new tab or place
   x.kill();
 });
 
-test("a tab that has gone since the bar opened opens its address instead", async () => {
+test("a tab that has gone since the bar opened opens its address instead, in its own space", async () => {
   const ff = new FakeFirefox();
   const { w } = world(ff);
   const x = await started(ff);
   const page = await openBar(ff, x, w.id);
-  await page.tell({ type: "choose", row: { kind: "tab", key: "no-longer", url: "https://gone.example/" } });
+  await page.tell({ type: "choose", row: { kind: "tab", key: "no-longer", url: "https://gone.example/", space: C2 } });
   await wait(300);
   const t = ff.list(w.id).find(t => t.url === "https://gone.example/");
-  assert.equal(t?.cookieStoreId, C1);
+  assert.equal(t?.cookieStoreId, C2, "the active space's container would be the wrong logins");
   x.kill();
 });
 
@@ -488,7 +488,7 @@ test("the commands table: only what applies, each with a name and a label, the m
   let page = await openBar(ff, x, w.id);
   const commands = page.sent[0].items.filter(i => i.kind === "command");
   const names = commands.map(c => c.name);
-  for (const name of ["new-tab", "new-folder", "go-to-space", "copy-url", "unload", "toggle-essential", "move-to-folder", "move-to-space", "close-tab", "settings"]) assert.ok(names.includes(name), name);
+  for (const name of ["new-tab", "new-folder", "go-to-space", "copy-url", "unload", "toggle-essential", "move-to-space", "close-tab", "settings"]) assert.ok(names.includes(name), name);
   assert.ok(!names.includes("reopen-closed"), "nothing closed yet");
   assert.ok(!names.includes("clear-today"), "left out where nothing can do it");
   assert.ok(!names.includes("rename-folder"), "this tab is in no folder");
@@ -496,8 +496,7 @@ test("the commands table: only what applies, each with a name and a label, the m
   assert.deepEqual(Array.from(commands.filter(c => c.name === "go-to-space"), c => c.value).sort(), ["firefox-container-2", "firefox-container-3"]);
   assert.equal(commands.find(c => c.name === "copy-url").shortcut, "Ctrl+Shift+C");
   assert.equal(new Set(commands.map(c => c.id)).size, commands.length);
-  const folder = commands.find(c => c.name === "move-to-folder").list;
-  assert.deepEqual(Array.from(folder, c => c.title), ["No folder"], "the folders of the tab's own space");
+  assert.ok(!names.includes("move-to-folder"), "no folder in this space, and the tab in none: nothing to choose from");
   assert.deepEqual(Array.from(commands.find(c => c.name === "move-to-space").list, c => c.value).sort(), ["firefox-container-2", "firefox-container-3"]);
   // Used once, a later command comes first next time.
   await page.tell({ type: "choose", row: { kind: "command", name: "settings" } }).catch(() => {});
@@ -713,4 +712,249 @@ test("with nothing happening, an open or a closed bar does nothing", async () =>
   await wait(5000);
   assert.deepEqual({ ...x.js("work") }, closed, "closed");
   x.kill();
+});
+
+// --- Found by trying to break it ------------------------------------------------------
+test("a page that is not this key press's cannot pass for the bar while it opens", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = world(ff);
+  const x = await started(ff);
+  // The window takes its time, and meanwhile the page turns up in a tab of a normal window.
+  const create = x.b.windows.create;
+  let go;
+  x.b.windows.create = props => new Promise(resolve => { go = () => resolve(create(props)); });
+  x.b.commands.onCommand.fire("command-bar", ff.snap(a));
+  await wait(200);
+  const byHand = ff.addTab(w.id, { url: "moz-extension://tidier/commandbar/commandbar.html" });
+  const stray = { name: "commandbar", sender: { id: "tidier", url: byHand.url, tab: ff.snap(byHand) }, postMessage() { assert.fail("it gets nothing"); }, onMessage: { addListener() {} }, onDisconnect: { addListener() {} } };
+  for (const { f } of x.b.runtime.onConnect.ls) f(stray);
+  await wait(100);
+  assert.ok(!ff.tabs.has(byHand.id), "only that tab goes");
+  go();
+  await wait(200);
+  const page = connectPage(ff, x);
+  for (let i = 0; i < 100 && !page.sent.length; i++) await wait(100);
+  assert.ok(page.sent.length, "the real one still gets its rows");
+  await page.tell({ type: "close", refocus: true });
+  await wait(100);
+  assert.ok(ff.wins.has(w.id), "and closing the bar closes no normal window");
+  assert.equal(barWindows(ff).length, 0);
+  x.kill();
+});
+
+test("a stray bar closed by Tidier is not kept under Recently Closed Windows either", async () => {
+  const ff = new FakeFirefox();
+  world(ff);
+  const x = await started(ff);
+  const stray = ff.addWindow({ type: "popup" }); // what Firefox's session brought back
+  const t = ff.addTab(stray.id, { url: "moz-extension://tidier/commandbar/commandbar.html#123", active: true });
+  for (const { f } of x.b.runtime.onConnect.ls) f({ name: "commandbar", sender: { id: "tidier", url: t.url, tab: ff.snap(t) }, postMessage() {}, onMessage: { addListener() {} }, onDisconnect: { addListener() {} } });
+  await wait(300);
+  assert.ok(!ff.wins.has(stray.id));
+  assert.ok(!(ff.recentlyClosed || []).some(c => c.window), "forgotten once Firefox lists it");
+  x.kill();
+});
+
+test("the key pressed again before the rows are ready is no error", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  await pressKey(ff, x, w.id);
+  const bar = barWindows(ff)[0], tab = ff.tabs.get(bar.order[0]);
+  const gone = [];
+  // As Firefox's port does once the page has gone.
+  for (const { f } of x.b.runtime.onConnect.ls) {
+    f({ name: "commandbar", sender: { id: "tidier", url: tab.url, tab: ff.snap(tab) }, postMessage() { throw new Error("Attempt to postMessage on disconnected port"); },
+      onMessage: { addListener() {} }, onDisconnect: { addListener: l => gone.push(l) } });
+  }
+  await wait(300);
+  assert.deepEqual([...x.js("problems")], []);
+  gone.forEach(l => l());
+  x.kill();
+});
+
+test("a space key with the bar open puts no tab in the bar's window", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  const page = await openBar(ff, x, w.id);
+  const tabs = ff.list(w.id).length;
+  x.b.commands.onCommand.fire("space-2");
+  await wait(300);
+  assert.equal(ff.list(page.bar.id).length, 1, "a small window has no spaces");
+  assert.equal(ff.list(w.id).length, tabs);
+  assert.equal(x.js("activeSpace").get(w.id), C1);
+  x.kill();
+});
+
+test("one other tab selected in the sidebar: what needs this tab is left out, and the rest acts on that tab", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  const other = ff.list(w.id).find(t => t.url === "https://there.example/page");
+  x.b.runtime.sendMessage = async msg => (msg.type === "commandBarSelection" ? [other.id] : undefined);
+  const page = await openBar(ff, x, w.id);
+  const names = page.sent[0].items.filter(i => i.kind === "command").map(c => c.name);
+  assert.ok(!names.includes("toggle-essential"), "it would pin the tab you are on, not the one selected");
+  assert.ok(names.includes("close-tab"));
+  await page.tell({ type: "choose", row: { kind: "command", name: "close-tab" } });
+  await wait(300);
+  assert.ok(!ff.tabs.has(other.id));
+  assert.ok(ff.list(w.id).some(t => t.url === "https://here.example/"), "the tab you are on stays");
+  x.kill();
+});
+
+test("closing several goes through the selected tab last, and a page's question holds up nothing else", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = world(ff);
+  const x = await started(ff);
+  const other = ff.list(w.id).find(t => t.url === "https://there.example/page");
+  x.b.runtime.sendMessage = async msg => (msg.type === "commandBarSelection" ? [a.id, other.id] : undefined);
+  const remove = x.b.tabs.remove, removed = [];
+  let answer;
+  x.b.tabs.remove = id => { removed.push(id); return id === a.id ? new Promise(r => { answer = () => r(remove(id)); }) : remove(id); };
+  const page = await openBar(ff, x, w.id);
+  page.tell({ type: "choose", row: { kind: "command", name: "close-tab" } });
+  await wait(300);
+  assert.deepEqual(removed.filter(id => id === a.id || id === other.id), [other.id, a.id]); // (and the other window's copy, by tab sync)
+  // The page is still asking whether you mean it: the queue goes on meanwhile.
+  assert.equal(await Promise.race([x.js("serial(async () => 'free')"), new Promise(r => setTimeout(r, 200, "stuck"))]), "free");
+  answer();
+  await wait(200);
+  assert.ok(!ff.tabs.has(a.id));
+  x.kill();
+});
+
+test("moving several to a space goes through the selected tab last", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = world(ff);
+  const x = await started(ff);
+  const other = ff.list(w.id).find(t => t.url === "https://there.example/page");
+  x.b.runtime.sendMessage = async msg => (msg.type === "commandBarSelection" ? [a.id, other.id] : undefined);
+  const moved = [];
+  x.js("globalThis.moved = []");
+  const page = await openBar(ff, x, w.id);
+  const create = x.b.tabs.create;
+  x.b.tabs.create = p => { moved.push(p.url); return create(p); };
+  await page.tell({ type: "choose", value: "firefox-container-3", row: { kind: "command", name: "move-to-space" } });
+  await wait(300);
+  const opened = moved.filter(u => /^https:/.test(u));
+  assert.deepEqual(opened, ["https://there.example/page", "https://here.example/"]);
+  x.kill();
+});
+
+test("a command with nothing to choose from is left out, and the folder a tab is in is not a choice", async () => {
+  const ff = new FakeFirefox({ containers: ["firefox-default", "firefox-container-1"] });
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = {
+    t: { url: "https://t.example/", title: "T", cookieStoreId: C1, parentKey: "f1", added: 1 },
+    f1: { group: true, own: true, name: "One", cookieStoreId: C1, parentKey: null, rank: 1, added: 1 },
+    f2: { group: true, own: true, name: "Two", cookieStoreId: C1, parentKey: null, rank: 2, added: 1 },
+    live: { group: true, own: true, name: "Pull requests", live: { search: "x" }, cookieStoreId: C1, parentKey: null, rank: 3, added: 1 },
+  };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://t.example/", title: "T", active: true, cookieStoreId: C1 }, { syncKey: "t", syncRole: "live" });
+  const x = await started(ff);
+  const page = await openBar(ff, x, w.id);
+  const commands = page.sent[0].items.filter(i => i.kind === "command");
+  assert.ok(!commands.some(c => c.name === "move-to-space"), "one space: nowhere to go");
+  assert.deepEqual(Array.from(commands.find(c => c.name === "move-to-folder").list, c => c.title), ["No folder", "Two"]);
+  x.kill();
+});
+
+test("a page with no address is not offered a move to another space", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = world(ff);
+  const settings = ff.addTab(w.id, { url: "about:preferences", title: "Settings", active: true });
+  ff.tabs.get(a.id).active = false;
+  const x = await started(ff);
+  const page = await openBar(ff, x, w.id);
+  assert.ok(!page.sent[0].items.some(i => i.name === "move-to-space"), `${settings.id}: it could only do nothing`);
+  x.kill();
+});
+
+test("an essential closed a moment ago does not empty the bar", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  const copy = ff.list(w.id).find(t => t.pinned);
+  x.js("keyByTab").delete(copy.id);
+  const read = x.b.sessions.getTabValue;
+  x.b.sessions.getTabValue = (id, name) => (id === copy.id ? Promise.reject(new Error(`Invalid tab ID: ${id}`)) : read(id, name));
+  const page = await openBar(ff, x, w.id);
+  assert.ok(page.sent[0].items.some(i => i.id === "tab:there"));
+  assert.deepEqual([...x.js("problems")], []);
+  x.kill();
+});
+
+test("a list that fails does not empty the bar", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  x.js("globalThis.archivedTabs = async () => { throw new Error('no list today'); }");
+  const page = await openBar(ff, x, w.id);
+  assert.ok(page.sent[0].items.some(i => i.id === "tab:there"));
+  x.kill();
+});
+
+test("a tab reopened in another window takes you there", async () => {
+  const ff = new FakeFirefox();
+  const { w, v } = world(ff);
+  const x = await started(ff);
+  x.b.sessions.restore = async () => ({ tab: { id: 1, windowId: w.id } });
+  const page = await openBar(ff, x, v.id);
+  await page.tell({ type: "choose", row: { kind: "closed", sessionId: "s", url: "https://closed.example/" } });
+  await wait(100);
+  assert.equal(ff.focused, w.id);
+  x.kill();
+});
+
+test("a closed tab Firefox can no longer bring back opens in its own space", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  x.b.sessions.restore = async () => { throw new Error("no such session"); };
+  const page = await openBar(ff, x, w.id);
+  await page.tell({ type: "choose", row: { kind: "closed", sessionId: "s", url: "https://closed.example/", space: C2 } });
+  await wait(100);
+  assert.equal(ff.list(w.id).find(t => t.url === "https://closed.example/")?.cookieStoreId, C2);
+  x.kill();
+});
+
+test("making a tab Tidier has just moved an essential is not missed", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = world(ff);
+  const x = await started(ff);
+  x.js(`syncBusy.add(${a.id})`); // for a moment after a move or a pull
+  const page = await openBar(ff, x, w.id);
+  await page.tell({ type: "choose", row: { kind: "command", name: "toggle-essential" } });
+  await wait(1500);
+  assert.equal(ff.synced.here, undefined, "it has left tab sync");
+  assert.ok(ff.store.essentials.some(e => e.url === "https://here.example/"), "and is an essential");
+  x.kill();
+});
+
+// The sidebar's side, with the selection package's own rule for selectedTabs.
+function sidebarLink({ selection, picked = [] }) {
+  const messages = [];
+  const sandbox = {
+    browser: { windows: { getCurrent: async () => ({ id: 7 }) }, runtime: { onMessage: { addListener: f => messages.push(f) } } },
+    document: { querySelector: selector => (selector === ".picked[data-tab]" && picked.length ? { dataset: { tab: String(picked[0]) } } : null) },
+    window: selection ? { selectedTabs: id => (picked.includes(Number(id)) ? picked : [id]) } : {},
+    Promise,
+  };
+  vm.runInNewContext(readFileSync(new URL("../sidebar/commandbar-link.js", import.meta.url), "utf8"), sandbox);
+  return msg => messages[0](msg);
+}
+
+test("the sidebar answers with the selection, also when the tab you are on is not in it", async () => {
+  await new Promise(r => setTimeout(r, 5));
+  const ask = async link => { await new Promise(r => setTimeout(r, 5)); return link({ type: "commandBarSelection", windowId: 7, tabId: 1 }); };
+  assert.deepEqual([...await ask(sidebarLink({ selection: true, picked: [2, 3] }))], [2, 3], "you are on an essential and selected two rows");
+  assert.deepEqual([...await ask(sidebarLink({ selection: true, picked: [1, 2] }))], [1, 2]);
+  assert.deepEqual([...await ask(sidebarLink({ selection: true }))], [1], "nothing selected: this tab");
+  assert.deepEqual([...await ask(sidebarLink({ selection: false }))], [1], "no selection in this sidebar at all");
+  const link = sidebarLink({ selection: true, picked: [2] });
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(link({ type: "commandBarSelection", windowId: 8, tabId: 1 }), undefined, "another window's question");
 });

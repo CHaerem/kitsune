@@ -222,7 +222,7 @@ addEventListener("keydown", e => {
   switch (e.key) {
     case "ArrowDown": if (n) select((selected + 1) % n); break;
     case "ArrowUp": if (n) select((selected - 1 + n) % n); break;
-    case "Enter": choose(rows[selected], e.metaKey || e.ctrlKey); break;
+    case "Enter": if (!e.repeat) choose(rows[selected], e.metaKey || e.ctrlKey); break; // held down, it would answer the question it has just brought up
     case "Escape": if (step) endStep(); else closeBar(true); break;
     case "Tab":
       if (rows[selected] && !step) { field.value = completionFor(rows[selected], field.value); lookUpMore(); update(); }
@@ -245,13 +245,17 @@ list.addEventListener("click", e => {
 
 // Losing the focus closes it, like Arc's. What counts is the window: inside it the focus can
 // hop away from the page and back (Firefox settles the new window), and then you can simply
-// go on typing. A moment later, for a window that is still getting the focus, and not while
-// Firefox's own prompt has it.
-addEventListener("blur", e => {
-  if (e.target !== window) return;
+// go on typing, unless it is Firefox's own prompt that has it. A moment later, for a window
+// that is still getting the focus. The window's own event too: with the prompt open the page
+// has already lost the focus, so going to another window brings it no blur, and the bar would
+// stay behind that window with its prompt, until the key closed it instead of opening it.
+function focusWent() {
   setTimeout(async () => {
-    if (asking || document.hasFocus()) return;
+    if (document.hasFocus()) return;
     const win = await browser.windows.getCurrent();
-    if (win.focused) { window.focus(); field.focus(); } else closeBar(false);
+    if (!win.focused) closeBar(false);
+    else if (!asking) { window.focus(); field.focus(); }
   }, 50);
-});
+}
+addEventListener("blur", e => { if (e.target === window) focusWent(); });
+browser.windows.onFocusChanged.addListener(focusWent);
