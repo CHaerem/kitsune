@@ -1605,3 +1605,24 @@ test("a ghost created a moment ago does not take over from an unloaded live tab"
   assert.equal(ff.values.get(fresh.id).syncRole, "ghost");
   x.kill();
 });
+
+test("a pinned tab in a private window does not become an essential, at a start or when pinned", async () => {
+  const ff = new ChaosFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const p = ff.addWindow();
+  p.incognito = true;
+  const pinned = ff.addTab(p.id, { url: "https://private.example/", pinned: true, active: true, incognito: true, cookieStoreId: "firefox-private" });
+  ff.containers.add("firefox-private");
+  const later = ff.addTab(p.id, { url: "https://private2.example/", incognito: true, cookieStoreId: "firefox-private" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.ok((ff.store.essentials ?? []).every(e => !e.url.includes("private")));
+  ff.pinTab(later);
+  await ff.clock.idle(60000);
+  assert.ok((ff.store.essentials ?? []).every(e => !e.url.includes("private")), "the address stays in the private window");
+  assert.ok(ff.tabs.has(pinned.id));
+  assert.equal(ff.list(w.id).filter(t => t.pinned).length, 0);
+  x.kill();
+});

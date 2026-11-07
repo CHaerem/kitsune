@@ -66,7 +66,7 @@ async function initList() {
   const once = [...new Map([...existing].reverse().map(e => [e.key, e])).values()].reverse();
   if (once.length !== existing.length) setList(once);
   if (once.length) return once;
-  const wins = await browser.windows.getAll({ populate: true, windowTypes: ["normal"] });
+  const wins = (await browser.windows.getAll({ populate: true, windowTypes: ["normal"] })).filter(w => !w.incognito);
   wins.sort((a, b) => b.tabs.filter(t => t.pinned).length - a.tabs.filter(t => t.pinned).length);
   const list = [];
   for (const t of wins[0]?.tabs.filter(t => t.pinned && isWeb(t.url)) || []) {
@@ -196,6 +196,7 @@ async function ensureAllWindows() {
 // or a live folder tab never opened) stands for its synced tab's page; tab
 // sync forgets that tab right after this (tabsync.js), so it is read first.
 async function onPinned(tab) {
+  if (tab.incognito) return; // its address must not reach the list, or other windows
   // An essential dragged to another window arrives there as a pinned tab, as
   // if it was just pinned; it is still the same essential (see onAttached).
   const known = keyByTab.get(tab.id);
@@ -563,7 +564,7 @@ async function essentialsAgree() {
   let list = await getList();
   const added = [];
   for (const [i, t] of pinned.entries()) {
-    if (!isWeb(t.url) || list.some(e => e.key === keys[i] || (e.url === t.url && e.cookieStoreId === t.cookieStoreId))) continue;
+    if (t.incognito || !isWeb(t.url) || list.some(e => e.key === keys[i] || (e.url === t.url && e.cookieStoreId === t.cookieStoreId))) continue;
     keys[i] ??= crypto.randomUUID();
     await tagTab(t.id, keys[i]);
     added.push({ key: keys[i], url: t.url, cookieStoreId: t.cookieStoreId, title: t.title, icon: t.favIconUrl });
