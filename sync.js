@@ -332,7 +332,7 @@ async function syncApplyRecord(doc, here, idOf) {
   for (const [key, item] of Object.entries(doc.saved)) {
     if (!item.gone || !syncOwn(here.saved, key) || !all[key]) continue;
     // (Looked at now: you may have opened one while the others were being handled.)
-    if (syncIsOpen(repsOf(key, await browser.tabs.query({})))) { all[key].parentKey = null; noteSaved(all, [key]); saveSynced(all); }
+    if (syncIsOpen(await repsNow(key))) { all[key].parentKey = null; noteSaved(all, [key]); saveSynced(all); }
     else await closeEverywhere(key, { dismiss: false });
     changed = true;
   }

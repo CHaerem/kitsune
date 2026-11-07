@@ -317,7 +317,7 @@ async function recordIntoSpace(key, created, space) {
     all[key].cookieStoreId = space;
     saveSynced(all);
   }
-  const old = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== created.id);
+  const old = (await repsNow(key)).filter(t => t.id !== created.id); // tabsync.js
   old.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   const perWindow = new Map();
   for (const t of old) if (t.windowId !== created.windowId && (t.active || !perWindow.has(t.windowId))) perWindow.set(t.windowId, t);
@@ -895,7 +895,7 @@ async function moveFolderToSpace(key, space, windowId) {
       continue;
     }
     all[k].cookieStoreId = space;
-    const reps = repsOf(k, await browser.tabs.query({}));
+    const reps = await repsNow(k); // tabsync.js: only this tab's, not every tab once per tab
     reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
     await browser.tabs.remove(reps.map(t => t.id)).catch(() => {});
     await forgetClosedPlaceholders("ghost", [k]);

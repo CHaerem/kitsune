@@ -52,5 +52,5 @@ async function renameTab(tabId, name) {
   const key = syncKeyByTab.get(tabId), all = await getSynced();
   if (!all[key]?.saved || !setName(all[key], text)) return;
   saveSynced(all);
-  await redrawPlaceholders(repsOf(key, await browser.tabs.query({})));
+  await redrawPlaceholders(await repsNow(key));
 }
