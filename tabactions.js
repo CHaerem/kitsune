@@ -114,10 +114,11 @@ const TAB_ACTIONS = {
   newFolder: async (windowId, reals, { space }) => {
     await moveRealsTo(windowId, reals, await createFolder(folderNameFor(reals), space));
   },
-  // The selected tab last: stepping off it onto a tab that is leaving too would select that
-  // one for a moment, and load it if it is a placeholder (moveToSpace, safemoves.js).
+  // In order, so that they arrive in order; the selected tab must then not step onto one
+  // still to come (leavesQuietly, safemoves.js). A row can be a placeholder, so both ids count.
   space: async (windowId, reals, { space }) => {
-    for (const r of [...reals].sort((a, b) => a.tab.active - b.tab.active)) await moveToSpace(r.own.id, space);
+    const leaving = reals.flatMap(r => [r.own.id, r.tab.id]);
+    for (const r of reals) await moveToSpace(r.own.id, space, leaving);
   },
   rule: (windowId, reals) => alwaysOpenHere(windowId, reals[0]),
 };

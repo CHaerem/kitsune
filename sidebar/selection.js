@@ -83,17 +83,12 @@
     paint();
   }
 
-  // The selected tab last, when all of them are leaving. Gone first, it would make Firefox
-  // select another that may be about to leave too, and a placeholder that is selected starts
+  // One close per tab, the selected tab last. Closed first, it would make Firefox select
+  // another that may be about to close too, and a placeholder that is selected starts
   // pulling its real tab in (pull, tabsync.js), under a new id, while its close is on the way.
-  const selectedLast = ids => {
-    const selected = id => Number(element(id).classList.contains("active"));
-    return ids.sort((a, b) => selected(a) - selected(b));
-  };
-
-  // One close per tab.
   function closePicked() {
-    const ids = selectedLast(inOrder());
+    const selected = id => Number(element(id).classList.contains("active"));
+    const ids = inOrder().sort((a, b) => selected(a) - selected(b));
     clear();
     for (const tabId of ids) send({ type: "close", tabId });
   }
@@ -117,7 +112,6 @@
   function carry(msg) {
     const ids = inOrder();
     if (msg.pinned === false) ids.reverse();
-    if (msg.type === "moveToSpace") selectedLast(ids); // a move to a space closes them here
     // Dropped on one of the tabs that are moving: the place is in front of the next that is not.
     let before = msg.before;
     while (picked.has(before)) {
@@ -125,7 +119,10 @@
       before = next ? idOf(next) : null;
     }
     if (before !== undefined && alreadyThere(ids, before, msg.folder)) return;
-    for (const tabId of ids) send({ ...msg, tabId, before });
+    // In order, or they would not arrive in order. So the selected tab can go first, and
+    // must know what not to step onto while the others are still here (leavesQuietly).
+    const leaving = msg.type === "moveToSpace" ? { leaving: ids } : {};
+    for (const tabId of ids) send({ ...msg, tabId, before, ...leaving });
   }
 
   // A plain click clears, except on what you use on the way to acting on a selection:

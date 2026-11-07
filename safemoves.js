@@ -66,10 +66,12 @@ async function pageTab(tab, key) {
 // to the tab you used last in that space, which is where closing it would take you
 // anyway, or to a new tab if it was the last one there, and you come back if the page
 // refuses. `live` is the real tab (pageTab): a row can be a placeholder, its page loaded
-// and selected in another window.
-async function leavesQuietly(live, key) {
+// and selected in another window. `leaving`: the other tabs of one move of several. Stepping
+// onto one would select it for a moment, and a placeholder that is selected starts pulling
+// its real tab in (pull, tabsync.js), under a new id, while its own move is on the way.
+async function leavesQuietly(live, key, leaving = []) {
   if (!live?.active || live.discarded || isGhostUrl(live.url)) return closesQuietly(key, live?.id);
-  const last = await lastUsedIn(live.windowId, live.cookieStoreId, live.id);
+  const last = await lastUsedIn(live.windowId, live.cookieStoreId, live.id, ...leaving);
   const step = last ?? await browser.tabs.create({ windowId: live.windowId, cookieStoreId: live.cookieStoreId, active: false });
   await browser.tabs.update(step.id, { active: true });
   if (await closesQuietly(key, live.id)) return true;

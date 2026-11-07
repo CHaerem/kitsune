@@ -129,7 +129,7 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "clearSpace") await clearSpace(windowId, msg.space); // quiet.js
   else if (msg.type === "moveFolder") await moveFolder(msg.key, msg.before ?? null);
   else if (msg.type === "moveTab") await moveTab(windowId, msg.tabId, msg.before ?? null, msg.folder);
-  else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space);
+  else if (msg.type === "moveToSpace") await moveToSpace(msg.tabId, msg.space, msg.leaving);
   else if (msg.type === "pin") await browser.tabs.update(msg.tabId, { pinned: msg.pinned });
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
   else if (msg.type === "tabAction") await tabAction(windowId, msg); // tabactions.js

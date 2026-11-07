@@ -628,21 +628,38 @@ test("Move to space moves the placeholder's page, and you stay", async () => {
   x.kill();
 });
 
-test("Move to space with several: the selected tab goes last, so you never land on one that is leaving", async () => {
+test("Move to space with several: they arrive in order, and the selected tab never steps onto one still to come", async () => {
   const ff = new FakeFirefox();
   ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
   const w = ff.addWindow({ focused: true });
   const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
-  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
-  const other = ff.addTab(w.id, { url: "https://other.example/", cookieStoreId: C1 });
+  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1, lastAccessed: 200 }, { syncKey: "b", syncRole: "live" }); // used last
+  const other = ff.addTab(w.id, { url: "https://other.example/", cookieStoreId: C1, lastAccessed: 100 });
   const x = await alone(ff);
   const selected = [];
   x.b.tabs.onActivated.addListener(({ tabId }) => selected.push(tabId));
   await act(x, w.id, "space", [a.id, b.id], { space: C2 });
   await wait(500);
   assert.ok(!ff.tabs.has(a.id) && !ff.tabs.has(b.id));
-  assert.ok(!selected.includes(b.id), "b has left before you step off a");
+  assert.ok(!selected.includes(b.id), "b is still to come when you step off a");
   assert.equal(ff.list(w.id).find(t => t.active).id, other.id);
+  assert.deepEqual(ff.list(w.id).filter(t => t.cookieStoreId === C2).map(t => t.url), ["https://a.example/", "https://b.example/"]);
+  x.kill();
+});
+
+test("Move to space of every tab of the space: you land on a new tab there, and stay", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const b = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  const x = await alone(ff);
+  await act(x, w.id, "space", [a.id, b.id], { space: C2 });
+  await wait(500);
+  assert.ok(!ff.tabs.has(a.id) && !ff.tabs.has(b.id));
+  const on = ff.list(w.id).find(t => t.active);
+  assert.equal(on.cookieStoreId, C1, "you stay in your space");
+  assert.ok(![a.id, b.id].includes(on.id) && !/^https/.test(on.url), "on a new tab");
   x.kill();
 });
 

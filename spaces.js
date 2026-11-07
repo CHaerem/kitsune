@@ -75,9 +75,9 @@ async function showSpace(windowId) {
 }
 
 // The tab to go back to in a space: the one used last, an essential counts.
-async function lastUsedIn(windowId, space, exceptId) {
+async function lastUsedIn(windowId, space, ...except) {
   const tabs = await browser.tabs.query({ windowId, cookieStoreId: space }).catch(() => []);
-  return tabs.filter(t => t.id !== exceptId).sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  return tabs.filter(t => !except.includes(t.id)).sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 }
 
 // Switching: back to the tab you used last in that space, else a new tab there.
