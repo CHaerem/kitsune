@@ -1120,3 +1120,19 @@ test("an essential's copy closed just after it was made comes back", async () =>
   assert.equal(ff.list(w.id).filter(t => t.pinned).length, 1, "the window has it again");
   x.kill();
 });
+
+test("of two loaded copies, the selected one stays, also in a window you are not using", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const focused = ff.addWindow({ focused: true });
+  ff.addTab(focused.id, { url: "about:blank", active: true });
+  const one = ff.addWindow();
+  ff.addTab(one.id, { url: "about:blank", active: true });
+  const live = ff.addTab(one.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const two = ff.addWindow();
+  const shown = ff.addTab(two.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  assert.equal(ff.values.get(shown.id).syncRole, "live");
+  assert.equal(ff.tabs.get(live.id).discarded, true);
+  x.kill();
+});
