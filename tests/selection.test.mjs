@@ -457,7 +457,10 @@ test("a tab pinned right after a move, or while Tidier is busy with it, leaves t
   x.kill();
 });
 
-test("with the setting off, a tab Tidier is busy with is left alone when pinned, as before", async () => {
+// With the setting off too since the chaos test (tabsync.js): Tidier pins no synced tab
+// itself, so a pin is yours, also while Tidier is busy with the tab; missed, it would stay
+// both an essential and a synced tab.
+test("with the setting off too, a tab Tidier is busy with leaves the tab record when you pin it", async () => {
   const ff = new FakeFirefox();
   ff.store.syncedTabs = { a: entry("https://a.example/") };
   const w = ff.addWindow({ focused: true });
@@ -467,7 +470,7 @@ test("with the setting off, a tab Tidier is busy with is left alone when pinned,
   x.js("syncBusy").add(a.id);
   await x.b.tabs.update(a.id, { pinned: true });
   await wait(1000);
-  assert.ok(ff.synced.a);
+  assert.ok(!ff.synced.a);
   x.kill();
 });
 
@@ -542,7 +545,9 @@ test("an essential's pin counts even on a copy Tidier has just made", async () =
   x.kill();
 });
 
-test("with the setting off, a copy Tidier is busy with is left alone when unpinned, as before", async () => {
+// Tidier never unpins a copy, so an unpin is yours, also just after the copy appeared (an
+// unpin for a moment while Sidebery moves it is waited out: UNPIN_SETTLE_MS, essentials.js).
+test("with the setting off too, a copy Tidier is busy with is no essential once you unpin it", async () => {
   const ff = new FakeFirefox();
   ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
   const w = ff.addWindow({ focused: true });
@@ -553,7 +558,7 @@ test("with the setting off, a copy Tidier is busy with is left alone when unpinn
   await x.b.tabs.update(t.id, { pinned: false });
   await wait(1000);
   await x.js("flushWrites")();
-  assert.equal(ff.store.essentials.length, 1);
+  assert.equal(ff.store.essentials.length, 0);
   x.kill();
 });
 

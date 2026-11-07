@@ -205,7 +205,7 @@ test("a known tab outside any container comes back in the space, and is still th
   const ghost = ff.addTab(other.id, { url: GHOST("ghost", "k") }, { syncKey: "k", syncRole: "ghost" });
   const x = await run(ff);
   assert.equal((await ff.request({ tabId: t.id, url: "https://old.example/" })).cancel, true, "Firefox restoring it");
-  await wait(500);
+  await wait(1500); // through the queue, which has the start's own jobs too
   assert.ok(!ff.tabs.has(t.id));
   assert.ok(!ff.tabs.has(ghost.id));
   assert.equal(ff.synced.k.cookieStoreId, A);

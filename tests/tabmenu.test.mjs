@@ -189,7 +189,9 @@ async function twoWindows(ff, key = "a", more = {}) {
   ff.addTab(there.id, { url: "https://other.example/2", active: true, cookieStoreId: C1 });
   const ghost = ff.addTab(here.id, { url: GHOST("ghost", key), title: "ghost", cookieStoreId: C1 }, { syncKey: key, syncRole: "ghost" });
   const live = ff.addTab(there.id, { url: "https://a.example/page", title: "Page", cookieStoreId: C1 }, { syncKey: key, syncRole: "live" });
-  return { here, there, ghost, live, x: await alone(ff) };
+  const x = await alone(ff);
+  await wait(2000); // the pages Tidier finds at the start get their placeholders a moment later (seeUnseenTabs, tabsync.js)
+  return { here, there, ghost, live, x };
 }
 
 test("realOf: a placeholder of a page live in another window", async () => {

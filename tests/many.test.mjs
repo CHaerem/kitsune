@@ -833,7 +833,8 @@ test("a tab gone when Tidier looks over its record is not remembered for a refre
   const all = await x.js("getSynced")();
   all.gone = entry("https://gone.example/");
   x.js("lastRefresh").set("gone", 1);
-  await x.js("serial")(() => x.js("reconcileAll")());
+  // (Only right after Firefox starts is a tab with no copy taken for closed: chaos test.)
+  await x.js("serial")(() => x.js("reconcileAll")({ firefoxStart: true }));
   assert.equal(all.gone, undefined);
   assert.equal(x.js("lastRefresh").size, 0);
   x.kill();

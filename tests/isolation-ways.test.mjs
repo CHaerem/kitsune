@@ -156,7 +156,11 @@ test("a pinned page loaded outside any space when Tidier starts is moved too, pi
   const x = await run(ff);
   await wait(1500);
   assert.ok(!ff.tabs.has(plain.id), "not left outside a space");
-  const [moved] = opened(ff, w.id, "https://pinned.example/");
+  // A pinned page the list does not know is an essential once Tidier has started
+  // (seeUnseenTabs, tabsync.js), so it moves as one: pinned, in the space.
+  const made = ff.store.essentials.find(e => e.url === "https://pinned.example/");
+  assert.equal(made?.cookieStoreId, A);
+  const [moved] = ff.list(w.id).filter(t => ff.values.get(t.id)?.essentialKey === made.key);
   assert.equal(moved.cookieStoreId, A);
   assert.equal(moved.pinned, true);
   assert.ok(!ff.tabs.has(essential.id));

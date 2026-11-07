@@ -1368,6 +1368,7 @@ test("without Tidier alone, a removed container leaves the record as it was", as
   ff.managed = {};
   ff.store.syncedTabs = { saved: { url: "https://saved.example/", title: "Saved", cookieStoreId: c(2), parentKey: null, group: false, added: 1 } };
   const x = await boot(ff);
+  await wait(2000); // the tab Tidier finds at the start is registered a moment later (seeUnseenTabs, tabsync.js)
   const writes = ff.storeWrites;
   x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: c(2) } });
   await wait(500);
