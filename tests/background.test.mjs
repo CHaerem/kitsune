@@ -1287,7 +1287,9 @@ test("an essential reopened after you unpinned it is an essential again", async 
   await ff.clock.run(3000);
   ff.pinTab(t);
   await ff.clock.idle(60000);
-  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id)); // closes the loaded copy in the first window
+  ff.closeTab(t.id); // the loaded copy, closed by you: an unloaded one takes its place
+  await ff.clock.idle(60000);
+  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
   await ff.clock.idle(60000);
   assert.deepEqual(ff.store.essentials, []);
   ff.focusWindow(a.id);
@@ -1484,5 +1486,89 @@ test("an essential's tile shows the title its page has now", async () => {
   ff.updated(t, { title: t.title });
   await ff.clock.idle(60000);
   assert.equal(ff.views.get(w.id).essentials[0].title, "(3) E");
+  x.kill();
+});
+
+// --- What ⌘⇧T brings back, and what else a second look at the chaos test found ------------
+const closedPages = ff => ff.closedItems.filter(c => c.kind === "tab").map(c => c.state.url);
+async function aloneStart({ windows = 2 } = {}) {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  const made = [];
+  for (let i = 0; i < windows; i++) {
+    const w = ff.addWindow({ focused: i === 0 });
+    ff.addTab(w.id, { url: "about:home", active: true, cookieStoreId: C1 });
+    made.push(w);
+  }
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "install" });
+  await ff.clock.run(3000);
+  return { ff, x, windows: made };
+}
+
+test("a link opened again in its space is not left in Recently Closed, but the page you then close is", async () => {
+  const { ff, x, windows: [w] } = await aloneStart({ windows: 1 });
+  ff.openTab(w.id, { url: "https://link.example/", active: true }); // from another app: no container
+  await ff.clock.run(1000);
+  const page = ff.list(w.id).find(t => t.url === "https://link.example/");
+  assert.equal(page.cookieStoreId, C1, "it is in the space");
+  assert.deepEqual(closedPages(ff), [], "and its first copy is not what ⌘⇧T brings back");
+  ff.closeTab(page.id);
+  await ff.clock.idle(60000);
+  assert.deepEqual(closedPages(ff), ["https://link.example/"]);
+  x.kill();
+});
+
+test("a tab moved to another space is not left in Recently Closed in the space it left", async () => {
+  const { ff, x, windows: [w] } = await aloneStart({ windows: 1 });
+  const t = ff.openTab(w.id, { url: "https://m.example/", active: true, cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.connectSidebar(w.id);
+  await ff.clock.run(100);
+  ff.sidebarSays(w.id, { type: "moveToSpace", tabId: t.id, space: "firefox-container-2" });
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.list(w.id).filter(y => y.url === "https://m.example/").map(y => y.cookieStoreId), ["firefox-container-2"]);
+  assert.deepEqual(closedPages(ff), []);
+  x.kill();
+});
+
+test("a placeholder you pin does not leave its page in Recently Closed, to come back beside the essential", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://p.example/", active: true, cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  const ghost = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === ff.values.get(t.id).syncKey);
+  ff.pinTab(ff.tabs.get(ghost.id));
+  await ff.clock.idle(60000);
+  assert.ok(!ff.tabs.has(t.id), "the page was closed");
+  assert.deepEqual(closedPages(ff), []);
+  x.kill();
+});
+
+test("a loaded essential closed because you unpinned its copy is not left in Recently Closed", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", active: true, cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
+  await ff.clock.idle(60000);
+  assert.ok(!ff.tabs.has(t.id), "the loaded copy was closed");
+  assert.deepEqual(closedPages(ff), [], "the page is open in the other window now");
+  x.kill();
+});
+
+test("a ghost with a real address that goes as a double is not left in Recently Closed", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  ff.addTab(w.id, { url: "https://a.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  // As a window reopened and then dragged from: Firefox unloaded it, and it stayed a ghost.
+  ff.addTab(w.id, { url: "https://a.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(w.id).filter(t => t.url === "https://a.example/").length, 1);
+  assert.deepEqual(closedPages(ff), []);
   x.kill();
 });

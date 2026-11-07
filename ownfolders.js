@@ -108,6 +108,7 @@ async function moveToSpace(tabId, space) {
   await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: false });
   if (key) await closeEverywhere(key, { dismiss: false });
   else await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPages([url]); // you moved it: ⌘⇧T must not bring it back in the space it left
 }
 
 // --- The tab's context menu in the sidebar -----------------------------------------

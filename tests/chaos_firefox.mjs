@@ -171,7 +171,7 @@ export class ChaosFirefox extends FakeFirefox {
   patchEvent(e, name) {
     const ff = this, gen = this.gen;
     e.fire = (...args) => {
-      ff.trace("event", name, JSON.stringify(args[0]?.id ?? args[0]), args[1] !== undefined ? JSON.stringify(args[1]).slice(0, 100) : "");
+      ff.trace("event", name, JSON.stringify(args[0]?.id ?? args[0]), args[0]?.url ?? "", args[1] !== undefined ? JSON.stringify(args[1]).slice(0, 100) : "");
       ff.send("down", () => {
         if (gen !== ff.gen) return;
         for (const { f, filter } of [...e.ls]) {

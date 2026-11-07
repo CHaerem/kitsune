@@ -219,6 +219,7 @@ async function byRule(tabId, url) {
   newTabs.delete(tabId);
   await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
   await browser.tabs.remove(tabId).catch(() => {});
+  await forgetClosedPages([url]); // the same as in intoSpace, below
 }
 
 async function intoSpace(tabId) {
@@ -233,6 +234,9 @@ async function intoSpace(tabId) {
   if (url !== undefined && !isWeb(url)) return;
   await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: tab.index + 1 }).catch(ifGone);
   await browser.tabs.remove(tab.id).catch(() => {});
+  // The page is open in its space: in Recently Closed it would come back by ⌘⇧T, a second
+  // time, instead of the tab you closed.
+  if (url) await forgetClosedPages([url]);
 }
 
 // --- When Tidier starts ------------------------------------------------------

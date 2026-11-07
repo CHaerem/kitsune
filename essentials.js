@@ -254,9 +254,16 @@ async function onUnpinned(tab) {
   }
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
-  const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
-  await removeTabs(copies, busy);
+  const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key);
+  await removeTabs(copies.map(t => t.id), busy);
+  await forgetClosedCopies(key, copies);
+}
+
+// Copies Tidier closed. In Recently Closed, ⌘⇧T would bring one back instead of the tab you
+// closed: a placeholder as a double, and a loaded copy as the page a second time.
+async function forgetClosedCopies(key, closed) {
   await forgetClosedPlaceholders("essential", [key]);
+  await forgetClosedPages(closed.filter(t => !isGhostUrl(t.url)).map(t => t.url));
 }
 
 // Essential closed: add it back, unloaded, in the same window.
@@ -434,10 +441,10 @@ async function dropDoubleCopies(tabId, windowId) {
   if (tab.discarded && isGhostUrl(tab.url)) await browser.tabs.update(tabId, { url: ghostUrl("essential", key) }).catch(() => {});
   const pinned = await browser.tabs.query({ windowId, pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
-  const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
+  const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key);
   if (!doubles.length) return;
-  await removeTabs(doubles, busy);
-  await forgetClosedPlaceholders("essential", [key]);
+  await removeTabs(doubles.map(t => t.id), busy);
+  await forgetClosedCopies(key, doubles);
   await sortEssentials(windowId, await getList());
 }
 

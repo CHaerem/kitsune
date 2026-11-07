@@ -46,6 +46,7 @@ class World {
     this.essentials = new Map(); // essential key -> its address
     this.goneEssentials = new Set();
     this.closedAddresses = new Set();
+    this.broughtBack = new Set(); // addresses a window you reopened brought back
     this.relaxed = false;        // a folder page closed in one window: that window lacks tabs until it is filled again
     this.violations = [];
     this.x = null;
@@ -91,6 +92,9 @@ class World {
     const all = await this.read("getSynced()"), list = await this.read("getList()");
     for (const key of Object.keys(all)) if (!this.ff.store.syncedTabs?.[key]) this.excused.add(key);
     for (const e of list) if (!this.ff.store.essentials?.some(x => x.key === e.key)) this.goneEssentials.add(e.key);
+    // A tab pinned or unpinned that moment is both again: the record and the list were not written.
+    for (const [key, e] of Object.entries(this.ff.store.syncedTabs ?? {})) if (!all[key]) this.broughtBack.add(e.url);
+    for (const e of this.ff.store.essentials ?? []) if (!list.some(x => x.key === e.key)) this.broughtBack.add(e.url);
   }
   // You closed `t`, or are about to.
   async closing(t) {
@@ -187,7 +191,14 @@ const OPS = {
     W.ff.closeWindow(w.id);
   } },
   // ⌘⇧T: the last thing closed, a tab or a whole window.
-  reopen: { weight: 4, run(W) { W.ff.reopenLast(); } },
+  reopen: { weight: 4, run(W) {
+    const closedAt = W.ff.closedItems[0]?.at, back = W.ff.reopenLast();
+    // A whole window brings back what it held when it closed, also what has been closed or pinned since.
+    if (back?.order) for (const t of W.tabsOf(back)) W.broughtBack.add(t.url);
+    // And a tab Tidier closed a moment ago, opening it elsewhere, cannot be told from what you
+    // closed until Recently Closed has been told: no hand is that quick.
+    else if (back && W.clock.now - closedAt < 1000) W.broughtBack.add(back.url);
+  } },
   // A sign-in popup: not a tab you keep.
   popup: { weight: 1, run(W) { W.ff.openWindow({ type: "popup", url: W.newUrl() }); } },
   closePopup: { weight: 1, run(W) { for (const w of [...W.ff.wins.values()]) if (w.type !== "normal") W.ff.closeWindow(w.id); } },
@@ -437,6 +448,18 @@ async function check(W, phase, { strong }) {
         if (strong && isWeb(t.url) && !t.discarded && W.value(t, "syncRole") !== "live") bad("page-not-live", `${key}: tab ${t.id} shows ${t.url} but is a ${W.value(t, "syncRole")}`);
       }
     }
+    // Nothing doubled. Every address in a sequence is a new one, so one address on two records
+    // is one tab made twice, and on a record and an essential a tab that did not leave tab sync.
+    // (A value refused while a tab is registered leaves a record no tab has: Firefox refuses
+    // those only for a tab that has gone. And before Tidier has started, a placeholder you
+    // select opens its page, and one you drag loses its values: nothing can tell them apart.)
+    const onRecord = new Map();
+    for (const [key, e] of Object.entries(all)) {
+      if (ff.refusals || W.usedEarly || e.group || !e.url || W.broughtBack.has(e.url)) continue;
+      if (onRecord.has(e.url)) bad("doubled", `${e.url} is on ${onRecord.get(e.url)} and ${key}`);
+      if (list.some(x => x.url === e.url)) bad("doubled", `${e.url} is on ${key} and is an essential`);
+      onRecord.set(e.url, key);
+    }
     // No tab outside the record, except new tab pages and what is not a page.
     for (const t of tabs) {
       if (t.pinned) continue;
@@ -566,6 +589,7 @@ export async function play(seq, { trace = false } = {}) {
       W.ff.rng = randoms(act.r);
       if (trace) console.error(`--- ${JSON.stringify(act)}`);
       await W.observe();
+      if (!W.x.js("started")) W.usedEarly = true;
       await OPS[act.op].run(W, act);
       await W.clock.run(act.d);
     }

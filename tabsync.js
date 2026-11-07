@@ -73,6 +73,14 @@ function clearRole(tabId) {
   ]).catch(ifGone);
 }
 
+// What Tidier closed of a tab that is still open elsewhere. In Recently Closed, ⌘⇧T would bring
+// it back instead of the tab you closed: a placeholder as a double, and a real address (a tab
+// unloaded by Firefox can be a ghost) as the page a second time, under a new key.
+async function forgetClosedReps(key, closed) {
+  await forgetClosedPlaceholders("ghost", [key]);
+  await forgetClosedPages(closed.filter(t => !isGhostUrl(t.url)).map(t => t.url));
+}
+
 // Tabs that represent `key` (live, ghost or copy).
 function repsOf(key, tabs) {
   return tabs.filter(t => syncKeyByTab.get(t.id) === key);
@@ -371,7 +379,7 @@ async function reconcileAll({ firefoxStart = false } = {}) {
       const ghosts = here.filter(t => syncRoleByTab.get(t.id) === "ghost");
       const extra = here.length > ghosts.length ? ghosts : ghosts.slice(1);
       for (const t of extra) { forget(t.id); await removeTabs([t.id], syncBusy); }
-      if (extra.length) await forgetClosedPlaceholders("ghost", [key]);
+      if (extra.length) await forgetClosedReps(key, extra);
     }
   }
   noteSaved(all); // also gives tabs that were in folders before saved tabs existed their address
@@ -448,7 +456,7 @@ async function reopenedSaved(tab, all) {
     forget(t.id);
     await removeTabs([t.id], syncBusy);
   }
-  await forgetClosedPlaceholders("ghost", [key]);
+  await forgetClosedReps(key, reps.filter(t => t.windowId === tab.windowId));
   if (isWeb(tab.url)) Object.assign(entry, { url: tab.url, title: tab.title, icon: tab.favIconUrl || entry.icon });
   saveSynced(all);
   return true;
@@ -607,7 +615,7 @@ async function pull(ghostId) {
       browser.tabs.remove(ghostId).catch(ifGone),
       parentId !== undefined ? browser.tabs.update(live.id, { openerTabId: parentId }).catch(() => {}) : null,
     ]);
-    await forgetClosedPlaceholders("ghost", [key]);
+    await forgetClosedReps(key, [ghost]);
     if (entry) {
       // A never-loaded live tab is still a placeholder page; keep the real URL then.
       if (isWeb(live.url)) Object.assign(entry, { url: live.url, title: live.title, icon: live.favIconUrl || entry.icon });
@@ -743,7 +751,7 @@ async function leaveSync(tabId, key) {
   const others = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== tabId);
   others.forEach(t => forget(t.id));
   await removeTabs(others.map(t => t.id), syncBusy);
-  await forgetClosedPlaceholders("ghost", [key]);
+  await forgetClosedReps(key, others); // you pinned its placeholder, and the page is an essential now
 }
 
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {

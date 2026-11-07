@@ -108,20 +108,30 @@ const placeholderOf = url => {
 // a moment after it is closed (Firefox saves its state first), so each is
 // looked for again whenever that list changes, for FORGET_MS. (An essential
 // copy's address may end in "&placed=N", see essentials.js.)
-const FORGET_MS = 10000;
-const toForget = new Map(); // placeholder URL -> until when to look for it
-async function forgetClosedPlaceholders(kind, keys) {
-  for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
-  setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
+//
+// The same goes for a real page Tidier closed because it is open elsewhere (opened again in
+// its space, say). That is looked for only until it is found, and not for long: a moment
+// later you may close the page itself, and that one ⌘⇧T must bring back.
+const FORGET_MS = 10000, FORGET_PAGE_MS = 3000;
+const toForget = new Map(); // address -> { until when to look for it, whether once is enough }
+const forgetClosedPlaceholders = (kind, keys) => forgetClosed(keys.map(k => ghostUrl(kind, k)), FORGET_MS, false);
+const forgetClosedPages = urls => forgetClosed(urls, FORGET_PAGE_MS, true);
+async function forgetClosed(urls, ms, once) {
+  if (!urls.length) return;
+  for (const url of urls) toForget.set(url, { until: Date.now() + ms, once });
+  setTimeout(forgetClosedNow, ms + 100); // so the list empties also if nothing else changes
   await forgetClosedNow();
 }
 async function forgetClosedNow() {
-  for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
+  for (const [url, { until }] of toForget) if (until < Date.now()) toForget.delete(url);
   if (!toForget.size) return;
-  const ours = url => [...toForget.keys()].some(p => url === p || url?.startsWith(p + "&"));
+  const ours = url => [...toForget.keys()].find(p => url === p || url?.startsWith(p + "&"));
   const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
   for (const t of closed.map(item => item.tab).filter(Boolean)) {
-    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+    const found = ours(t.url);
+    if (found === undefined) continue;
+    if (toForget.get(found).once) toForget.delete(found);
+    await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
   }
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
