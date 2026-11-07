@@ -3,8 +3,11 @@
 // Each space keeps how far down its list you were, while this sidebar is open. And the
 // list moves by itself for one thing only: the selected tab became another one, which is
 // wholly out of view. Then it moves by the least distance, and leaves you alone from
-// there. A clicked row is in view, so it never moves under the pointer; a tab opened in
-// the background is not selected, so it does not move the list at all.
+// there. A clicked row is in view, so the list does not move under the pointer; a tab
+// opened in the background is not selected, so it does not move the list at all. (One
+// exception: leaving a selected tab in a closed folder takes its row out of the list, so
+// rows below it in view come up by one row. With that row above the view nothing shows,
+// since Firefox keeps what you see in place.)
 //
 // In a block, so that no name here can clash with another sidebar script: a clash in a
 // plain script stops that whole script.

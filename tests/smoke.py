@@ -1656,6 +1656,28 @@ STAY_PUT = """
 """
 
 
+# A real wheel, real clicks and real keys from outside the page, aimed at the sidebar (its
+# page sits in two nested browsers in the window). A headless Firefox has no trackpad, but
+# these take Firefox's own way to the page, with focus and scrolling as they really are.
+SIDEBAR_AT = H + """const w = main(), a = w.SidebarController.browser.getBoundingClientRect(),
+    b = w.SidebarController.browser.contentDocument.getElementById("webext-panels-browser").getBoundingClientRect();
+  return {x: a.x + b.x, y: a.y + b.y};"""
+FOCUS_SIDEBAR = H + """const w = main(); w.focus(); w.SidebarController.browser.contentDocument.getElementById("webext-panels-browser").focus(); await wait(200); return 1;"""
+
+
+def real_wheel(m, at, x, y, dy):
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "wheel", "id": "wheel", "actions": [
+        {"type": "scroll", "x": int(at["x"] + x), "y": int(at["y"] + y), "deltaX": 0, "deltaY": dy, "duration": 0, "origin": "viewport"}]}]})
+    m.cmd("WebDriver:ReleaseActions")
+
+
+def real_click(m, at, x, y):
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+        {"type": "pointerMove", "duration": 0, "x": int(at["x"] + x), "y": int(at["y"] + y), "origin": "viewport"},
+        {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
+    m.cmd("WebDriver:ReleaseActions")
+
+
 def sidebar_setting_off(m):
     # The setting off is the daily browser: should Tidier's sidebar be opened beside
     # Sidebery, the list keeps behaving as it always did (compare alone_stay_put).
@@ -1781,8 +1803,8 @@ def alone_stay_put(m):
       await wait(500);
       out.staysAway = {away: out0, moved: list.scrollTop};
       // A tab that comes in above what is shown (moved there here or in another window).
-      await scrollTo(96);
-      const shown = r.find(inView), top = fromTop(shown), mover = r.at(-1), first = plainTabs()[0];
+      await scrollTo(list.scrollTop + fromTop(r[1]));
+      const shown = r[1], top = fromTop(shown), mover = r.at(-1), first = plainTabs()[0];
       send({type: "moveTab", tabId: Number(mover.dataset.tab), before: Number(first.dataset.tab), folder: null});
       await until(() => plainTabs()[0] === mover);
       await wait(200);
@@ -1865,6 +1887,15 @@ def alone_stay_put(m):
       await tabs.remove(tId);
       await until(() => activeRow() && activeRow().dataset.tab !== String(tId));
       out.afterFolded = {outside: !folder.contains(activeRow()), closed: folder.classList.contains("collapsed")};
+      // Closing the selected tab inside a closed folder: a tab in a folder only unloads, in its
+      // place, so nothing is lost; you land outside, and its row goes with the folder still closed.
+      const kept = inFolder().find(r => !r.classList.contains("unloaded")), keptId = id(kept), count = inFolder().length;
+      await select(kept);
+      out.toldOut = await until(async () => { const n = (await tabs.get(keptId)).successorTabId; return n !== undefined && !inFolder().some(r => id(r) === n); });
+      await tabs.remove(keptId);
+      await until(() => activeRow() && activeRow().dataset.tab !== String(keptId) && inFolder().length === count && !inFolder().some(r => id(r) === keptId));
+      await wait(200);
+      out.closedInside = {landedOutside: !folder.contains(activeRow()), kept: inFolder().length === count, hidden: inFolder().every(r => r.offsetParent === null), closed: folder.classList.contains("collapsed")};
       // Put into the closed folder with no move for Firefox to report: the window's last
       // tab, used just before this one, once Tidier has it in its record.
       const last = (await tabs.create(obj({url: "https://example.org/?smoke-stay-last", active: true, cookieStoreId: doc.documentElement.dataset.space}))).id;
@@ -1882,6 +1913,7 @@ def alone_stay_put(m):
     check("Firefox knows the next tab as soon as a tab is unloaded", r.get("unloaded") is True and r.get("toldLoaded") is True, str(r))
     check("closing a tab selects a loaded tab, not an unloaded one used later", r.get("afterUnloaded", {}).get("selected") == r.get("afterUnloaded", {}).get("want"), str(r))
     check("closing a tab does not select into a folder closed meanwhile", r.get("toldFolder") is True and r.get("toldOutside") is True and r.get("afterFolded") == {"outside": True, "closed": True}, str(r))
+    check("closing the selected tab in a closed folder keeps it there unloaded, and lands outside", r.get("toldOut") and r.get("closedInside") == {"landedOutside": True, "kept": True, "hidden": True, "closed": True}, str(r))
     check("nor into a closed folder a tab was put in without moving", r.get("toldLast") and r.get("lastIsLast") and r.get("inClosed") and r.get("toldNotLast"), str(r))
 
     # A page without a container (about:, Tidier's settings) belongs to no space, and is
@@ -1994,6 +2026,60 @@ def alone_stay_put(m):
       await wait(100);
       return {selected: activeRow()?.dataset.tab === args[0], bottom: activeRow() && fromBottom(activeRow())};""", r.get("target"))
     check("⌃Tab to a tab below the list brings it in at the bottom edge", k == {"selected": True, "bottom": 0}, str(k))
+
+    # The same for real: the wheel, clicks on the bar and on a row, and keys.
+    at = m.js(SIDEBAR_AT)
+    settled = """let last = -1; await until(async () => { const same = list.scrollTop === last; last = list.scrollTop; await wait(100); return same; });"""
+    centre = """const middle = e => { const q = e.getBoundingClientRect(); return {x: q.x + q.width / 2, y: q.y + q.height / 2}; };
+      const dot = id => middle(doc.querySelector(`#spaces .space[data-space="${id}"]`));
+      const until_space = id => until(() => spaces().find(s => s.active).id === id && doc.querySelector(".tab.active, .tile.active"));"""
+    place_home = sidebar_page(m, STAY_PUT + centre + """
+      const rows = await mine(), r = rows()[4];
+      await select(r);
+      await scrollTo(list.scrollTop + fromTop(r) - 64);
+      return {list: middle(list), was: list.scrollTop};""")
+    real_wheel(m, at, place_home["list"]["x"], place_home["list"]["y"], -25)
+    wheeled = sidebar_page(m, STAY_PUT + centre + "await until(() => list.scrollTop !== args[1]);" + settled + "return {y: list.scrollTop, dot: dot(args[0])};", second, place_home["was"])
+    real_click(m, at, wheeled["dot"]["x"], wheeled["dot"]["y"])
+    there = sidebar_page(m, STAY_PUT + centre + """
+      await until_space(args[0]);
+      const rows = await mine(), r = rows()[3];
+      await select(r);
+      await scrollTo(list.scrollTop + fromTop(r) - 32);
+      return {list: middle(list), was: list.scrollTop, dot: dot(args[1])};""", second, home)
+    real_wheel(m, at, there["list"]["x"], there["list"]["y"], -15)
+    y2 = sidebar_page(m, STAY_PUT + "await until(() => list.scrollTop !== args[0]);" + settled + "return list.scrollTop;", there["was"])
+    real_click(m, at, there["dot"]["x"], there["dot"]["y"])
+    back = sidebar_page(m, STAY_PUT + centre + """
+      await until_space(args[0]);
+      await wait(300);
+      const rows = await mine(), seen = rows().find(x => inView(x) && x !== activeRow());
+      return {y: list.scrollTop, row: middle(seen), tab: seen.dataset.tab, active: activeRow()?.dataset.tab};""", home)
+    check("with a real wheel and real clicks on the bar, each space keeps its place",
+          wheeled["y"] < place_home["was"] and y2 < there["was"] and back.get("y") == wheeled["y"], f"{place_home} {wheeled} {there} {y2} {back}")
+    real_click(m, at, back["row"]["x"], back["row"]["y"])
+    clicked = sidebar_page(m, STAY_PUT + """
+      await until(() => activeRow()?.dataset.tab === args[0]);
+      await wait(200);
+      return {selected: activeRow()?.dataset.tab === args[0], y: list.scrollTop, focus: doc.hasFocus(), cursor: !!doc.querySelector(".cursor")};""", back["tab"])
+    check("a real click on a row in view selects it and does not move the list, and the page has the focus after",
+          clicked == {"selected": True, "y": back["y"], "focus": False, "cursor": False}, str(clicked))
+    m.js(FOCUS_SIDEBAR)
+    press(m, "\ue015")  # ↓
+    first = sidebar_page(m, STAY_PUT + """await until(() => doc.querySelector(".cursor"));
+      return {on: doc.querySelector(".cursor")?.dataset.tab, selected: activeRow()?.dataset.tab, focus: doc.hasFocus()};""")
+    m.js(FOCUS_SIDEBAR)
+    press(m, "\ue015")
+    second_key = sidebar_page(m, STAY_PUT + """const c = () => doc.querySelector(".cursor"), reach = [...doc.querySelectorAll(".tile, #tabs .head, #tabs .tab")].filter(e => e.offsetParent !== null);
+      await until(() => c()?.dataset.tab !== args[0]);
+      return {next: reach.indexOf(c()) === reach.findIndex(e => e.dataset.tab === args[0]) + 1, tab: c()?.dataset.tab};""", first.get("on"))
+    m.js(FOCUS_SIDEBAR)
+    press(m, "\ue007")  # Enter
+    entered = sidebar_page(m, STAY_PUT + """await until(() => activeRow()?.dataset.tab === args[0] && !doc.hasFocus());
+      await wait(100);
+      return {selected: activeRow()?.dataset.tab === args[0], cursor: !!doc.querySelector(".cursor"), focus: doc.hasFocus()};""", second_key.get("tab"))
+    check("real keys: the first ↓ starts at the selected row, the next moves on", first.get("on") == first.get("selected") and first.get("focus") is True and second_key.get("next") is True, f"{first} {second_key}")
+    check("real keys: Enter selects, the page has the focus, and the cursor's mark is gone", entered == {"selected": True, "cursor": False, "focus": False}, str(entered))
 
     # For real: placeholders here, whose pages are live in another window. Selecting one
     # gives the row another tab, from another window, while you look at the list.
