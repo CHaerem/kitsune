@@ -1946,8 +1946,8 @@ def alone_requests(m):
       const entry = (await storage(args[1], ["syncedTabs"])).syncedTabs[JSON.parse(k)];
       return {where: containersOf("saved-one"), same: w.gBrowser.tabs.filter(x => key(w, x) === k).length, parent: entry.parentKey};""", k, EXT_ID)
     check("a saved tab selected opens where it is, whatever a rule says about its address", r["where"] == [space] and r["same"] == 1 and r["parent"] == folder, str(r))
-    m.js(ISOLATION_JS + """await closeAll("rule-typed"); await closeAll("saved-one"); return 1;""")
     sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", folder)
+    m.js(ISOLATION_JS + """await closeAll("rule-typed"); await closeAll("saved-one"); return 1;""")
 
     # An essential stays one, wherever a rule says an address belongs.
     rules(("rule-essential", other))
@@ -1961,9 +1961,11 @@ def alone_requests(m):
     rules(("rule-back", other))
     hop = f"{base}/redirect?to={base}/no-bfcache%3Frule%2Dback"
     r = m.js(ISOLATION_JS + """const t = inTab(args[2], "about:blank"); await wait(400); typed(t, args[0]);
+      Services.prefs.setIntPref("browser.sessionhistory.max_total_viewers", 0); // no back-forward cache: Firefox must ask
       await until(() => url(t).includes("rule-back")); await wait(400);
       typed(t, args[1]); await until(() => url(t) === args[1]); await wait(400);
       t.linkedBrowser.goBack(); await until(() => url(t).includes("rule-back")); await wait(1000);
+      Services.prefs.clearUserPref("browser.sessionhistory.max_total_viewers");
       return {shows: url(t), where: containersOf("rule-back")};""", hop, f"{base}/no-bfcache?after", space)
     check("going back through an address a rule has does not move the tab it passed through", "rule-back" in r["shows"] and r["where"] == [space], str(r))
     check("(Firefox did ask again)", len(seen(m, "rule-back")) >= 2, str(seen(m, "rule-back")))

@@ -387,6 +387,24 @@ test("containers turned off: no rule, no space, and every page simply loads", as
   x.kill();
 });
 
+test("the space you switched to is still the one after a restart, and a link opens with its logins", async () => {
+  const ff = new FakeFirefox();
+  const { w, home } = aWindow(ff);
+  const inB = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: B });
+  const x = await run(ff);
+  ff.select(inB.id); // a tab of another space: that takes you there
+  await wait(300);
+  await x.js("switchSpace")(w.id, A); // and ⌃1 back
+  x.kill();
+  assert.equal(ff.tabs.get(home.id).active, true);
+  const y = await run(ff);
+  const t = newTab(ff, y, w);
+  assert.equal((await ff.request({ tabId: t.id, url: "https://link.example/" })).cancel, true);
+  await wait(300);
+  assert.equal(opened(ff, w.id, "https://link.example/")[0].cookieStoreId, A);
+  y.kill();
+});
+
 // --- Opening fails, or takes too long ----------------------------------------------------
 test("opening fails for a link with no container: the tab is kept and the line names the address, so it isn't lost", async () => {
   const ff = new FakeFirefox();
