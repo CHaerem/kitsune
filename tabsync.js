@@ -43,7 +43,7 @@ const syncBusy = new Set();      // tab IDs we are changing ourselves
 let pulling = 0;                 // pulls in progress: tabs being moved are not moves you made
 let started = false;             // tab sync waits for startup before reacting
 
-const syncable = tab => !tab.pinned && !tab.incognito && (isWeb(tab.url) || isSideberyGroup(tab.url));
+const syncable = tab => !tab.pinned && !tab.incognito && !isHiddenSpace(tab.cookieStoreId) && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
 const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); };
 // The icon a record keeps. Firefox drops a tab's icon as a new page comes in, and a page
@@ -172,7 +172,7 @@ function bySpace(items, spaceOf) {
 // into another space's folder there would otherwise be copied into every new
 // window, and with it a folder taking in every tab after it.
 function fillOrder(all, tabs, windowId) {
-  return treeOrder(keysInReferenceOrder(all, tabs, windowId).map(k => ({
+  return treeOrder(keysInReferenceOrder(all, tabs, windowId).filter(k => !isHiddenSpace(all[k].cookieStoreId)).map(k => ({
     id: k, parent: all[k].parentKey, space: all[k].cookieStoreId, folder: all[k].group,
   })));
 }
@@ -345,11 +345,14 @@ async function reconcileAll() {
   for (const key of Object.keys(all)) {
     if (isOwnFolder(all[key])) continue;
     const reps = repsOf(key, tabs);
+    const backFromHidden = all[key].wasHidden && !isHiddenSpace(all[key].cookieStoreId); // hiddenspaces.js: closed by hiding, not by you
+    if (backFromHidden) delete all[key].wasHidden;
     if (!reps.length) {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
       // the tab's last copy. fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved) {
+      // So does a tab of a hidden space, which comes back when the space is shown.
+      if (sessionHere && !all[key].saved && !isHiddenSpace(all[key].cookieStoreId) && !backFromHidden) {
         await noteArchived(all[key], "closed"); // if it was only a placeholder, Recently Closed has nothing of it
         delete all[key];
       }
@@ -465,6 +468,7 @@ async function unloadSaved(key, windowId, place) {
   if (!entry) return;
   if (entry.saved) Object.assign(entry, entry.saved);
   saveSynced(all);
+  if (isHiddenSpace(entry.cookieStoreId)) return closeHiddenTabs(); // it stayed open when its space was hidden; now it is hidden like the rest
   const tabs = await browser.tabs.query({});
   for (const t of repsOf(key, tabs)) {
     if (!t.active && isGhostUrl(t.url)) await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
@@ -585,7 +589,8 @@ async function pull(ghostId) {
       saveSynced(all);
       // The old window gets a ghost where the live tab was.
       const opener = fromOpener !== undefined && (await browser.tabs.get(fromOpener).catch(() => null));
-      await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
+      // (A window whose only tab this was has closed with it. With spaces hidden, that can be a window in use.)
+      if (await browser.windows.get(fromWindow).catch(() => null)) await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
     }
   } finally {
     setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);
@@ -1015,6 +1020,7 @@ async function start(delayMs) {
   // restarts, with no sign of why. This runs at every update, in the middle of work.
   const step = fn => Promise.resolve().then(fn).then(() => true, err => { noteError(err); return false; });
   await step(readAlone);
+  await step(readHiddenSpaces); // hiddenspaces.js: before any window is filled
   await serial(async () => {
     await step(bringBackSpaces); // isolation.js: before anything is opened in a container that is gone
     await step(closeOldFolderPages); // moveover.js
@@ -1035,6 +1041,7 @@ async function start(delayMs) {
   serial(moveStragglers); // isolation.js: once new tabs are registered again
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
+  await step(startSync); // sync.js
 }
 let startRequested = false;
 function requestStart(delayMs) {

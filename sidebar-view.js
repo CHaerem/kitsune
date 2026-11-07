@@ -62,7 +62,7 @@ async function viewFor(windowId) {
   for (const s of spaces) s.news = s.id !== space && spaceHasNews(s.id); // the space you are in shows it in its list
 
   const rank = new Map(list.map((e, i) => [e.key, i]));
-  const pinned = tabs.filter(t => t.pinned && (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER));
+  const pinned = tabs.filter(t => t.pinned && shownInSpace(t, space));
   const keys = await Promise.all(pinned.map(keyOf));
   const essentials = pinned.map((t, i) => ({ t, entry: list.find(e => e.key === keys[i]) }))
     .sort((a, b) => (rank.get(a.entry?.key) ?? Infinity) - (rank.get(b.entry?.key) ?? Infinity))
@@ -70,7 +70,7 @@ async function viewFor(windowId) {
 
   // A tab without a container (a new tab) belongs to the space you are in.
   const all = await getSynced();
-  const here = tabs.filter(t => !t.pinned && (t.cookieStoreId === space || t.cookieStoreId === NO_CONTAINER) && !reopening.has(t.id));
+  const here = tabs.filter(t => !t.pinned && shownInSpace(t, space) && !reopening.has(t.id)); // hiddenspaces.js
   const folders = tidierAlone
     ? foldersOf(all, space).map(f => ({ key: f.key, name: f.name, collapsed: !!f.collapsed, live: f.live || null, tabs: [] }))
     : here.filter(t => isSideberyGroup(t.url)).map(t => ({ key: syncKeyByTab.get(t.id), id: t.id, name: folderName(t.url), tabs: [] }));

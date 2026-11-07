@@ -172,7 +172,7 @@ async function ensureWindow(windowId, settle) {
   const missing = [];
   for (const entry of list) {
     if (have.has(entry.key)) { index++; continue; }
-    if (!isWeb(entry.url)) continue;
+    if (!isWeb(entry.url) || isHiddenSpace(entry.cookieStoreId)) continue; // hiddenspaces.js
     missing.push({ entry, index: index++ });
   }
   await createEssentials(windowId, missing, settle);

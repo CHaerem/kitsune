@@ -110,8 +110,10 @@ const requestsGuarded = () => guarding; // spaces.js: then the tab need not be r
 // A rule that can do anything: it says where, and that space is there. A rule for a
 // container that is gone counts for nothing (spaces.js, here). It may come back at the
 // next start (bringBackSpaces); until then the address goes where it would without one.
+// Nor does one for a space hidden on this machine, which gets no tabs here: the address
+// opens in the space you are in, and the sidebar says why (sayIfRuleGone, hiddenspaces.js).
 let knownSpaces = null; // containers Firefox has; null: not read yet
-const ruleCounts = r => typeof r?.url === "string" && !!r.url && !!r.space && r.space !== NO_CONTAINER && (!knownSpaces || knownSpaces.has(r.space));
+const ruleCounts = r => typeof r?.url === "string" && !!r.url && !!r.space && r.space !== NO_CONTAINER && (!knownSpaces || knownSpaces.has(r.space)) && !isHiddenSpace(r.space);
 const spaceIsThere = id => !!id && id !== NO_CONTAINER && (!knownSpaces || knownSpaces.has(id));
 
 // A page can send its own tab on with no name on the request (a frame with sandbox and

@@ -98,6 +98,7 @@ PAGES = {
     "/pp-one": "<title>One</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-two'</script>\"></iframe>",
     "/pp-two": "<title>Two</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-one'</script>\"></iframe>",
     "/links": "<title>Links</title><a id='a' href='/links?little-from-a-link' style='font-size:40px'>a link</a><p><a id='new' target='_blank' href='/links?little-new-tab'>a new tab</a><p><a id='sign-in' href='#' onclick=\"window.open('/links?little-sign-in', 'sign-in', 'width=500,height=600'); return false\">sign in</a>",
+    "/long-title": "<title>" + "x" * 59 + "😀 and more</title>a character just where sync cuts a title",
 }
 
 
@@ -347,6 +348,7 @@ class TestFirefox:
         self.m.pages = f"http://127.0.0.1:{self.pages.server_address[1]}"
         self.m.page_requests = self.pages.requests
         self.m.update_xpi = self._newer_xpi
+        self.m.tidier_managed = f"{self.dir}/managed/ManagedStorage/{EXT_ID}.json"
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
     def _setup(self):

@@ -33,10 +33,19 @@
     <h2>Spaces</h2>
     <p class="hint">A space is a Firefox container, with its own logins.</p>
     <div id="spaces"></div>
+    <div id="spaces-here" hidden></div>
     <div class="line after-spaces">
       <button id="new-space" hidden>New space</button>
       <button id="allow-isolation" class="quiet" hidden title="Without this, a page's first request can go out in the wrong container before it is opened again in the right one.">Let Tidier stop pages loading in the wrong space</button>
     </div>
+  </section>
+
+  <section id="sync-section" hidden>
+    <h2>The same on every machine</h2>
+    <label class="line"><input type="checkbox" id="sync-on"> Keep essentials, folders, saved tabs, rules and spaces the same on every machine</label>
+    <p class="hint">Through Firefox Sync, which must have Add-ons turned on in its settings. Ordinary tabs and what is open stay on each machine. When you turn this on, what is here and what your other machines have are put together, after a copy is made.</p>
+    <p id="sync-state" hidden></p>
+    <p id="sync-left" hidden></p>
   </section>
 
   <section>
@@ -84,5 +93,6 @@
   <script src="settings.js"></script>
   <script src="littlewindow.js"></script>
   <script src="keys.js"></script>
+  <script src="sync.js"></script>
 </body>
 </html>
