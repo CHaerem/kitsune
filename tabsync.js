@@ -515,8 +515,8 @@ async function unloadSaved(key, windowId, place) {
   if (here.has(key)) return;
   let parentKey = entry.parentKey;
   while (parentKey && !here.has(parentKey)) parentKey = all[parentKey]?.parentKey;
-  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined);
-  if (!place) return;
+  const ghost = await createRep(windowId, key, entry, parentKey ? here.get(parentKey) : undefined).catch(ifGone); // that window closed meanwhile
+  if (!ghost || !place) return;
   if (!tidierAlone) await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
   await placeNextTo(windowId, ghost.id, place.before, place.after);
 }
@@ -678,9 +678,11 @@ async function applyMoves(windowId, ids) {
       const rep = tabs.find(x => x.id === reps.get(key));
       const parentRep = parentKey ? reps.get(parentKey) : undefined;
       if (!rep || rep.active || syncRoleByTab.get(rep.id) !== "ghost" || (parentKey && parentRep === undefined)) continue;
-      syncBusy.add(rep.id); forget(rep.id);
-      await browser.tabs.remove(rep.id);
-      const ghost = await createRep(w.id, key, entry, parentRep, rep.index);
+      forget(rep.id);
+      await removeTabs([rep.id], syncBusy);
+      // (That window, or the folder there, may have closed meanwhile; the next look fills it.)
+      const ghost = await createRep(w.id, key, entry, parentRep, rep.index).catch(ifGone);
+      if (!ghost) continue;
       replaced.add(key); gone.push(key);
       await sleep(NEW_TAB_SETTLE_MS); // Sidebery places it by its own rules first
       await placeNextTo(w.id, ghost.id, before, after);

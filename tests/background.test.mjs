@@ -1716,3 +1716,13 @@ test("a ghost pinned while Tidier is starting, its values lost, is an essential 
   assert.deepEqual(Object.keys(ff.synced), []);
   x.kill();
 });
+
+test("marks on tabs being closed go also when a close is refused", async () => {
+  const { ff, x, windows: [a] } = await chaosStart({ windows: 1 });
+  const t = ff.openTab(a.id, { url: "about:blank" });
+  ff.refusePattern = /^tabs\.remove$/;
+  ff.refuseRate = 1;
+  await assert.rejects(ff.clock.settled(x.js(`removeTabs([${t.id}], syncBusy)`)), /refused/);
+  assert.equal(x.js("syncBusy").has(t.id), false);
+  x.kill();
+});

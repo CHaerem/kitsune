@@ -80,8 +80,11 @@ const ifGone = err => { if (!isGone(err)) throw err; };
 // no event that would unmark it, so that is done here. (The event comes before the answer.)
 async function removeTabs(ids, marks) {
   ids.forEach(id => marks?.add(id));
-  await Promise.all(ids.map(id => browser.tabs.remove(id).catch(ifGone)));
-  ids.forEach(id => marks?.delete(id));
+  try {
+    await Promise.all(ids.map(id => browser.tabs.remove(id).catch(ifGone)));
+  } finally {
+    ids.forEach(id => marks?.delete(id));
+  }
 }
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
