@@ -2778,7 +2778,10 @@ def alone_tab_names(m):
       for (const name of ["Above", "Names"]) { send({type: "newFolder", space, name}); await until(() => folders().some(f => f.name === name)); }
       const heads = [...doc.querySelectorAll("#tabs .folder .head")];
       const headOf = name => heads.find(h => h.querySelector(".title").textContent === name).dataset.folderHead;
-      const tabs = plainTabs().map(x => Number(x.dataset.tab));
+      // Its own tabs: the first row can be any page, such as a settings page with no record,
+      // which can be neither saved nor named, once earlier groups have closed what came before it.
+      const mine = new Set(Array.from(await page.browser.tabs.query({})).filter(t => t.url.includes("smoke-names-")).map(t => t.id));
+      const tabs = plainTabs().map(x => Number(x.dataset.tab)).filter(id => mine.has(id));
       send({type: "moveTab", tabId: tabs[0], folder: headOf("Names"), before: null});
       await until(() => row(tabs[0])?.dataset.folder);
       const tileEl = doc.querySelector("#essentials .tile");
@@ -3575,7 +3578,11 @@ IN_SIDEBAR = """
     }`) + ")()", false);
     return answer;
   };"""
-EMPTY_LIST = """({getBoundingClientRect: () => { const list = doc.getElementById("tabs"), r = list.getBoundingClientRect(); return {x: r.x, y: list.lastElementChild.getBoundingClientRect().bottom + 8, width: r.width, height: 2}; }})"""
+# (A list longer than the sidebar has no empty part in view, so for the test it gets one at its end.
+# Below the last row without that is the bar, with a menu of its own.)
+EMPTY_LIST = """({getBoundingClientRect: () => { const list = doc.getElementById("tabs");
+  if (list.lastElementChild.getBoundingClientRect().bottom + 16 > list.getBoundingClientRect().bottom) { list.style.paddingBottom = "24px"; list.scrollTop = list.scrollHeight; }
+  const r = list.getBoundingClientRect(); return {x: r.x, y: list.lastElementChild.getBoundingClientRect().bottom + 8, width: r.width, height: 2}; }})"""
 ENTER = "\ue007"  # WebDriver's key, as CMD and the others above
 
 
@@ -3805,6 +3812,7 @@ def alone_space_menu(m):
     active = in_sidebar(m, """() => doc.querySelector("#spaces .space.active").dataset.space""")
     check("and you stay in your space", active == here, active)
     m.js(H + """const w = main(); w.gBrowser.removeTab(w.gBrowser.selectedTab); await wait(1000); return 1;""")
+    in_sidebar(m, """() => { doc.getElementById("tabs").style.paddingBottom = ""; return 1; }""")
     no_problems(m, "after a space's menu")
 
 
