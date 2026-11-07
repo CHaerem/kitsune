@@ -126,6 +126,22 @@ test("entries older than 30 days are not shown, and go at the next close, in eve
   x.kill();
 });
 
+test("only web pages come in the list, and a space's and a tab without a container's rows are in one order", async () => {
+  const { x, w } = await session([]);
+  await x.js("e => serial(() => noteArchived(e, 'closed'))")(entry("about:preferences"));
+  await x.js("e => serial(() => noteArchived(e, 'closed'))")(entry("moz-extension://tidier/sidebar/sidebar.html"));
+  assert.deepEqual(await listed(x), []);
+  const note = (url, cookieStoreId) => x.js("e => serial(() => noteArchived(e, 'closed'))")(entry(url, { cookieStoreId }));
+  await note("https://first.example/", C1);
+  await wait(10);
+  await note("https://second.example/", "firefox-default");
+  await wait(10);
+  await note("https://third.example/", C1);
+  assert.deepEqual((await listed(x, C1)).map(r => r.url), ["https://third.example/", "https://second.example/", "https://first.example/"]);
+  assert.ok(w);
+  x.kill();
+});
+
 test("a big icon stays out of the list", async () => {
   const big = "data:image/png;base64," + "x".repeat(5000);
   const { x } = await session([["a", "https://a.example/", { icon: big }]]);
@@ -287,6 +303,18 @@ test("a placeholder stays when the list cannot take it: it has no other way back
   assert.deepEqual([...r.archived], ["https://real.example/"], "a real page has Recently Closed as well");
   assert.ok(!ff.tabs.has(ids.real));
   x.kill();
+});
+
+test("a tab that went while Tidier was not running lands in the list, and only with the setting on", async () => {
+  for (const alone of [true, false]) {
+    const { x, ff } = await session([["here", "https://here.example/"]], { alone, more: f => {
+      f.store.syncedTabs.gone = entry("https://gone.example/", { title: "Gone" });
+    } });
+    assert.ok(!(await x.js("getSynced()")).gone, "the record goes either way");
+    assert.deepEqual((await listed(x, C1)).map(r => [r.url, r.title, r.why]), alone ? [["https://gone.example/", "Gone", "closed"]] : []);
+    if (!alone) assert.equal(ff.store.archivedTabs, undefined);
+    x.kill();
+  }
 });
 
 test("a list holding something it should not does not stop a close, in any window", async () => {

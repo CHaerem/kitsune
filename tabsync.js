@@ -331,7 +331,10 @@ async function reconcileAll() {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
       // the tab's last copy. fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved) delete all[key];
+      if (sessionHere && !all[key].saved) {
+        await noteArchived(all[key], "closed"); // if it was only a placeholder, Recently Closed has nothing of it
+        delete all[key];
+      }
       continue;
     }
     if (!all[key].group) {

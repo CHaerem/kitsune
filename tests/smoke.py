@@ -1754,6 +1754,31 @@ def alone_archived(m):
       return {open: open(), every: every.filter(x => x.space === args[0]), stored: Object.keys(stored.archivedTabs || {}).includes(args[0])};""", gone)
     check("a removed container's rows and its open view go with it", r.get("open") is False and r.get("every") == [], str(r))
 
+    # Firefox's own keyboard, on the sidebar page in front: ↓ moves, ⌫ forgets, ← goes back, Enter opens.
+    def keyboard(*keys):
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        acts = [a for k in keys for a in ({"type": "keyDown", "value": k}, {"type": "keyUp", "value": k})]
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "key", "id": "keyboard", "actions": acts}]})
+        m.cmd("WebDriver:ReleaseActions")
+        m.chrome()
+    DOWN, LEFT, BACKSPACE, ENTER = "\uE015", "\uE012", "\uE003", "\uE007"
+    r = sidebar_page(m, opened_view + """return {tips: rowsHere().map(x => x.title.split("\\n")[1]), under: doc.querySelector("#tabs .cursor")?.dataset.tab ?? null};""", 2)
+    keyboard(DOWN, BACKSPACE)
+    t = sidebar_page(m, box + """await settled(() => rowsHere().length === args[0] - 1, 5000);
+      return {tips: rowsHere().map(x => x.title.split("\\n")[1]), open: open(), cursor: rowsHere().findIndex(x => x.classList.contains("cursor")), under: doc.querySelector("#tabs .cursor")?.dataset.tab ?? null};""", len(r["tips"]))
+    check("↓ and ⌫ on the keyboard forget the first row, and stay in the view", t.get("tips") == r["tips"][1:] and t.get("open") and t.get("cursor") == 0 and t.get("under") == r["under"], f"{r} {t}")
+    keyboard(LEFT)
+    t = sidebar_page(m, box + """await settled(() => !open(), 5000); return {open: open()};""")
+    check("← on the keyboard goes back", t.get("open") is False, str(t))
+    r = sidebar_page(m, opened_view + """return rowsHere().map(x => x.title.split("\\n")[1]);""", 1)
+    keyboard(DOWN, ENTER)
+    t = m.js(H + settled + """const w = main(); await settled(() => url(w.gBrowser.selectedTab) === args[0], 8000); return url(w.gBrowser.selectedTab);""", r[0])
+    check("↓ and Enter on the keyboard open the first row", t == r[0], f"{r} {t}")
+
     # What this group added goes again.
     m.js(H + settled + """const a = main(), ours = (w, t) => url(t).includes("smoke-archived") || String(t.label) === %s;
       await removeWhere(ours);
