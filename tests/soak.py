@@ -251,7 +251,11 @@ LIB = r"""
   const ask = msg => agent(control().gBrowser.selectedBrowser, "ask", {msg});
   const panelOf = w => { try { return w.SidebarController.browser.contentDocument.getElementById("webext-panels-browser"); } catch (e) { return null; } };
   const sidebarShown = w => { try { return (w.SidebarController.currentID || "").includes("6844a953") && !w.SidebarController.browser.hidden; } catch (e) { return false; } };
-  const sb = (w, name, cmdArgs) => sidebarShown(w) ? agent(panelOf(w), name, cmdArgs) : Promise.resolve(null);
+  // A sidebar that is closing or not there yet has nothing to say; the action then does not apply.
+  const sb = async (w, name, cmdArgs) => {
+    const r = sidebarShown(w) ? await agent(panelOf(w), name, cmdArgs) : null;
+    return r?.error || r?.timeout ? null : r;
+  };
 """
 
 SETUP = LIB + r"""
@@ -671,7 +675,8 @@ ACTIONS = r"""
 RUN_ACTION = LIB + ACTIONS + r"""
   const name = a.name;
   let did = null, failed = null;
-  try { did = await act[name](); } catch (e) { failed = String(e); }
+  // (With every window just closed, nothing can be done until the new one is there.)
+  try { if (normal().length) did = await act[name](); } catch (e) { failed = String(e); }
   const ws = normal();
   const tabs = ws.length ? ws[0].gBrowser.tabs : [];
   return {did, failed, note, pop: {
@@ -773,7 +778,7 @@ INVARIANTS = LIB + r"""
     }
     if (ALONE && sidebarShown(w)) {
       const v = await sb(w, "view");
-      if (!v || v.error || v.timeout) { bad("the sidebar does not answer", "window " + wi, JSON.stringify(v)); continue; }
+      if (!v) { bad("the sidebar does not answer", "window " + wi); continue; }
       if (v.renaming) continue;
       const sp = v.space;
       if (space && sp !== space) bad("the sidebar shows another space than the selected tab's", "window " + wi, sp + " vs " + space);
