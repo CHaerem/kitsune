@@ -1548,3 +1548,25 @@ test("a window reopened and focused before its tabs were known opens its selecte
     x.kill();
   }
 });
+
+test("a ghost that shows the page, left when you come back to its window, is unloaded", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const there = ff.addWindow();
+  const other = ff.addTab(there.id, { url: "about:blank" });
+  const page = ff.addTab(there.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  assert.equal(ff.tabs.get(page.id).discarded, false, "selected, it stays loaded");
+  // Clicking another tab in that window: Firefox selects it and focuses the window.
+  for (const t of ff.list(there.id)) ff.tabs.get(t.id).active = false;
+  ff.tabs.get(other.id).active = true;
+  x.b.tabs.onActivated.fire({ tabId: other.id, windowId: there.id, previousTabId: page.id });
+  ff.focused = there.id;
+  x.b.windows.onFocusChanged.fire(there.id);
+  await wait(500);
+  assert.equal(ff.tabs.get(page.id).discarded, true, "and it is unloaded");
+  assert.ok(ff.tabs.has(page.id), "not closed");
+  x.kill();
+});

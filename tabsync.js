@@ -931,10 +931,20 @@ function closedPlace(windowId, tabId) {
 
 // Selecting a ghost in the window you are using pulls the live tab in. (A pull
 // selects tabs itself too, but never a ghost in the window you are using.)
-browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
-  if (!started || syncRoleByTab.get(tabId) !== "ghost" || windowId !== focusedWindowId) return;
-  serial(() => pull(tabId));
+browser.tabs.onActivated.addListener(({ tabId, windowId, previousTabId }) => {
+  if (!started) return;
+  if (syncRoleByTab.get(previousTabId) === "ghost") serial(() => unloadLeftPage(previousTabId));
+  if (syncRoleByTab.get(tabId) === "ghost" && windowId === focusedWindowId) serial(() => pull(tabId));
 });
+
+// A ghost that shows the page itself stays loaded while it is selected (in a window you
+// were not using, as reconcileAll leaves it). Click another tab there as you come back, and
+// the focus finds no ghost selected to pull in: the page would stay loaded twice for good.
+// It is only a copy, so it is unloaded, like the other copies.
+async function unloadLeftPage(tabId) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (tab && !tab.active && !tab.discarded && isWeb(tab.url) && syncRoleByTab.get(tabId) === "ghost") await browser.tabs.discard(tabId).catch(() => {});
+}
 
 // Switching to a window whose selected tab is a ghost pulls the live tab in.
 function pullSelected(windowId) {
