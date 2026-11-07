@@ -1584,26 +1584,29 @@ def alone_safe_moves(m):
         check(f"a move to a space that is gone leaves the tab {'selected' if selected else 'where it is'}, loaded", r == {"active": selected, "loaded": True} and where["at"] == [here], f"{r} {where}")
 
     # A row that is a placeholder: its page is loaded and selected in the other window.
-    open_in("https://example.org/?smoke-safe-away", here)
-    registered_where("smoke-safe-away")
-    away = sidebar_page(m, """const here = (await page.browser.windows.getCurrent()).id, all = (await page.browser.tabs.query({})).filter(t => t.url.includes("smoke-safe-away") || t.title.includes("smoke-safe-away"));
-      const windows = await page.browser.windows.getAll({windowTypes: ["normal"]}), other = windows.find(w => w.id !== here);
-      const keys = await Promise.all((await page.browser.tabs.query({windowId: other.id})).map(async t => [t.id, await page.browser.sessions.getTabValue(t.id, "syncKey")]));
-      const live = all[0], key = await page.browser.sessions.getTabValue(live.id, "syncKey");
-      return {here, other: other.id, ghost: keys.find(([, k]) => k === key)[0], live: live.id, key};""")
-    m.js(H + """const w = wins().find(x => x.gBrowser.tabs.some(t => key(x, t) === JSON.stringify(args[0]) && !url(t).includes("smoke-safe-away")));
-      w.focus(); await wait(300);
-      w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => key(w, t) === JSON.stringify(args[0]));
-      for (let i = 0; i < 40 && !url(w.gBrowser.selectedTab).includes("smoke-safe-away"); i++) await wait(100);
-      main().focus(); await wait(300); return 1;""", away["key"])
-    r = sidebar_page(m, """const rep = (await page.browser.tabs.query({windowId: args[0]})), keys = await Promise.all(rep.map(t => page.browser.sessions.getTabValue(t.id, "syncKey")));
-      const row = rep[keys.indexOf(args[1])], real = (await page.browser.tabs.query({})).find(t => t.url.includes("smoke-safe-away"));
-      send({type: "moveToSpace", tabId: row.id, space: args[2]}); await wait(300);
-      await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "stats"})));
-      return {rowUnloaded: row.discarded || row.url.includes("ghost.html"), realElsewhere: real.windowId !== args[0], realSelected: real.active};""", away["here"], away["key"], there)
-    where = registered_where("smoke-safe-away")
-    selected_there = m.js(H + """const w = wins().find(x => x !== main()); return w.gBrowser.selectedTab.userContextId ? "firefox-container-" + w.gBrowser.selectedTab.userContextId : "firefox-default";""")
-    check("a placeholder moves, with its page selected in the other window: once, and that window stays in its space", r["rowUnloaded"] and r["realElsewhere"] and r["realSelected"] and where["at"] == [there] and set(where["copies"]) == {there} and selected_there == here, f"{r} {where} {selected_there}")
+    if m.js(H + """return wins().length;""") < 2:
+        print("SKIP  a placeholder with its page in the other window (needs alone_second_window)", flush=True)
+    else:
+        open_in("https://example.org/?smoke-safe-away", here)
+        registered_where("smoke-safe-away")
+        away = sidebar_page(m, """const here = (await page.browser.windows.getCurrent()).id, all = (await page.browser.tabs.query({})).filter(t => t.url.includes("smoke-safe-away") || t.title.includes("smoke-safe-away"));
+          const windows = await page.browser.windows.getAll({windowTypes: ["normal"]}), other = windows.find(w => w.id !== here);
+          const keys = await Promise.all((await page.browser.tabs.query({windowId: other.id})).map(async t => [t.id, await page.browser.sessions.getTabValue(t.id, "syncKey")]));
+          const live = all[0], key = await page.browser.sessions.getTabValue(live.id, "syncKey");
+          return {here, other: other.id, ghost: keys.find(([, k]) => k === key)[0], live: live.id, key};""")
+        m.js(H + """const w = wins().find(x => x.gBrowser.tabs.some(t => key(x, t) === JSON.stringify(args[0]) && !url(t).includes("smoke-safe-away")));
+          w.focus(); await wait(300);
+          w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => key(w, t) === JSON.stringify(args[0]));
+          for (let i = 0; i < 40 && !url(w.gBrowser.selectedTab).includes("smoke-safe-away"); i++) await wait(100);
+          main().focus(); await wait(300); return 1;""", away["key"])
+        r = sidebar_page(m, """const rep = (await page.browser.tabs.query({windowId: args[0]})), keys = await Promise.all(rep.map(t => page.browser.sessions.getTabValue(t.id, "syncKey")));
+          const row = rep[keys.indexOf(args[1])], real = (await page.browser.tabs.query({})).find(t => t.url.includes("smoke-safe-away"));
+          send({type: "moveToSpace", tabId: row.id, space: args[2]}); await wait(300);
+          await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify({type: "stats"})));
+          return {rowUnloaded: row.discarded || row.url.includes("ghost.html"), realElsewhere: real.windowId !== args[0], realSelected: real.active};""", away["here"], away["key"], there)
+        where = registered_where("smoke-safe-away")
+        selected_there = m.js(H + """const w = wins().find(x => x !== main()); return w.gBrowser.selectedTab.userContextId ? "firefox-container-" + w.gBrowser.selectedTab.userContextId : "firefox-default";""")
+        check("a placeholder moves, with its page selected in the other window: once, and that window stays in its space", r["rowUnloaded"] and r["realElsewhere"] and r["realSelected"] and where["at"] == [there] and set(where["copies"]) == {there} and selected_there == here, f"{r} {where} {selected_there}")
 
     # Tabs Firefox brings back: not sent away by a rule, for they are not new.
     set_rules([{"url": "smoke-safe-back", "space": here}])
