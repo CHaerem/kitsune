@@ -1613,14 +1613,14 @@ def alone_tab_names(m):
 
     def switch_to(text):
         """To the tab with `text` in its address. Switching to a tab loads it, so a walk through
-        placeholders leaves them loaded for the groups after this one: from the end, where a new
-        tab is, and only once. A tab can close during the walk, and a new one take a moment."""
+        placeholders leaves them loaded for the groups after this one: only once. A tab can close
+        during the walk."""
         m.cmd("Marionette:SetContext", {"value": "content"})
         if text in pages:
             m.cmd("WebDriver:SwitchToWindow", {"handle": pages[text], "focus": False})
             return
         for _ in range(100):
-            for h in reversed(m.cmd("WebDriver:GetWindowHandles")):
+            for h in m.cmd("WebDriver:GetWindowHandles"):
                 try:
                     m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
                     if text in m.cmd("WebDriver:GetCurrentURL"):
@@ -1815,29 +1815,32 @@ def alone_tab_names(m):
         check("Enter saves a tile's name, shown as its tooltip, and the space's name is back", r.get("tip") == "Jira" and not r.get("open") and not r.get("line") and r.get("text") and not r.get("marked"), str(r))
         m.chrome()
 
-        # Every window: the second window's own sidebar page, and its placeholder.
-        m.js(H + """const t = other().gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]] + args[1] + "?second", {inBackground: true}); await wait(1500); return 1;""", EXT_ID, PAGE)
-        switch_to("?second")
-        # It may be in another space, whose essentials are others; then to this one and back.
-        # (Not the window you are using, so that selects a placeholder without pulling its tab in.)
-        r = in_front("""const names = () => [...doc.querySelectorAll("#essentials .tile")].map(tip);
-          const button = id => doc.querySelector(`#spaces .space[data-space="${id}"]`);
-          const was = await until(() => doc.documentElement.dataset.space);
+        # Every window: the second window's real sidebar, read through the extension's own views, and
+        # its placeholder. It may be in another space, whose essentials are others; then to this one and
+        # back. (Not the window you are using, so that selects a placeholder without pulling its tab in.)
+        m.js(H + """const S = other().SidebarController;
+          if (!S.isOpen) await S.show("_6844a953-9931-4334-9ff6-257c246485cb_-sidebar-action");
+          await wait(800); return 1;""")
+        front()
+        r = in_front("""const here = (await page.browser.windows.getCurrent()).id;
+          const there = (await page.browser.windows.getAll({windowTypes: ["normal"]})).find(w => w.id !== here).id;
+          const [view] = page.browser.extension.getViews({type: "sidebar", windowId: there});
+          const second = (view.wrappedJSObject || view).document;
+          const names = () => [...second.querySelectorAll("#essentials .tile")].map(tip);
+          const button = id => second.querySelector(`#spaces .space[data-space="${id}"]`);
+          const was = await until(() => second.documentElement.dataset.space);
           if (was !== args[0]) button(args[0]).click();
           await until(() => names().includes("Jira"));
           const seen = names();
           if (was !== args[0]) button(was).click();
-          await until(() => doc.documentElement.dataset.space === was);
+          await until(() => second.documentElement.dataset.space === was);
           return seen;""", setup["space"])
         check("a second window's sidebar shows the same name", "Jira" in (r or []), str(r))
         m.chrome()
         r = m.js(H + """const list = (await storage("%s", ["essentials"])).essentials, e = list.find(x => x.name === "Jira");
           const there = () => other().gBrowser.tabs.find(t => t.pinned && ek(other(), t) === e?.key);
           for (let i = 0; i < 100 && (there()?.label !== "Jira" || there()?.linkedPanel); i++) await wait(100);
-          const label = there()?.label, loaded = !!there()?.linkedPanel;
-          for (const t of [...other().gBrowser.tabs]) if (url(t).includes("?second")) other().gBrowser.removeTab(t);
-          await wait(300);
-          return {name: e?.name, title: e?.title, label, loaded};""" % EXT_ID)
+          return {name: e?.name, title: e?.title, label: there()?.label, loaded: !!there()?.linkedPanel};""" % EXT_ID)
         check("an essential's name is in its list entry, and its placeholder in the other window takes it and unloads again", r.get("name") == "Jira" and r.get("label") == "Jira" and r.get("loaded") is False, str(r))
         front()
         in_front("page.renameKept(args[0]); return 1;", tile_id)
@@ -1930,6 +1933,10 @@ def alone_tab_names(m):
         r = panel("""await until(() => tip(tile(args[0])) === "Short"); const out = tip(tile(args[0]));
           send({type: "renameTab", tabId: args[0], name: ""}); await until(() => tip(tile(args[0])) !== "Short"); return out;""", tile_id)
         check("what was typed before the space was left is saved", r == "Short", str(r))
+        r = m.js(H + """const loaded = () => other().gBrowser.tabs.filter(t => !t.selected && url(t).includes("ghost.html") && t.linkedPanel).map(t => t.label);
+          for (let i = 0; i < 150 && loaded().length; i++) await wait(100);
+          return loaded();""")
+        check("all this naming left no placeholder loaded in the second window", r == [], str(r))
     finally:
         m.chrome()
         m.js(H + """const w = main(); if (w.__beforeNames && !w.__beforeNames.closing) w.gBrowser.selectedTab = w.__beforeNames; delete w.__beforeNames; await wait(500); return 1;""")
