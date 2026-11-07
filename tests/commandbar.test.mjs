@@ -1016,3 +1016,21 @@ test("taking an essential away from a copy Tidier has just made is not missed", 
   assert.ok(!ff.store.essentials.length, "it is no essential any more");
   x.kill();
 });
+
+test("Reopen closed tab brings back the last one that was a page", async () => {
+  const ff = new FakeFirefox();
+  const { w } = world(ff);
+  const x = await started(ff);
+  ff.recentlyClosed = [
+    { lastModified: 9, tab: { sessionId: "placeholder", url: GHOST("ghost", "x"), title: "A placeholder", windowId: w.id } },
+    { lastModified: 8, tab: { sessionId: "page", url: "https://closed.example/", title: "A page", windowId: w.id } },
+    { lastModified: 7, tab: { sessionId: "older", url: "https://older.example/", title: "Older", windowId: w.id } },
+  ];
+  let restored = null;
+  x.b.sessions.restore = async id => { restored = id; };
+  const page = await openBar(ff, x, w.id);
+  await page.tell({ type: "choose", row: { kind: "command", name: "reopen-closed" } });
+  await wait(100);
+  assert.equal(restored, "page");
+  x.kill();
+});
