@@ -54,6 +54,7 @@
       "spaces.js",
       "ownfolders.js",
       "safemoves.js",
+      "tabactions.js",
       "copies.js",
       "moveover.js",
       "quiet.js",

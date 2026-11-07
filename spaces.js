@@ -256,7 +256,6 @@ browser.permissions.onAdded.addListener(() => { if (started) serial(startSpaces)
 async function startSpaces() {
   if (!tidierAlone) return;
   await setSpaceKeys();
-  startMenus(); // ownfolders.js
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
     const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);

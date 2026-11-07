@@ -103,7 +103,10 @@ async function rememberClose(group, tabId) {
 async function closeFromSidebar(windowId, tabId) {
   if (!tidierAlone) { await browser.tabs.remove(tabId).catch(() => {}); return; }
   const group = closeGroup(windowId);
-  const removed = rememberClose(group, tabId).catch(noteError).then(() => browser.tabs.remove(tabId)).catch(() => {});
+  // Remembered by the row, closed by what the row stands for (closeTargetOf, tabactions.js):
+  // a saved tab whose page is loaded in another window only unloads. Its row stays, so it
+  // is found not to be gone and nothing is said, and the record keeps it.
+  const removed = rememberClose(group, tabId).catch(noteError).then(() => closeTargetOf(tabId)).then(target => browser.tabs.remove(target)).catch(() => {});
   group.removals.push(removed);
   await removed;
 }

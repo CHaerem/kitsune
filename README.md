@@ -331,7 +331,8 @@ loads tabs' icons from where the site has them.
 - `archive.js` – archiving of unused tabs.
 - `shortcuts.js` – ⌘⇧C, copy the address.
 - `spaces.js` – spaces: hiding, switching, new tabs and links, rules.
-- `ownfolders.js` – Tidier's own folders, moving tabs, the tab's context menu.
+- `ownfolders.js` – Tidier's own folders, moving tabs.
+- `tabactions.js` – what the menu on a tab does (the menu itself: `sidebar/tabmenu.js`).
 - `sidebar-view.js`, `sidebar/` – Tidier's own sidebar.
 - `copies.js` – the daily copy of Tidier's data, and taking one in.
 - `moveover.js`, `settings/` – the settings page, and moving a browser over from Sidebery.
