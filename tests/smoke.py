@@ -1518,9 +1518,10 @@ def alone_bridge(m):
     before = m.js(H + "return {selected: main().gBrowser.selectedTab.userContextId, label: main().gBrowser.selectedTab.label};")
     text, is_error, _ = client.call("open_tab", url=m.pages + "/agent")
     tab = json.loads(text)["tab"] if not is_error else None
-    r = m.js(H + """const t = wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("/agent"));
-      for (let i = 0; i < 60 && !wins().flatMap(w => w.gBrowser.tabs).some(t => url(t).includes("/agent")); i++) await wait(100);
-      const here = wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("/agent"));
+    r = m.js(H + """const agents = () => wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("/agent"));
+      // (Hidden a moment after it appears: waited for, not assumed.)
+      for (let i = 0; i < 60 && !(agents().length && agents().every(t => t.hidden)); i++) await wait(100);
+      const here = agents();
       return {contexts: here.map(t => t.userContextId), hidden: here.map(t => t.hidden), selected: main().gBrowser.selectedTab.userContextId, label: main().gBrowser.selectedTab.label};""")
     check("open_tab lands in the Agent space and its container", r["contexts"] == [context], f"{text} {r}")
     check("an agent's tab does not take you along", r["selected"] == before["selected"] and r["label"] == before["label"] and r["hidden"] == [True], str(r))
@@ -1539,6 +1540,13 @@ def alone_bridge(m):
     check("what a person cannot see is not read", not re.search(r"HIDDEN-", page), page)
     check("what is around the page is left out", "Site menu" not in page and "<script" not in page, page)
     check("what is in a field is never read", "SECRET-" not in page, page)
+
+    # With a second window its placeholder there means the same page, also in a real Firefox.
+    ghost = ext_page(m, "/settings/settings.html", """const tabs = [...await page.browser.tabs.query({})], live = tabs.find(t => t.id === args[0]);
+      return tabs.find(t => t.windowId !== live.windowId && t.cookieStoreId === live.cookieStoreId && t.url.includes("ghost.html"))?.id ?? null;""", tab)
+    if ghost is not None:
+        text, is_error, _ = client.call("read_page", tab=ghost)
+        check("a placeholder's id reads the page it stands for", not is_error and "# A heading" in text, text[:300])
 
     found, is_error, _ = client.call("find", tab=tab)
     check("find lists what can be clicked, and no field's content", "Add a line" in found and "Your name" in found and "SECRET-" not in found, found)
@@ -1585,6 +1593,11 @@ def alone_bridge(m):
     check("close_tab closes it", not client.call("close_tab", tab=unload)[1] and "?loaded" not in client.call("list_tabs")[0])
 
     # A password Firefox filled in, as it does in any container: an agent must not be able to sign in with it.
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent-fixed")
+    layer = json.loads(text)["tab"]
+    client.call("wait_for", tab=layer, text="fixed layer")
+    check("a page that is all one fixed layer is read", "All the text of this page" in client.call("read_page", tab=layer)[0])
+    client.call("close_tab", tab=layer)
     text, _, _ = client.call("open_tab", url=m.pages + "/agent-signin")
     signin = json.loads(text)["tab"]
     client.call("wait_for", tab=signin, selector="button")

@@ -200,7 +200,8 @@ test("on: its own space, its tools answer, and a tab elsewhere is refused and lo
   }
   assert.ok(!(ff.scripted || []).includes(work.id), "nothing ran in your page");
   assert.ok(ff.tabs.has(work.id));
-  const none = tabIn(ff, "firefox-default");
+  // (Added here, not at the start: with requests looked at, one is moved into a space as it starts.)
+  const none = ff.addTab(w.id, { url: "https://nocontainer-now.example/" });
   assert.equal((await host.call("read_page", { tab: none.id })).error, NO_TAB, "a tab with no container is in no space");
   const listed = JSON.parse((await host.call("list_tabs")).text.split("\n").find(l => l.startsWith("[")));
   assert.deepEqual(listed.map(t => t.space), ["Agent"]);
@@ -213,7 +214,6 @@ test("on: its own space, its tools answer, and a tab elsewhere is refused and lo
     assert.equal((await host.call("navigate", { tab: id, url })).ok, false, url);
   }
   x.kill();
-  assert.ok(w);
 });
 
 test("opening a space is your decision, read-only unless you say otherwise", async () => {
@@ -911,6 +911,24 @@ test("For you comes back after an update, with its note and its mark", async () 
   assert.equal(y.js("forYouWaiting")[AGENT], 1);
   assert.equal(y.hosts.length, 1, "and the bridge is on again");
   y.kill();
+});
+
+test("every call ends: one that hangs on Firefox does not keep the ring on for good", async () => {
+  const ff = new FakeFirefox();
+  alone(ff);
+  const x = await start(ff);
+  await x.settings("on", { on: true });
+  const host = x.hosts[0];
+  const { tab } = JSON.parse((await host.call("open_tab", { url: "https://a.example/" })).text);
+  x.b.tabs.captureTab = () => new Promise(() => {});
+  host.fromHost({ type: "call", id: "hangs", tool: "screenshot", args: { tab } });
+  await wait(x.js("BRIDGE_CALL_MOST_MS") + 500);
+  assert.match((await answerTo(host, "hangs")).error, /too long/);
+  assert.equal(x.js("bridgeBusy"), 0);
+  assert.equal(x.js("bridgeCalls.size"), 0);
+  await wait(x.js("AGENT_QUIET_MS") + 1000);
+  assert.equal(x.js("agentLine"), null);
+  x.kill();
 });
 
 test("answers do not pile up in memory while the bridge stays on", async () => {

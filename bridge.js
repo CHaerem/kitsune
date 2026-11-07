@@ -30,6 +30,7 @@ const BRIDGE_RETRIES_MS = [1000, 5000, 20000]; // a host that goes away is start
 const AGENT_QUIET_MS = 20000; // how long after its last action an agent still counts as active
 const AGENT_LOG = 50; // actions kept, in memory only, for the settings page
 const PAGE_WAIT_MS = 15000, PAGE_CALL_MS = 20000;
+const BRIDGE_CALL_MOST_MS = 55000; // more than wait_for's longest, less than the MCP server waits for an answer
 const READ_DEFAULT = 30000, READ_MOST = 100000, COPY_MOST = 200000; // characters
 const LIST_MOST = 200; // tabs in one answer
 const OPEN_MOST = 100; // tabs in a space beyond which an agent opens no more: a runaway agent, or a page steering one, cannot bury Firefox
@@ -527,11 +528,15 @@ function bridgeCut() {
 
 // Not Promise.race with one promise that lasts as long as the bridge: each race leaves
 // something on that promise that holds its result, so every page and picture an agent
-// read would stay in memory until a Stop.
+// read would stay in memory until a Stop. And every call ends: one that waits for ever on
+// Firefox (a picture of a tab that hangs) would keep the ring and the line on for good.
 function bridgeUntilStopped(call) {
   return new Promise((resolve, reject) => {
-    bridgeCalls.add(reject);
-    call.then(resolve, reject).finally(() => bridgeCalls.delete(reject));
+    const ended = () => { clearTimeout(limit); bridgeCalls.delete(end); };
+    const end = err => { ended(); reject(err); };
+    const limit = setTimeout(() => end(bridgeRefusal("That took too long.")), BRIDGE_CALL_MOST_MS);
+    bridgeCalls.add(end);
+    call.then(value => { ended(); resolve(value); }, end);
   });
 }
 

@@ -43,7 +43,9 @@ function pageHidden(el) {
   if (parseFloat(style.fontSize) < 3) return true;
   const box = el.getBoundingClientRect();
   if (box.width <= 1 && box.height <= 1 && el.childElementCount === 0) return true;
-  if ((box.width <= 1 || box.height <= 1) && style.overflow !== "visible") return true; // no room, and what does not fit is cut off
+  // No room, and what does not fit is cut off. Not the page itself: its overflow belongs to
+  // the window, and a body with nothing but a fixed layer in it has no height at all.
+  if ((box.width <= 1 || box.height <= 1) && style.overflow !== "visible" && el !== document.body && el !== document.documentElement) return true;
   return box.right + scrollX < 0 || box.bottom + scrollY < 0;
 }
 

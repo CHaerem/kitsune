@@ -89,6 +89,8 @@ PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
     "/agent": AGENT_PAGE,
+    # An app whose whole page is a fixed layer: the body has no height, and overflow hidden.
+    "/agent-fixed": """<title>Fixed layer</title><body style="margin:0;overflow:hidden"><div style="position:fixed;inset:0"><p>All the text of this page is in a fixed layer.</p></div></body>""",
     # As when Firefox has filled in a saved password, in any container.
     "/agent-signin": """<title>Sign in</title><form onsubmit="event.preventDefault(); document.title = 'Signed in';"><input name="u" value="SECRET-USER"><input type="password" value="SECRET-PASSWORD"><button>Sign in</button></form>""",
     # The same, in a closed shadow part of the page, with the button outside it.
