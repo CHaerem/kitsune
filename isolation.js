@@ -325,7 +325,8 @@ async function recordIntoSpace(key, created, space) {
     const rep = await createRep(t.windowId, key, all[key], undefined, t.index).catch(noteError);
     if (rep && t.active) await browser.tabs.update(rep.id, { active: true }).catch(() => {});
   }
-  await browser.tabs.remove(old.map(t => t.id)).catch(() => {});
+  // One by one (removeTabs, common.js): Firefox refuses a whole list if one has closed meanwhile.
+  await removeTabs(old.map(t => t.id), syncBusy).catch(() => {});
   await forgetClosedPlaceholders("ghost", [key]);
 }
 
@@ -370,7 +371,7 @@ async function moveEssentialIntoSpace(key, space) {
   for (const t of old) { busy.add(t.id); keyByTab.delete(t.id); await browser.sessions.removeTabValue(t.id, TAB_KEY).catch(() => {}); }
   await ensureAllWindows();
   for (const copy of await copiesOf(key)) if (selected.has(copy.windowId)) await browser.tabs.update(copy.id, { active: true }).catch(() => {});
-  await browser.tabs.remove(old.map(t => t.id)).catch(() => {});
+  await removeTabs(old.map(t => t.id), busy).catch(() => {});
   await forgetClosedPlaceholders("essential", [key]);
 }
 
@@ -719,7 +720,7 @@ async function forgetSpace(id) {
     const keys = new Set(essentials.map(e => e.key));
     const copies = (await browser.tabs.query({ cookieStoreId: id, pinned: true })).filter(t => keys.has(keyByTab.get(t.id)));
     copies.forEach(t => { busy.add(t.id); keyByTab.delete(t.id); });
-    await browser.tabs.remove(copies.map(t => t.id)).catch(() => {});
+    await removeTabs(copies.map(t => t.id), busy).catch(() => {});
     await forgetClosedPlaceholders("essential", [...keys]);
   }
   const network = await spaceNetwork.get();
@@ -730,7 +731,8 @@ async function forgetSpace(id) {
   if (spaceOrder?.includes(id)) await browser.storage.local.set({ spaceOrder: spaceOrder.filter(s => s !== id) });
   const left = await browser.tabs.query({ cookieStoreId: id });
   left.forEach(t => { syncBusy.add(t.id); forget(t.id); busy.add(t.id); keyByTab.delete(t.id); });
-  await browser.tabs.remove(left.map(t => t.id)).catch(() => {});
+  await removeTabs(left.map(t => t.id), syncBusy).catch(() => {});
+  left.forEach(t => busy.delete(t.id));
 }
 
 // --- 5. A vanished container comes back --------------------------------------------
@@ -897,7 +899,7 @@ async function moveFolderToSpace(key, space, windowId) {
     all[k].cookieStoreId = space;
     const reps = await repsNow(k); // tabsync.js: only this tab's, not every tab once per tab
     reps.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-    await browser.tabs.remove(reps.map(t => t.id)).catch(() => {});
+    await removeTabs(reps.map(t => t.id), syncBusy).catch(() => {});
     await forgetClosedPlaceholders("ghost", [k]);
     for (const w of wins) await createRep(w.id, k, all[k]).catch(noteError);
     moved++;
