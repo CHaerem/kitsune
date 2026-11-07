@@ -64,6 +64,7 @@
       "quiet.js",
       "sidebar-view.js",
       "sounds.js",
+      "news.js",
       "archive.js",
       "shortcuts.js"
     ],
