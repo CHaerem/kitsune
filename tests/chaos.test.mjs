@@ -107,6 +107,7 @@ class World {
     }
     const e = all[key];
     const inFolder = inFolderOf(all, key);
+    if (this.relaxed) this.excused.add(key); // its folder's page has closed in this window: it may be left there
     const unloaded = t.discarded || isPlaceholder(t.url);
     if (!e || !inFolder || unloaded) this.excused.add(key);
     if (this.value(t, "syncRole") === "copy") { this.relaxed = true; this.excused.add(key); }
