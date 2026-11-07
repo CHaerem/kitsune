@@ -2613,15 +2613,17 @@ def alone_restart(m):
       await until(() => tile.title.startsWith("Named essential") && rows().includes("Named tab"));
       return {tile: tile.title, rows: rows()};""")
     check("names: an essential and a saved tab named before the restart", named.get("tile", "").startswith("Named essential") and "Named tab" in named.get("rows", []), str(named))
-    before = m.js(SNAP_ALONE)
+    # Which tab each window is on says why a page has moved between them.
+    on_now = H + """return wins().map(w => { const t = w.gBrowser.selectedTab; return [url(t).slice(0, 60), role(w, t) ?? null, !!t.pinned]; });"""
+    before, on_before = m.js(SNAP_ALONE), m.js(on_now)
     # Also in the extension's own storage, as a browser moved over has it: this test Firefox is
     # only pointed at its managed storage once it has started (USE_TEST_MANAGED_STORAGE), too
     # late for the first view of a sidebar that is open, which a real file is not.
     sidebar_page(m, """await page.browser.storage.local.set(page.JSON.parse(JSON.stringify({tidierAlone: true}))); return 1;""")
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
-    after = m.js(SNAP_ALONE)
-    check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
+    after, on_after = m.js(SNAP_ALONE), m.js(on_now)
+    check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"on {on_before} -> {on_after}; {before} -> {after}")
     # Its rows, not only the tabs: in a sidebar page opened now, and in the window's own sidebar.
     r = ext_page(m, "/sidebar/sidebar.html?after-restart", """for (let i = 0; i < 40 && !rows().length; i++) await wait(250);
       const own = page.browser.extension.getViews({type: "sidebar"}).map(v => [...v.document.querySelectorAll("#tabs .tab")]);
@@ -3663,6 +3665,11 @@ def alone_space_menu(m):
     r = menu_on(m, f"dot({json.dumps(here)})", IN_SPACE)
     check("the space you are in also has Clear", r == IN_SPACE, str(r))
     # A right click elsewhere takes the open menu away, and the list has its own.
+    # (A long list's empty part lies under that menu, which stands above the bar, and a right
+    # click on a menu does nothing, so there it goes first.)
+    if in_sidebar(m, f"""() => {{ const p = {EMPTY_LIST}.getBoundingClientRect(), box = doc.getElementById("menu").getBoundingClientRect(); return p.y + 1 >= box.top && p.y <= box.bottom; }}"""):
+        sidebar_key(m, ESC)
+        sidebar_until(m, "() => !labels().length")
     r = menu_on(m, EMPTY_LIST, ["New folder", "Clear today's tabs", "Settings"])
     check("the empty part of the list has its own short menu", r == ["New folder", "Clear today's tabs", "Settings"], str(r))
     r = menu_on(m, 'doc.getElementById("space-name")', IN_SPACE)

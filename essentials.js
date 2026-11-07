@@ -201,10 +201,17 @@ async function onPinned(tab) {
   const key = crypto.randomUUID();
   await tagTab(tab.id, key);
   setList([...list, { key, url, cookieStoreId: tab.cookieStoreId, title, icon, ...(entry?.name ? { name: entry.name } : {}) }]);
-  // The pinned placeholder becomes this essential's copy, still unloaded. Not marked as our
-  // own change: a placeholder's load is nothing the listeners act on, and an unpin in that
-  // moment (you changed your mind) would be ignored, leaving a stray placeholder as a tab.
-  if (isGhostUrl(tab.url)) await browser.tabs.update(tab.id, { url: ghostUrl("essential", key) }).catch(() => {});
+  // The pinned placeholder becomes this essential's copy, still unloaded. With Tidier alone
+  // this is not marked as our own change: a placeholder's load is nothing the listeners act
+  // on, and an unpin in that moment (you changed your mind) would be ignored, leaving a stray
+  // placeholder as a tab. With Sidebery it stays as it was.
+  if (isGhostUrl(tab.url)) {
+    if (!tidierAlone) {
+      busy.add(tab.id);
+      setTimeout(() => busy.delete(tab.id), 1500);
+    }
+    await browser.tabs.update(tab.id, { url: ghostUrl("essential", key) }).catch(() => {});
+  }
   for (const w of await normalWindows()) if (w.id !== tab.windowId) await ensureWindow(w.id);
   await sortEssentials(tab.windowId, await getList()); // with the others of its space
 }
