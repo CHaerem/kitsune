@@ -1160,3 +1160,18 @@ test("a reopened window whose tabs get their values late is not doubled", async 
   assert.equal(ff.urls(w.id).filter(u => u.startsWith("ghost.html")).length, 1, "and the double is gone");
   x.kill();
 });
+
+test("a new tab moved by Tidier and given an address at once is synced, with Sidebery too", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const fresh = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(fresh));
+  await wait(2000);
+  x.js(`syncBusy.add(${fresh.id})`); // folders first has just moved it (folders.js)
+  ff.navigate(fresh.id, "https://typed.example/");
+  await wait(3000);
+  assert.ok(ff.values.get(fresh.id)?.syncKey, "it has a key");
+  x.kill();
+});
