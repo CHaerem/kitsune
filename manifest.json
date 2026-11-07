@@ -56,6 +56,7 @@
       "safemoves.js",
       "tabactions.js",
       "copies.js",
+      "tabnames.js",
       "moveover.js",
       "quiet.js",
       "sidebar-view.js",
