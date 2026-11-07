@@ -1597,9 +1597,21 @@ def alone_tab_menu(m):
           row.dispatchEvent(new page.DragEvent("dragend", at));
           await rightClick(row);
           doc.activeElement.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Tab", bubbles: true, cancelable: true}));
-          return {redrawn, dragged, tabbed: menu.hidden, left: !!doc.querySelector(".menu-for")};""", a)
+          const tabbed = menu.hidden;
+          await rightClick(row);
+          menu.dispatchEvent(new page.WheelEvent("wheel", {bubbles: true, deltaY: 10}));
+          const scrolledIn = !menu.hidden;
+          doc.getElementById("tabs").dispatchEvent(new page.WheelEvent("wheel", {bubbles: true, deltaY: 10}));
+          const scrolled = menu.hidden;
+          // A middle click outside only closes it too: the tab under the pointer stays.
+          await rightClick(row);
+          row.dispatchEvent(new page.MouseEvent("auxclick", {bubbles: true, cancelable: true, button: 1}));
+          const middle = menu.hidden;
+          await wait(500);
+          return {redrawn, dragged, tabbed, scrolledIn, scrolled, middle, here: !!rowOf(args[0]), left: !!doc.querySelector(".menu-for")};""", a)
         check("the mark stays while its row is drawn anew", r["redrawn"] == {"open": True, "mark": True}, str(r))
-        check("a drag or the Tab key closes the menu", r["dragged"] and r["tabbed"] and not r["left"], str(r))
+        check("a drag, the Tab key or scrolling the list closes the menu, and scrolling in it does not", r["dragged"] and r["tabbed"] and r["scrolledIn"] and r["scrolled"] and not r["left"], str(r))
+        check("a middle click outside the menu only closes it", r["middle"] and r["here"], str(r))
         g = open_tab("gone")
         r = sidebar_page(m, MENU_PAGE + """await until(() => rowOf(args[0])); await rightClick(rowOf(args[0])); const open = !menu.hidden;
           await page.browser.tabs.remove(args[0]); await until(() => menu.hidden, 3000); return {open, closed: menu.hidden};""", g)
@@ -1645,7 +1657,7 @@ def alone_tab_menu(m):
           return 1;""", b)
         r = sidebar_page(m, MENU_PAGE + """const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Menu kept");
           await rightClick(head); const folder = shown(), list = await rightClick(doc.getElementById("tabs")); menu.hidden = true; return {folder, list};""")
-        check("a folder and the empty list keep their own short menus", r == {"folder": ["Rename", "Delete folder (its tabs stay)"], "list": ["New folder"]}, str(r))
+        check("a folder and the empty list keep their own short menus", r["folder"] == ["Rename", "Delete folder (its tabs stay)"] and r["list"][0] == "New folder" and "Reload" not in r["list"], str(r))
         act(b, "Duplicate")
         r = m.js(MENU_TABS + """const has = () => tabs().filter(x => idOf(x.t) !== args[0] && url(x.t).includes("smoke-menu-b") && x.t.linkedPanel);
           await until(() => has().length && role(has()[0].w, has()[0].t) === "live");
