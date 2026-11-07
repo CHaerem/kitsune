@@ -462,7 +462,7 @@ async function check(W, phase, { strong }) {
     }
     // No tab outside the record, except new tab pages and what is not a page.
     for (const t of tabs) {
-      if (t.pinned) continue;
+      if (t.pinned) { if (W.value(t, "syncKey")) bad("pinned-synced", `pinned tab ${t.id} ${t.url} still has key ${W.value(t, "syncKey")}`); continue; }
       const key = W.value(t, "syncKey");
       if (key && !all[key]) bad("stale-key", `tab ${t.id} ${t.url} has key ${key}, which is not in the record`);
       if (!key && (isWeb(t.url) || isPlaceholder(t.url) || isFolderPage(t.url))) bad("no-key", `tab ${t.id} in window ${t.windowId}: ${t.url} has no key`);
