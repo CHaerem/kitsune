@@ -1435,3 +1435,18 @@ test("a window that closes after its live tab was dragged out does not make a se
   assert.equal(ff.list(b.id).filter(y => ff.values.get(y.id)?.syncKey === key).length, 1);
   x.kill();
 });
+
+test("a placeholder you are looking at opens when the window with its page closes", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", active: true, cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  const ghost = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === key);
+  ff.select(ghost.id); // selected in the window you are not using: it stays a placeholder there
+  await ff.clock.run(1000);
+  assert.ok(ff.tabs.get(ghost.id).url.includes("ghost.html"));
+  ff.closeWindow(a.id);
+  await ff.clock.idle(60000);
+  assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
+  x.kill();
+});

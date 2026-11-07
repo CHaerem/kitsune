@@ -570,6 +570,7 @@ async function pull(ghostId) {
   if (!live || live.windowId === ghost.windowId) {
     // No live tab to pull: the ghost becomes the live tab and loads itself.
     await setRole(ghostId, key, "live");
+    if (!live) await openPlaceholder(ghostId, key);
     return;
   }
   pulling++;
@@ -941,7 +942,15 @@ function pullSelected(windowId) {
   return serial(async () => {
     const [active] = await browser.tabs.query({ windowId, active: true });
     if (active && syncRoleByTab.get(active.id) === "ghost") await pull(active.id);
+    else if (active && syncRoleByTab.get(active.id) === "live" && isGhostUrl(active.url)) await openPlaceholder(active.id, syncKeyByTab.get(active.id));
   });
+}
+// A placeholder you are looking at that has become the live tab (the window with the real
+// page closed, say). It asked once if it should open, when it was selected, and was told no;
+// switching to its window does not make it ask again, and it would stay blank.
+async function openPlaceholder(tabId, key) {
+  const url = (await getSynced())[key]?.url;
+  if (isWeb(url)) await browser.tabs.update(tabId, { url }).catch(ifGone);
 }
 browser.windows.onFocusChanged.addListener(windowId => {
   if (started && windowId !== browser.windows.WINDOW_ID_NONE) pullSelected(windowId);
