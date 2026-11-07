@@ -31,7 +31,9 @@ A violation counts only if it is still there after waiting: Tidier is allowed to
 on its way. Each sample records the extension process's memory and CPU and how many
 jobs ran. At the end it prints a table, and fails on any violation, on memory that
 grows at the same number of tabs, on a list in memory that outgrows the tabs there are,
-or on Tidier not doing nothing when nothing happens.
+or on Tidier not doing nothing when nothing happens. (Tried on purpose: a leak of 1 KB of
+objects per job fails a 15-minute run at 8.5 MB, and a tab lost as it moves to another window
+fails within minutes. Small typed arrays do not show in what Firefox says is allocated.)
 """
 import argparse
 import http.server
