@@ -1572,3 +1572,21 @@ test("a page that stayed open and is selected is left alone when more is hidden"
   assert.equal(said.length, 1, "it was said once, and a selected tab that stays is no news");
   x.kill();
 });
+
+test("a window that refuses a new tab does not keep the others in a hidden space", async () => {
+  const { ff } = machine({ 1: "Work", 2: "Client" });
+  ff.store.syncedTabs = { plain: { url: "https://plain.example/", title: "Plain", cookieStoreId: c(2), parentKey: null, group: false, added: 1 } };
+  const one = ff.addWindow(), two = ff.addWindow({ focused: true });
+  for (const w of [one, two]) { const t = ff.addTab(w.id, { url: "https://client.example/", title: "C", cookieStoreId: c(2) }); t.active = true; }
+  const x = await boot(ff);
+  await x.js("switchSpace")(one.id, c(2));
+  await x.js("switchSpace")(two.id, c(2));
+  await wait(200);
+  const create = x.b.tabs.create;
+  // The first window to leave has nothing of the other space and asks for a new tab, which it no longer can.
+  x.b.tabs.create = async p => { if (p.windowId === one.id && p.url === undefined) throw new Error(`Invalid window ID: ${p.windowId}`); return create(p); };
+  await hide(x, c(2));
+  await wait(500);
+  assert.equal(x.js(`activeSpace.get(${two.id})`), c(1), "the other window has left it");
+  x.kill();
+});

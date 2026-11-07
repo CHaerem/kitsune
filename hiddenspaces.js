@@ -77,7 +77,7 @@ async function hiddenChanged(before) {
   }
   if (back.size) {
     // What is open of it and not in tab sync (opened from Firefox's own menu) now is a tab of its space.
-    for (const t of await browser.tabs.query({})) if (back.has(t.cookieStoreId) && !syncKeyByTab.has(t.id)) await register(t.id);
+    for (const t of await browser.tabs.query({})) if (back.has(t.cookieStoreId) && !syncKeyByTab.has(t.id)) await register(t.id).catch(noteError);
     // Filled first: reconcileAll then makes one of each tab's placeholders the live one, as after a closed window.
     for (const w of await normalWindows()) await fillWindow(w.id).catch(noteError);
     await reconcileAll();
@@ -174,8 +174,8 @@ async function leaveHiddenSpaces(spaces = hiddenSpaceIds) {
     const next = isHiddenSpace(space) || !space ? (await spaceList(used))[0]?.id : space;
     if (!next) continue;
     const stays = selected?.cookieStoreId === NO_CONTAINER || (isHiddenSpace(selected?.cookieStoreId) && !spaces.has(selected.cookieStoreId));
-    if (stays) await setSpace(w.id, next);
-    else await switchSpace(w.id, next);
+    // (One window closing meanwhile must not leave the others in a space that is hidden.)
+    await (stays ? setSpace(w.id, next) : switchSpace(w.id, next)).catch(noteError);
   }
 }
 
