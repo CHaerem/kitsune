@@ -184,18 +184,18 @@ function sidebar({ alone = true, active = C1, tabs = [{ id: 1, active: true }, {
 test("a space's menu: Clear only for the space you are in, and only with something to clear", () => {
   const s = sidebar();
   assert.ok(s.rightClick("#spaces .space", { space: C1 }));
-  assert.deepEqual(s.labels(s.menus.at(-1)), ["Rename", "Unload this space", "Clear today's tabs", "Settings"]);
+  assert.deepEqual(s.labels(s.menus.at(-1)), ["Rename", "Unload this space", "Clear today's tabs", "Archived tabs", "Settings"]);
   assert.ok(s.rightClick("#spaces .space", { space: C2 }));
-  assert.deepEqual(s.labels(s.menus.at(-1)), ["Rename", "Unload this space", "Settings"]);
+  assert.deepEqual(s.labels(s.menus.at(-1)), ["Rename", "Unload this space", "Archived tabs", "Settings"]);
   const lone = sidebar({ tabs: [{ id: 1, active: true }] });
   lone.rightClick("#spaces .space", { space: C1 });
-  assert.deepEqual(lone.labels(lone.menus.at(-1)), ["Rename", "Unload this space", "Settings"]);
+  assert.deepEqual(lone.labels(lone.menus.at(-1)), ["Rename", "Unload this space", "Archived tabs", "Settings"]);
 });
 
 test("the name above the list has the same menu, for the space you are in", () => {
   const s = sidebar();
   assert.ok(s.rightClick("#space-name"));
-  assert.deepEqual(s.labels(s.menus.at(-1)), ["Rename", "Unload this space", "Clear today's tabs", "Settings"]);
+  assert.deepEqual(s.labels(s.menus.at(-1)), ["Rename", "Unload this space", "Clear today's tabs", "Archived tabs", "Settings"]);
 });
 
 test("the items send what the background knows, and Settings needs no message", () => {
@@ -219,15 +219,15 @@ test("Clear acts on the space it was offered for, wherever the window is by the 
   assert.deepEqual(s.sent.map(m => m.space), [C1, C1]);
 });
 
-test("the list's menu is New folder, Clear today's tabs, Settings, and stays that short", () => {
+test("the list's menu is New folder, Clear today's tabs, Archived tabs, Settings, and stays that short", () => {
   const s = sidebar();
-  assert.deepEqual(s.labels(s.list()), ["New folder", "Clear today's tabs", "Settings"]);
+  assert.deepEqual(s.labels(s.list()), ["New folder", "Clear today's tabs", "Archived tabs", "Settings"]);
   s.list()[1][1]();
   assert.deepEqual({ ...s.sent.at(-1) }, { type: "clearSpace", space: C1 });
-  s.list()[2][1]();
+  s.list()[3][1]();
   assert.equal(s.options.length, 1);
   const lone = sidebar({ tabs: [{ id: 1, active: true }] });
-  assert.deepEqual(lone.labels(lone.list()), ["New folder", "Settings"]);
+  assert.deepEqual(lone.labels(lone.list()), ["New folder", "Archived tabs", "Settings"]);
 });
 
 test("without Tidier alone a right click on a dot is Firefox's, as today", () => {

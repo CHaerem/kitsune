@@ -149,6 +149,7 @@ async function clearSpace(windowId, space) {
     if (!entry) { await browser.tabs.remove(t.id).catch(() => {}); continue; }
     const item = await rememberTab(key, entry); // first: closesQuietly unloads the page
     if (!(await closesQuietly(key))) { stayed++; continue; }
+    await noteArchived(entry, "closed"); // archivelist.js: a tab cleared can be found again too
     await closeEverywhere(key, { dismiss: false }).catch(noteError);
     items.push(item);
   }
@@ -184,6 +185,7 @@ async function bringBack(windowId, items, tabs) {
     all[key] = { ...entry };
     if (entry.parentKey && !all[entry.parentKey]) { all[key].parentKey = null; delete all[key].saved; }
     if (entry.liveFolder) await forgetDismissed(entry);
+    await dropArchived(entry.cookieStoreId, entry.url); // archivelist.js: open again, so it has no row there (it does not go through register)
   }
   saveSynced(all);
   await reopenPages(back, closed);

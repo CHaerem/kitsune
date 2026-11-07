@@ -72,6 +72,7 @@
       "sidebar-view.js",
       "sounds.js",
       "news.js",
+      "archivelist.js",
       "archive.js",
       "shortcuts.js"
     ],

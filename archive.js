@@ -11,6 +11,9 @@
 // archiving was first turned on, so turning it on does not close old tabs at
 // once. Change the time with "archiveAfterHours" in the extension storage
 // (0 turns archiving off).
+//
+// With Tidier alone every tab it closes also goes in Tidier's own list, per space, so
+// it can be found again there (archivelist.js).
 
 const ARCHIVE_DEFAULT_HOURS = 12;
 const ARCHIVE_CHECK_MINUTES = 10;
@@ -46,6 +49,10 @@ async function archiveIdleTabs({ now = Date.now(), onlyKeys, explain = false } =
     const why = keepReason(all, key, repsOf(key, tabs), tabsById, now, since, hours);
     if (why) { kept[key] = why; continue; }
     if (!(await closesQuietly(key))) { kept[key] = "unsaved"; continue; }
+    // A real page has Recently Closed as well. A tab that is only a placeholder has nothing
+    // there, so if the list cannot take it, closing it would lose it for good: it stays.
+    const noted = await noteArchived(all[key], "archived");
+    if (!noted && isGhostUrl(tabsById.get(liveTabId(key))?.url)) { kept[key] = "no list"; continue; }
     archived.push(all[key].url);
     await closeEverywhere(key, { dismiss: false });
   }
@@ -64,15 +71,42 @@ function keepReason(all, key, reps, tabsById, now, since, hours) {
   if (!live) return "no live tab";
   // A live tab that is only a placeholder (it became live when the window with
   // the real page closed) has no page for Recently Closed to keep, and its
-  // lastAccessed says nothing about when you last used the tab. It is kept until
-  // you select it, and from then on it ages like any other tab.
-  if (isGhostUrl(live.url)) return "placeholder";
-  // A tab opened in the background and never selected has no lastAccessed;
-  // then the time counts from when it was opened.
-  const lastUsed = Math.max(live.lastAccessed || 0, entry.added || 0, since);
+  // lastAccessed says nothing about when you last used the tab. With Sidebery it is
+  // kept until you select it, and from then on it ages like any other tab.
+  //
+  // With Tidier alone Tidier's own list holds its address (archivelist.js), so it can
+  // be archived like the rest. Its time counts from when this first saw it as a
+  // placeholder: you may well have used the page just before its window closed.
+  let lastUsed;
+  if (isGhostUrl(live.url)) {
+    if (!tidierAlone || !isWeb(entry.url)) return "placeholder";
+    if (!entry.placeholderSince) {
+      entry.placeholderSince = now;
+      saveSynced(all, { lazy: true }); // lost in a crash, the time just starts again
+    }
+    lastUsed = Math.max(entry.placeholderSince, entry.added || 0, since);
+  } else {
+    delete entry.placeholderSince; // it was selected, and its own lastAccessed counts again
+    // A tab opened in the background and never selected has no lastAccessed;
+    // then the time counts from when it was opened.
+    lastUsed = Math.max(live.lastAccessed || 0, entry.added || 0, since);
+  }
   if (now - lastUsed < hours * 3600e3) return "used " + Math.round((now - lastUsed) / 60000) + " min ago";
   return null;
 }
+
+// Selected, it is in use: if its window then closes, its time as a placeholder starts
+// anew from there. A check cannot see this: it stops at "selected" while it is, and may
+// not come at all before the window closes, and then an old time would close a tab you
+// used a minute ago.
+browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  const key = syncKeyByTab.get(tabId);
+  if (!tidierAlone || !started || !key) return;
+  const all = await getSynced();
+  if (!all[key]?.placeholderSince) return;
+  delete all[key].placeholderSince;
+  saveSynced(all, { lazy: true });
+});
 
 browser.alarms.create("archive", { periodInMinutes: ARCHIVE_CHECK_MINUTES });
 browser.alarms.onAlarm.addListener(alarm => {

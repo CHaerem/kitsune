@@ -78,6 +78,8 @@ PAGES = {
     "/unsaved": "<title>Unsaved</title><input autofocus><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/plain": "<title>Plain</title>a plain page",
     "/slow": "<title>Slow</title>a page that takes a while",
+    # Its own title. /titled has none but the one in its address.
+    "/with-title": "<title>A page with a title</title>a page with a title",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
     "/titled": "<script>document.title = decodeURIComponent(location.search.slice(1));</script>a page with the title in its address",
     "/icon": ICON_PAGE,
@@ -119,6 +121,8 @@ def serve_pages():
             body = PAGES.get(url.path)
             if url.path.startswith("/slow-icon"):
                 time.sleep(SLOW_ICON_S)
+            if url.path == "/with-title" and "slow" in url.query:  # what must show before a page has answered
+                time.sleep(2)
             if url.path.startswith("/r/"):
                 body = "<title>Recorded</title>a recorded page"
             elif url.path == "/set-cookie":

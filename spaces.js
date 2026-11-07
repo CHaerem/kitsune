@@ -120,6 +120,7 @@ async function usedLastOf(tabs) {
 async function switchSpace(windowId, space) {
   const last = await lastUsedIn(windowId, space);
   activeSpace.set(windowId, space); // before the tab is selected, so onActivated agrees
+  await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {}); // setSpace below sees no change, and would leave an older space to come back after a restart
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
   else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space });
   await setSpace(windowId, space);

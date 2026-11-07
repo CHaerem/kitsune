@@ -8,6 +8,7 @@ function spaceMenu(space) {
     ["Rename", () => openSpaceBox(space)],
     ["Unload this space", () => send({ type: "unloadSpace", space })],
     ...(space === view.space && clearableHere() ? [clearItem()] : []),
+    ["Archived tabs", () => openArchived(space)], // archived.js
     ["Settings", () => browser.runtime.openOptionsPage()],
   ];
 }

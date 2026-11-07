@@ -348,7 +348,10 @@ async function reconcileAll() {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
       // the tab's last copy. fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved) delete all[key];
+      if (sessionHere && !all[key].saved) {
+        await noteArchived(all[key], "closed"); // if it was only a placeholder, Recently Closed has nothing of it
+        delete all[key];
+      }
       continue;
     }
     if (!all[key].group) {
@@ -403,6 +406,7 @@ async function register(tabId) {
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
     await createRep(w.id, key, entry, parentId, tidierAlone ? indexBeforeSameNeighbour(tabs, tab.id, w.id) : undefined);
   }
+  if (tidierAlone) await dropArchived(tab.cookieStoreId, tab.url); // open again (⌘⇧T, by hand): the list holds only what is not
 }
 
 // A saved tab you closed and reopened (⌘⇧T, History → Recently Closed Tabs):
@@ -443,7 +447,7 @@ async function onSyncedClosed(key, role, windowId, place) {
     unloaded: place ? place.unloaded : role !== "live",
   });
   if (action === "unload") await unloadSaved(key, windowId, place);
-  else if (action === "close") await closeEverywhere(key);
+  else if (action === "close") { await noteArchived(entry, "closed"); await closeEverywhere(key); }
   // "copy" and "leave": the other windows keep it (this one gets it back with
   // its folder when it is filled again); forgotten if no window has it.
   else await dropIfUnused(key);

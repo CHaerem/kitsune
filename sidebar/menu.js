@@ -8,6 +8,7 @@ function folderMenu(key, live) {
 const listMenu = () => [
   ["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }],
   ...(clearableHere() ? [clearItem()] : []), // spacemenu.js
+  ["Archived tabs", () => openArchived()], // archived.js
   ["Settings", () => browser.runtime.openOptionsPage()],
 ];
 
