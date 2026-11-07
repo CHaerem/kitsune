@@ -2124,6 +2124,9 @@ def alone_crossing(m):
       const from = wins().find(x => x !== w && x.gBrowser.tabs.some(y => url(y).includes("/r/unloaded-here")));
       if (from) { w.gBrowser.adoptTab(from.gBrowser.tabs.find(y => url(y).includes("/r/unloaded-here")), {tabIndex: w.gBrowser.tabs.length}); await wait(3000); }
       out.back = containersOf("/r/unloaded-here");
+      // (That window stays, with its placeholders. It is closed so that the groups after this have the windows they had.)
+      if (from && wins().includes(from)) await close(from);
+      w.focus();
       return out;""")
     check("a tab dragged to a window of its own and back keeps its container", r["where"] == [space] and r["back"] == [space], str(r))
     check("and sends nothing for it, rule or no rule", len(seen(m, "/r/unloaded-here")) == before, str(seen(m, "/r/unloaded-here")))
