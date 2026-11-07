@@ -134,6 +134,8 @@ async function sidebarAction(windowId, msg) {
   else if (msg.type === "moveEssential") await moveEssential(windowId, msg.tabId, msg.before ?? null);
   else if (msg.type === "tabAction") await tabAction(windowId, msg); // tabactions.js
   else if (msg.type === "renameTab") await renameTab(msg.tabId, msg.name);
+  else if (msg.type === "unloadSpace") await unloadSpace(msg.space);
+  else if (msg.type === "renameSpace") await renameSpace(msg.space, msg.name);
   viewSoon(windowId);
 }
 

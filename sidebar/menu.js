@@ -5,7 +5,11 @@ function folderMenu(key, live) {
     ["Delete folder (its tabs stay)", () => send({ type: "deleteFolder", key })],
   ];
 }
-const listMenu = () => [["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }], ...(window.clearItems?.() ?? [])];
+const listMenu = () => [
+  ["New folder", () => { renameNext = true; send({ type: "newFolder", space: view.space }); }],
+  ...(clearableHere() ? [clearItem()] : []), // spacemenu.js
+  ["Settings", () => browser.runtime.openOptionsPage()],
+];
 
 // Items: [label, what it does, { color }], or null for a line. Instead of what it does an
 // item can have a list of items, which replaces the menu's contents in place, with a row

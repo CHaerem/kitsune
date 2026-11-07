@@ -32,8 +32,6 @@
     drawNote(null); // the tabs take a moment to come back; the line goes at once
   };
 
-  // Something to clear: a tab in the list that is not the one you are on.
-  const clearable = () => !!view?.alone && view.tabs.some(t => !t.active);
   const clear = () => send({ type: "clearSpace", space: view.space });
 
   // Clear shows only with the pointer near the line between folders and today's tabs.
@@ -50,11 +48,8 @@
       reach.append(button);
       divider.append(reach);
     }
-    divider.firstChild.hidden = !clearable();
+    divider.firstChild.hidden = !clearableHere(); // spacemenu.js, as are the menus' Clear
   };
-
-  // With no folders there is no line to find it on: the list's own menu has it (menu.js).
-  window.clearItems = () => clearable() ? [["Clear tabs", clear]] : [];
 
   port.onMessage.addListener(next => {
     drawNote(next.note ?? null);

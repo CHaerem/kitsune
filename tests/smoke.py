@@ -2058,7 +2058,7 @@ def alone_quiet_undo(m):
       menu.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: 40, clientY: 200}));
       const items = [...doc.querySelectorAll("#menu .item")];
       const labels = items.map(b => b.textContent), n = plainTabs().length;
-      items.find(b => b.textContent === "Clear tabs")?.click();
+      items.find(b => b.textContent === "Clear today's tabs")?.click();
       await wait(1500);
       const line = doc.querySelector("#note .text").textContent, left = plainTabs().length;
       doc.querySelector("#note .act").click();
@@ -2066,7 +2066,7 @@ def alone_quiet_undo(m):
       const back = plainTabs().length;
       for (let i = 0; i < 20 && !doc.getElementById("note").classList.contains("shown"); i++) await wait(50);
       return {others, labels, line, left, n, back, shown: note.classList.contains("shown")};""", setup["key"])
-    check("the list's menu has Clear too, and it can be undone", "Clear tabs" in r["labels"] and r["line"].endswith("closed") and 1 <= r["left"] <= 2 and r["back"] == r["n"], str(r))
+    check("the list's menu has Clear too, and it can be undone", "Clear today's tabs" in r["labels"] and r["line"].endswith("closed") and 1 <= r["left"] <= 2 and r["back"] == r["n"], str(r))
     check("Undo leaves no line behind", r["shown"] is False, str(r))
     sizes = extension_message(m, {"type": "stats"})["sizes"]
     check("and nothing is kept for it", sizes["quietNotes"] == 0 and sizes["closeGroups"] == 0, str(sizes))
@@ -3534,6 +3534,258 @@ def alone_archive(m):
     check("archiving keeps a tab in a folder", late.get("kept", {}).get(s["kept"]) == "folder", str(late))
 
 
+# The real sidebar, not a copy in a tab (sidebar_page): what the mouse and the keyboard
+# do there, focus included, can only be seen in the real one. Its page is read with a
+# frame script; the mouse and keys are WebDriver's, in the window.
+IN_SIDEBAR = """
+  const inSidebar = (source, ...a) => {
+    const mm = main().SidebarController.browser.contentDocument.getElementById("webext-panels-browser").messageManager;
+    const tag = "smoke:" + Math.random();
+    const answer = new Promise(done => mm.addMessageListener(tag, function got(msg) { mm.removeMessageListener(tag, got); done(msg.data); }));
+    mm.loadFrameScript("data:,(" + encodeURIComponent(`function() {
+      const doc = content.document, dot = id => doc.querySelector('#spaces .space[data-space="' + id + '"]');
+      const labels = () => [...doc.querySelectorAll("#menu:not([hidden]) .item")].map(i => i.textContent);
+      const item = label => [...doc.querySelectorAll("#menu .item")].find(i => i.textContent === label);
+      const box = () => doc.querySelector(".space-box");
+      const top = id => doc.getElementById(id).getBoundingClientRect().top;
+      let out; try { out = (${source})(...${JSON.stringify(a)}); } catch (e) { out = {error: String(e)}; }
+      sendAsyncMessage(${JSON.stringify(tag)}, out);
+    }`) + ")()", false);
+    return answer;
+  };"""
+EMPTY_LIST = """({getBoundingClientRect: () => { const list = doc.getElementById("tabs"), r = list.getBoundingClientRect(); return {x: r.x, y: list.lastElementChild.getBoundingClientRect().bottom + 8, width: r.width, height: 2}; }})"""
+ENTER = "\ue007"  # WebDriver's key, as CMD and the others above
+
+
+def in_sidebar(m, source, *args):
+    return m.js(H + IN_SIDEBAR + "return await inSidebar(...args);", source, *args)
+
+
+def sidebar_until(m, source, *args, timeout=15):
+    """A state of the real sidebar: a click reaches it in its own time on a busy machine."""
+    deadline = time.time() + timeout
+    while True:
+        r = in_sidebar(m, source, *args)
+        if (r and not (isinstance(r, dict) and r.get("wait"))) or time.time() > deadline:
+            return r
+        time.sleep(0.1)
+
+
+def sidebar_mouse(m, target, button=0):
+    """A real click (button 2: right) on the middle of what the script `target` finds."""
+    x, y = m.js(H + IN_SIDEBAR + """const b = main().SidebarController.browser.getBoundingClientRect();
+      const [x, y] = await inSidebar(args[0]); return [b.x + x, b.y + y];""",
+      f"() => {{ const r = ({target}).getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }}")
+    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+        {"type": "pointerMove", "x": int(x), "y": int(y), "origin": "viewport", "duration": 0},
+        {"type": "pointerDown", "button": button}, {"type": "pointerUp", "button": button}]}]})
+    m.cmd("WebDriver:ReleaseActions")
+
+
+def sidebar_key(m, key):
+    """A key for the sidebar. Firefox's own panel about hidden tabs can open at any moment
+    after Tidier hides a tab, and while it is open a key closes it and goes no further."""
+    m.js(H + """main().document.getElementById("extension-notification-panel")?.hidePopup?.(); return 1;""")
+    press(m, key)
+
+
+def menu_on(m, target, offers=None):
+    """Right click on `target`: what its menu offers, once what is expected is there."""
+    sidebar_mouse(m, target, 2)
+    return sidebar_until(m, "(want) => { const now = labels(); return now.length && (!want || want === now.join()) ? now : null; }", offers and ",".join(offers)) or in_sidebar(m, "() => labels()")
+
+
+def choose(m, label):
+    sidebar_mouse(m, f"item({json.dumps(label)})")
+    sidebar_until(m, "() => !labels().length")
+
+
+def alone_space_menu(m):
+    # Copies of Tidier's pages are rows too, and stay loaded: they have no container.
+    m.js(H + """const w = main(); w.focus();
+      for (const t of [...w.gBrowser.tabs]) if (/sidebar\\/sidebar\\.html|settings\\/settings\\.html/.test(url(t))) w.gBrowser.removeTab(t);
+      await wait(500); return 1;""")
+    here = sidebar_until(m, """() => doc.querySelector("#spaces .space.active")?.dataset.space""")
+    all_spaces = in_sidebar(m, """() => [...doc.querySelectorAll("#spaces .space")].map(b => b.dataset.space)""")
+    there = next(s for s in all_spaces if s != here and s != "firefox-container-4")
+    # Loaded tabs in two spaces, and you are on one of them.
+    SPACE_TABS = H + """const ctxOfId = id => Number(id.split("-").pop());
+      const ordinary = (w, ctx) => w.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === ctx && role(w, t) === "live");
+      const pins = (w, ctx) => w.gBrowser.tabs.filter(t => t.pinned && t.userContextId === ctx);"""
+    m.js(SPACE_TABS + """const w = main();
+      for (const [space, name] of args[0]) for (const i of [1, 2, 3]) { w.gBrowser.addTrustedTab("https://example.org/?smoke-menu-" + name + "-" + i, {userContextId: ctxOfId(space), inBackground: true}); await wait(200); }
+      const ready = () => w.gBrowser.tabs.filter(t => url(t).includes("smoke-menu-") && t.linkedPanel && role(w, t) === "live").length;
+      for (let i = 0; i < 300 && ready() < 6; i++) await wait(100);
+      w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-1"));
+      await wait(1000); return 1;""", [[here, "here"], [there, "there"]])
+
+    # What it offers.
+    ELSEWHERE, IN_SPACE = ["Rename", "Unload this space", "Settings"], ["Rename", "Unload this space", "Clear today's tabs", "Settings"]
+    r = menu_on(m, f"dot({json.dumps(there)})", ELSEWHERE)
+    place = in_sidebar(m, """(id) => ({menuBottom: doc.getElementById("menu").getBoundingClientRect().bottom, bar: doc.getElementById("spaces").getBoundingClientRect().top, marked: dot(id).classList.contains("menu-for"), active: doc.querySelector("#spaces .space.active").dataset.space})""", there)
+    check("a right click on another space's dot opens its menu", r == ELSEWHERE, str(r))
+    check("the menu opens above the bar, and its dot is marked", place["menuBottom"] <= place["bar"] and place["marked"] and place["active"] == here, str(place))
+    sidebar_key(m, ESC)
+    closed = sidebar_until(m, """(id) => !labels().length && !dot(id).classList.contains("menu-for")""", there)
+    if closed is not True:  # says where the key went
+        closed = {"sidebar": in_sidebar(m, """(id) => ({labels: labels(), marked: dot(id).classList.contains("menu-for"), has: doc.hasFocus()})""", there),
+                  "focus": m.js(H + """const b = Services.focus.focusedContentBrowsingContext; return b?.currentURI?.spec?.slice(0, 70) ?? null;""")}
+    check("Esc closes it, and the mark goes", closed is True, str(closed))
+    r = menu_on(m, f"dot({json.dumps(here)})", IN_SPACE)
+    check("the space you are in also has Clear", r == IN_SPACE, str(r))
+    # A right click elsewhere takes the open menu away, and the list has its own.
+    r = menu_on(m, EMPTY_LIST, ["New folder", "Clear today's tabs", "Settings"])
+    check("the empty part of the list has its own short menu", r == ["New folder", "Clear today's tabs", "Settings"], str(r))
+    r = menu_on(m, 'doc.getElementById("space-name")', IN_SPACE)
+    check("the name above the list has the space's menu", r == IN_SPACE, str(r))
+    sidebar_key(m, ESC)
+    sidebar_until(m, "() => !labels().length")
+
+    # Unloading another space: you stay where you are.
+    STATE = SPACE_TABS + """const w = main(), ctx = ctxOfId(args[0]);
+      return {loaded: ordinary(w, ctx).filter(t => t.linkedPanel).map(t => url(t)), essentials: pins(w, ctx).filter(t => t.linkedPanel && !url(t).includes("ghost.html")).length, selected: url(w.gBrowser.selectedTab)};"""
+    before = m.js(STATE, there)
+    menu_on(m, f"dot({json.dumps(there)})")
+    choose(m, "Unload this space")
+    for _ in range(100):
+        after = m.js(STATE, there)
+        if not after["loaded"]:
+            break
+        time.sleep(0.1)
+    check("unloading another space unloads its tabs", len(before["loaded"]) >= 3 and not after["loaded"], f"{before} -> {after}")
+    check("and leaves its essentials, and you where you are", after["essentials"] == before["essentials"] > 0 and after["selected"] == before["selected"], f"{before} -> {after}")
+
+    # Unloading this one: the rows dim, except the selected tab, and a page with unsaved input stays.
+    m.js(H + """const t = main().gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-2"));
+      t.linkedBrowser.messageManager.loadFrameScript("data:,content.addEventListener('beforeunload', e => e.preventDefault()); content.document.notifyUserGestureActivation();", false);
+      await wait(300); return 1;""")
+    ROWS = """() => [...doc.querySelectorAll("#tabs .tab")].filter(r => !r.classList.contains("unloaded")).map(r => r.classList.contains("active") ? "selected" : "loaded")"""
+    before = in_sidebar(m, ROWS)
+    essentials = m.js(STATE, here)["essentials"]
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Unload this space")
+    for _ in range(100):
+        rows = in_sidebar(m, ROWS)
+        if rows.count("loaded") <= 1:
+            break
+        time.sleep(0.1)
+    state = m.js(STATE, here)
+    check("unloading the space you are in dims its rows", before.count("loaded") >= 2 and rows.count("loaded") == 1 and "selected" in rows, f"{before} -> {rows}")
+    check("and leaves the selected tab, its essentials and a page with unsaved input, without asking", "smoke-menu-here-1" in state["selected"] and any("smoke-menu-here-1" in u for u in state["loaded"]) and any("smoke-menu-here-2" in u for u in state["loaded"]) and state["essentials"] == essentials, str(state))
+    # (Closed here, or the page would ask later.) A dim row's page comes back when selected.
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-2")); w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(1000); return 1;""")
+    sidebar_mouse(m, """doc.querySelector("#tabs .tab.unloaded")""")
+    for _ in range(100):
+        back = m.js(H + """const t = main().gBrowser.selectedTab; return {page: url(t), loaded: !!t.linkedPanel, was: url(t).includes("smoke-menu-here-1")};""")
+        if not back["was"] and back["loaded"] and "ghost.html" not in back["page"]:
+            break
+        time.sleep(0.1)
+    check("an unloaded row's page comes back when you select it", not back["was"] and back["loaded"], str(back))
+    # Back on a tab of this test, for the checks below.
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-1")); await wait(800); return 1;""")
+
+    # A page loaded in another window: the row here is a placeholder, and the page goes too.
+    # Selecting the placeholder then brings the page here, once.
+    other = m.js(SPACE_TABS + """const a = main(), w = a.OpenBrowserWindow(); w.__extra = true;
+      for (let i = 0; i < 100 && !(w.gBrowser?.tabs.some(t => t.pinned)); i++) await wait(100);
+      const t = w.gBrowser.addTrustedTab("https://example.org/?smoke-menu-other-window", {userContextId: ctxOfId(args[0]), inBackground: true});
+      const placeholder = () => a.gBrowser.tabs.find(g => key(w, t) && key(a, g) === key(w, t));
+      for (let i = 0; i < 200 && !(t.linkedPanel && url(t).includes("smoke-menu") && placeholder()); i++) await wait(100);
+      a.focus(); await wait(500);
+      return {role: role(w, t), key: key(w, t), placeholder: !!placeholder()};""", here)
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Unload this space")
+    GONE = H + """const t = wins().find(w => w.__extra).gBrowser.tabs.find(t => url(t).includes("smoke-menu-other-window")); return {loaded: !!t?.linkedPanel, kept: !!t};"""
+    for _ in range(100):
+        gone = m.js(GONE)
+        if not gone["loaded"]:
+            break
+        time.sleep(0.1)
+    check("unloading reaches a page loaded in another window", other["role"] == "live" and other["placeholder"] and gone == {"loaded": False, "kept": True}, f"{other} -> {gone}")
+    m.js(H + """const a = main(); a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => key(a, t) === args[0]); return 1;""", other["key"])
+    settled = lambda b: "smoke-menu-other-window" in b["page"] and b["loaded"] and sorted(set(s for w in b["everywhere"] for s in w)) == ["ghost/unloaded", "live/loaded"] and sum(w.count("live/loaded") for w in b["everywhere"]) == 1
+    for _ in range(300):  # the pull has steps: only its end says anything
+        back = m.js(H + """const a = main(), t = a.gBrowser.selectedTab; return {page: url(t), loaded: !!t.linkedPanel, everywhere: find(args[0])};""", other["key"])
+        if settled(back):
+            break
+        time.sleep(0.1)
+    check("and its placeholder brings it here, once", settled(back), str(back))
+    m.js(H + """const w = wins().find(w => w.__extra), a = main(); await close(w); a.focus(); a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => url(t).includes("smoke-menu-here-1")); await wait(800); return 1;""")
+
+    # Rename, with real typing. Reading the container's name is reading what Firefox has.
+    NAME = H + """return main().ContextualIdentityService.getPublicIdentityFromId(Number(args[0].split("-").pop())).name;"""
+    name_here, name_there = m.js(NAME, here), m.js(NAME, there)
+    line = in_sidebar(m, """() => top("actions")""")
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Rename")
+    r = sidebar_until(m, """() => box() ? {value: box().value, selected: [box().selectionStart, box().selectionEnd], focus: doc.activeElement === box() && doc.hasFocus(), lineHidden: doc.getElementById("space-name").hidden, actions: top("actions")} : {wait: 1}""")
+    check("Rename turns the name line into a box, with the name selected", r.get("value") == name_here and r["selected"] == [0, len(name_here)] and r["focus"] and r["lineHidden"], str(r))
+    check("and the list does not move", r.get("actions") == line, f"{line} -> {r.get('actions')}")
+    for ch in "Smoked":
+        sidebar_key(m, ch)
+    sidebar_key(m, ENTER)
+    r = sidebar_until(m, """() => !box() && doc.querySelector("#spaces .space.active").title === "Smoked" ? {name: doc.getElementById("space-name").textContent, hidden: doc.getElementById("space-name").hidden} : {wait: 1}""")
+    check("typing and Enter rename the space: the line, the dot and the container", r.get("name") == "Smoked" and r.get("hidden") is False and m.js(NAME, here) == "Smoked", f"{r}, {m.js(NAME, here)}")
+    # The list stays put whatever the name is called and whatever the font: a long name
+    # stays on one line, and the box takes the height of the line it replaces.
+    r = in_sidebar(m, """() => { const line = doc.getElementById("space-name"), name = line.textContent, before = top("actions");
+      line.textContent = name + " and a very long name that goes on".repeat(9); const after = top("actions"); line.textContent = name; return {before, after}; }""")
+    check("a long name stays on one line, and the list does not move", r["before"] == r["after"], str(r))
+    in_sidebar(m, """() => { doc.getElementById("space-name").style.fontSize = "19px"; return 1; }""")
+    line = in_sidebar(m, """() => top("actions")""")
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Rename")
+    r = sidebar_until(m, """() => box() ? {actions: top("actions")} : {wait: 1}""")
+    check("with another font too", r.get("actions") == line, f"{line} -> {r}")
+    sidebar_key(m, ESC)
+    sidebar_until(m, "() => !box()")
+    in_sidebar(m, """() => { doc.getElementById("space-name").style.fontSize = ""; return 1; }""")
+    # A space without a name has no line, so the box is simply put there, over nothing.
+    in_sidebar(m, """() => { const line = doc.getElementById("space-name"); line.dataset.was = line.textContent; line.textContent = ""; return 1; }""")
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Rename")
+    r = sidebar_until(m, """() => { if (!box()) return {wait: 1}; const b = box().getBoundingClientRect(); return {bottom: b.bottom, actions: top("actions")}; }""")
+    check("a space with no name opens a box that covers nothing", r.get("bottom", 1e9) <= r.get("actions", 0), str(r))
+    sidebar_key(m, ESC)
+    sidebar_until(m, "() => !box()")
+    in_sidebar(m, """() => { const line = doc.getElementById("space-name"); line.textContent = line.dataset.was; delete line.dataset.was; return 1; }""")
+    # Esc leaves it as it was; leaving the box saves.
+    menu_on(m, f"dot({json.dumps(here)})")
+    choose(m, "Rename")
+    sidebar_until(m, "() => !!box()")
+    for ch in "xy":
+        sidebar_key(m, ch)
+    sidebar_key(m, ESC)
+    r = sidebar_until(m, """() => box() ? {wait: 1} : {name: doc.getElementById("space-name").textContent}""")
+    check("Esc leaves the name as it was", r.get("name") == "Smoked" and m.js(NAME, here) == "Smoked", str(r))
+    # Another space: in its place on the bar and in the box, and you stay.
+    menu_on(m, f"dot({json.dumps(there)})")
+    choose(m, "Rename")
+    r = sidebar_until(m, """(id, here) => box() ? {value: box().value, focus: doc.activeElement === box() && doc.hasFocus(), marked: dot(id).classList.contains("menu-for"), active: dot(here).classList.contains("active")} : {wait: 1}""", there, here)
+    check("another space's name opens in the box, its dot marked, and you stay in your space", r.get("value") == name_there and r["focus"] and r["marked"] and r["active"], str(r))
+    for ch in "Other":
+        sidebar_key(m, ch)
+    sidebar_mouse(m, EMPTY_LIST)
+    r = sidebar_until(m, """(id) => box() || dot(id).title !== "Other" ? {wait: 1} : {line: doc.getElementById("space-name").textContent, marked: dot(id).classList.contains("menu-for")}""", there)
+    check("leaving the box saves it, and this space's name stays on the line", r.get("line") == "Smoked" and r.get("marked") is False and m.js(NAME, there) == "Other", f"{r}, {m.js(NAME, there)}")
+    extension_message(m, {"type": "settings:space", "id": here, "changes": {"name": name_here}})
+    extension_message(m, {"type": "settings:space", "id": there, "changes": {"name": name_there}})
+
+    # Settings: the page, selected, in the window you are in, and you stay in your space.
+    menu_on(m, f"dot({json.dumps(there)})")
+    choose(m, "Settings")
+    for _ in range(100):
+        r = m.js(H + """const t = main().gBrowser.selectedTab; return url(t);""")
+        if "settings/settings.html" in r:
+            break
+        time.sleep(0.1)
+    check("Settings opens the settings page", "settings/settings.html" in r, r)
+    active = in_sidebar(m, """() => doc.querySelector("#spaces .space.active").dataset.space""")
+    check("and you stay in your space", active == here, active)
+    m.js(H + """const w = main(); w.gBrowser.removeTab(w.gBrowser.selectedTab); await wait(1000); return 1;""")
+    no_problems(m, "after a space's menu")
+
+
 def alone_end(m):
     no_problems(m, "with Tidier alone")
 
@@ -3556,6 +3808,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_tab_menu,
                 alone_tab_names,
                 alone_selection,
+                alone_space_menu,
                 alone_idle, alone_update, alone_end, alone_restart)
 
 
