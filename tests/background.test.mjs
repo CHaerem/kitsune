@@ -1946,3 +1946,17 @@ test("a tab selected and dragged away at once does not decide the space of the w
   assert.equal(x.js("activeSpace").get(a.id), C1);
   x.kill();
 });
+
+test("a loaded essential you had gone further in stays in Recently Closed when you unpin its copy", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", active: true, cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  ff.load(t, "https://e.example/a/deep/page");
+  await ff.clock.idle(60000);
+  ff.unpinTab(ff.tabs.get(ff.list(b.id).find(y => y.pinned).id));
+  await ff.clock.idle(60000);
+  assert.deepEqual(closedPages(ff), ["https://e.example/a/deep/page"], "that place is nowhere else");
+  x.kill();
+});
