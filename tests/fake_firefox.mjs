@@ -93,6 +93,14 @@ export class FakeFirefox {
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
         const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
         ff.log.push(["create", t.id, p.windowId, p.url]);
+        // ff.blankFirst: as Firefox really does, a tab with an address is announced on
+        // about:blank and its address follows, either before the answer to this call
+        // ("early") or after it (true). Most tests need neither.
+        if (ff.blankFirst && p.url) {
+          t.url = "about:blank"; b.tabs.onCreated.fire(ff.snap(t));
+          if (ff.blankFirst === "early") ff.navigate(t.id, p.url); else T.setTimeout(() => ff.navigate(t.id, p.url), 10);
+          return { ...ff.snap(t), url: "about:blank" };
+        }
         const s = ff.snap(t); b.tabs.onCreated.fire(s);
         return s;
       },
@@ -124,7 +132,7 @@ export class FakeFirefox {
       remove: async ids => { ids = Array.isArray(ids) ? ids : [ids]; ids.forEach(need); for (const id of ids) { ff.log.push(["remove", id, ff.tabs.get(id).url]); ff.rm(id); } },
       show: async ids => { ff.log.push(["show", ids]); for (const id of [ids].flat()) need(id).hidden = false; },
       hide: async ids => { ff.log.push(["hide", ids]); for (const id of [ids].flat()) { const t = need(id); if (!t.pinned && !t.active) t.hidden = true; } },
-      discard: async id => { const t = need(id); if (!ff.refuseDiscard?.has(id)) t.discarded = true; },
+      discard: async id => { const t = need(id); if (!t.active && !ff.refuseDiscard?.has(id)) t.discarded = true; }, // the selected tab never unloads
     };
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),
@@ -148,7 +156,9 @@ export class FakeFirefox {
     b.alarms = { create() {}, onAlarm: ev() };
     b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
       sendNativeMessage: () => reject("no host") };
-    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(c => ({ cookieStoreId: c, name: c, colorCode: "#000", icon: "circle" })), onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
+    b.contextualIdentities = { query: async () => [...ff.containers].filter(c => c !== "firefox-default").map(c => ({ cookieStoreId: c, name: c, colorCode: "#000", icon: "circle" })),
+      get: async id => { if (id === "firefox-default" || !ff.containers.has(id)) throw new Error(`Invalid contextual identity: ${id}`); return { cookieStoreId: id, name: id, colorCode: "#000", icon: "circle" }; },
+      onCreated: ev(), onUpdated: ev(), onRemoved: ev() };
     b.commands = { onCommand: ev(), getAll: async () => ff.commands || [], update: async c => { (ff.commandsSet ||= {})[c.name] = c.shortcut; }, reset: async () => {} };
     b.menus = { onShown: ev(), onClicked: ev(), removeAll: async () => {}, create() {}, remove: async () => {}, refresh() {} };
     b.browserAction = { onClicked: ev(), setBadgeText: async o => { ff.badge = o.text; }, setTitle: async () => {} };

@@ -40,6 +40,9 @@ async function spaceOf(windowId, tabs, spaces) {
   if (!spaces.some(s => s.id === space)) {
     const selected = tabs.find(t => t.active);
     space = spaces.some(s => s.id === selected?.cookieStoreId) ? selected.cookieStoreId : spaces[0]?.id;
+    // A space removed lands here first if a view comes before the queue gets to it
+    // (spaceRemoved, safemoves.js), and then nothing else would show this space's tabs.
+    showSpaceSoon(windowId);
   }
   activeSpace.set(windowId, space);
   return space;
@@ -105,7 +108,8 @@ browser.commands.onCommand.addListener(name => {
 // selects any tab it can show, and you stay in the space, with a new tab.
 const closedIn = new Map(); // windowId -> the space a tab was closed in, for a moment
 browser.tabs.onRemoved.addListener((tabId, { windowId, isWindowClosing }) => {
-  if (!tidierAlone || isWindowClosing || !activeSpace.has(windowId)) return;
+  // (Not while Firefox starts: restoring a session closes the window's first tab, which is no tab you left.)
+  if (!tidierAlone || !started || isWindowClosing || !activeSpace.has(windowId)) return;
   closedIn.set(windowId, activeSpace.get(windowId));
   setTimeout(() => closedIn.delete(windowId), 200);
 });
@@ -117,9 +121,9 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
     if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
-      if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
-      else await browser.tabs.create({ windowId, cookieStoreId: stay });
-      return;
+      if (last) { await browser.tabs.update(last.id, { active: true }).catch(() => {}); return; }
+      // Refused when the space has just been removed (safemoves.js): then this tab's space it is.
+      if (await browser.tabs.create({ windowId, cookieStoreId: stay }).catch(() => null)) return;
     }
     await setSpace(windowId, tab.cookieStoreId);
     await setSuccessor(tab);
@@ -199,9 +203,10 @@ function ruleMatches(rule, url) {
 async function byRule(tabId, url) {
   const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
-  if (!tab || tab.cookieStoreId === rule.space) return intoSpace(tabId);
+  if (!tab || tab.cookieStoreId === rule.space || await exemptFromRules(tabId)) return intoSpace(tabId);
   newTabs.delete(tabId);
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
+  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(err => ruleFailed(rule, err));
+  if (!opened) return intoSpace(tabId); // closing it now would lose the link (safemoves.js)
   await browser.tabs.remove(tabId).catch(() => {});
 }
 

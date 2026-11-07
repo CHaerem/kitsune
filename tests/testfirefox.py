@@ -70,8 +70,11 @@ TEST_PREFS = {
 
 # Test pages served from here: what no public test page does, and no dependence on
 # a site for the checks that use them.
+SLOW_PAGE_S = 8
 PAGES = {
-    "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
+    "/unsaved": "<title>Unsaved</title><input autofocus><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
+    "/plain": "<title>Plain</title>a plain page",
+    "/slow": "<title>Slow</title>a page that takes a while",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
 }
 
@@ -83,6 +86,9 @@ def serve_pages():
             self.send_response(200 if body else 404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
+            if self.path.startswith("/slow"):  # its address is known at once, and it goes on loading
+                self.wfile.flush()
+                time.sleep(SLOW_PAGE_S)
             self.wfile.write((body or "").encode())
 
         def log_message(self, *args):

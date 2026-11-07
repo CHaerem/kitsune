@@ -97,16 +97,28 @@ async function moveInWindow(tabs, tabId, beforeId) {
 }
 
 // A tab moved to another space: Firefox cannot change a tab's container, so it is
-// opened again there and closed here, in every window.
+// opened again there and closed here, in every window. A page that may hold unsaved
+// input stays, and so does a tab that cannot be opened there; no rule sends it back,
+// since you moved it; and you stay where you are (safemoves.js).
+//
+// The address is the page's own while it is loaded: the record follows a page once it
+// has finished loading, and a tab can be moved before that. A placeholder's own address
+// says nothing, so then it is the record's.
 async function moveToSpace(tabId, space) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === space || tab.pinned) return;
-  const all = await getSynced();
-  const key = syncKeyByTab.get(tabId);
-  const url = key ? all[key]?.url : tab.url;
+  const key = syncKeyByTab.get(tabId), live = await pageTab(tab, key);
+  const url = isWeb(live?.url) ? live.url : (await getSynced())[key]?.url;
   if (!isWeb(url)) return;
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: false });
-  if (key) await closeEverywhere(key, { dismiss: false });
+  const noSpace = () => void globalThis.say?.(tab.windowId, "That space could not be opened, so the tab stayed here");
+  // Asked first, since leaving unloads the tab and selects another one. (Only a window
+  // closing or a space removed this very moment can still refuse the new tab below.)
+  if (await spaceGone(space)) return noSpace();
+  if (!(await leavesQuietly(live, key))) return sayStayed(tab.windowId);
+  const opened = await openUnruled({ windowId: tab.windowId, cookieStoreId: space, url, active: false }).catch(() => null);
+  if (!opened) return noSpace();
+  // (A live folder's pull request counts as closed, or the next search brings it back.)
+  if (key) await closeEverywhere(key);
   else await browser.tabs.remove(tabId).catch(() => {});
 }
 
