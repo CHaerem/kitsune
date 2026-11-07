@@ -407,7 +407,8 @@ async function register(tabId) {
   // A placeholder Tidier closed, reopened (⌘⇧T) in the moment before Recently Closed forgets
   // it: not a tab of its own. Taken back, so that the look over the tabs removes the double.
   if (tab && !syncKeyByTab.has(tab.id) && !tab.pinned && placeholderOf(tab.url).kind === "ghost") {
-    await takePlaceholderBack(tab);
+    await setRole(tab.id, placeholderOf(tab.url).key, "ghost");
+    await reconcileAll();
     return;
   }
   // An essential's copy, reopened from the moment it looked unpinned (a drag to another window):
@@ -445,11 +446,6 @@ async function register(tabId) {
   // ghosts just went by the window it was in.
   const now = await browser.tabs.get(tab.id).catch(() => null);
   if (now && now.windowId !== tab.windowId) await reconcileAll();
-}
-
-async function takePlaceholderBack(tab) {
-  await setRole(tab.id, placeholderOf(tab.url).key, "ghost");
-  await reconcileAll();
 }
 
 // A saved tab you closed and reopened (⌘⇧T, History → Recently Closed Tabs):
@@ -831,14 +827,6 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   // no live tab to pull in (the pull runs from onActivated, in the queue).
   if (msg.type === "ghostShown") {
     return serial(async () => {
-      // Reopened by ⌘⇧T before its turn to be registered: told to open itself, it would be
-      // the page a second time, under a new key. (Before the roles are read nothing is known
-      // yet: it opens, and the look over the tabs at the start puts that right.)
-      if (started && !syncKeyByTab.has(tab.id) && placeholderOf(tab.url).kind === "ghost" && !tab.pinned) {
-        await takePlaceholderBack(tab);
-        if (!syncKeyByTab.has(tab.id)) return { load: false }; // that double has gone
-        await pull(tab.id);
-      }
       const key = syncKeyByTab.get(tab.id);
       if (!key) return { load: true };
       if (syncRoleByTab.get(tab.id) === "live" || liveTabId(key) === undefined) {

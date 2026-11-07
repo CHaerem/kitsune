@@ -1573,21 +1573,6 @@ test("a ghost with a real address that goes as a double is not left in Recently 
   x.kill();
 });
 
-test("a placeholder reopened and selected before Recently Closed forgets it does not open the page twice", async () => {
-  const { ff, x, windows: [a, b] } = await chaosStart();
-  const t = ff.openTab(a.id, { url: "https://b.example/", cookieStoreId: C1 });
-  await ff.clock.run(3000);
-  const ghost = ff.list(b.id).find(y => ff.values.get(y.id)?.syncKey === ff.values.get(t.id).syncKey);
-  ff.focusWindow(b.id);
-  // As SessionStore brings it back, selected. Nothing asks for its values yet: registering waits.
-  ff.openTab(b.id, { url: ghost.url, active: true, cookieStoreId: C1, restored: { tab: { url: ghost.url, title: ghost.title }, values: {} } });
-  await ff.clock.idle(60000);
-  const pages = [...ff.tabs.values()].filter(y => y.url === "https://b.example/");
-  assert.equal(pages.length, 1, "the page is open once");
-  assert.equal(Object.values(ff.synced).filter(e => e.url === "https://b.example/").length, 1, "and is one tab");
-  x.kill();
-});
-
 test("a ghost created a moment ago does not take over from an unloaded live tab", async () => {
   const ff = new ChaosFirefox();
   ff.store.syncedTabs = { a: entry("https://a.example/") };
