@@ -973,12 +973,12 @@ test("an essential's placeholder whose value was lost is known by its address", 
   const ff = new ChaosFirefox();
   ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
   const w = ff.addWindow({ focused: true });
-  ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 });
+  const copy = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 });
   ff.addTab(w.id, { url: "about:home", active: true });
   const x = ff.boot();
   x.b.runtime.onStartup.fire();
   await ff.clock.idle(60000);
-  assert.equal(ff.list(w.id).filter(t => t.pinned).length, 1);
+  assert.deepEqual(ff.list(w.id).filter(t => t.pinned).map(t => t.id), [copy.id], "the same tab, not closed and made again");
   x.kill();
 });
 
@@ -1754,4 +1754,195 @@ test("a tab dragged in the last moment of a start is put right when it has start
     assert.deepEqual([reps(a), reps(b)], [1, 1], `dragged ${before} ms before it had started`);
     x.kill();
   }
+});
+
+// --- Each of these was only caught by a long chaos run: a test of its own -------------------
+test("a live tab elsewhere is not doubled when a window with a stale live tab closes", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const third = ff.openWindow().window;
+  await ff.clock.idle(60000);
+  const t = ff.openTab(third.id, { url: "https://a.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  const stale = ff.list(a.id).find(y => ff.values.get(y.id)?.syncKey === key);
+  await ff.clock.settled(x.js("setRole")(stale.id, key, "live")); // a ghost that became live a moment before
+  ff.closeWindow(a.id);
+  await ff.clock.idle(60000);
+  const live = [...ff.tabs.values()].filter(y => ff.values.get(y.id)?.syncRole === "live").map(y => y.id);
+  assert.deepEqual(live, [t.id], "the ghost in the other window stays a ghost");
+  assert.ok(ff.list(b.id).some(y => ff.values.get(y.id)?.syncKey === key));
+  x.kill();
+});
+
+test("a ghost you are looking at opens when its saved tab was unloaded and you switch to its window", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = {
+    F: { own: true, group: true, name: "F", url: "", title: "F", cookieStoreId: C1, rank: 1, parentKey: null, added: 1 },
+    s: entry("https://s.example/", { parentKey: "F", saved: { url: "https://s.example/", title: "S" } }),
+  };
+  const a = ff.addWindow({ focused: true }), b = ff.addWindow();
+  ff.addTab(a.id, { url: "about:home", cookieStoreId: C1 });
+  ff.addTab(b.id, { url: "about:home", cookieStoreId: C1 });
+  const live = ff.addTab(a.id, { url: "https://s.example/", active: true, cookieStoreId: C1 }, { syncKey: "s", syncRole: "live" });
+  const ghost = ff.addTab(b.id, { url: GHOST("ghost", "s"), active: true, cookieStoreId: C1 }, { syncKey: "s", syncRole: "ghost" }); // selected in the window you are not using
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  ff.closeTab(live.id); // unloads it, everywhere
+  await ff.clock.idle(60000);
+  assert.equal(ff.tabs.get(ghost.id).url, GHOST("ghost", "s"), "nothing there has opened it yet");
+  ff.focusWindow(b.id);
+  await ff.clock.idle(60000);
+  assert.equal(ff.tabs.get(ghost.id).url, "https://s.example/");
+  x.kill();
+});
+
+test("an essential's placeholder reopened unpinned goes, and the window has its copy once", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  const copy = ff.list(b.id).find(y => y.pinned);
+  ff.openTab(b.id, { url: copy.url, cookieStoreId: C1, restored: { tab: { url: copy.url, title: copy.title, discarded: true }, values: ff.values.get(copy.id) } });
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.list(b.id).filter(y => y.url.includes("kind=essential")).map(y => y.id), [copy.id]);
+  x.kill();
+});
+
+test("a window closed before its copy was pinned, reopened, has its essentials once and pinned", async () => {
+  const { ff, x, windows: [a] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  const { window: w } = ff.openWindow();
+  while (!ff.list(w.id).some(y => y.url.includes("kind=essential"))) await ff.clock.step();
+  assert.ok(ff.list(w.id).some(y => y.url.includes("kind=essential") && !y.pinned), "not pinned yet");
+  ff.closeWindow(w.id);
+  await ff.clock.run(1000);
+  const back = ff.reopenLast();
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(back.id).filter(y => y.url.includes("kind=essential")).length, 1);
+  assert.ok(ff.list(back.id).filter(y => y.url.includes("kind=essential")).every(y => y.pinned));
+  x.kill();
+});
+
+test("a tab pinned and closed at once is still an essential, in its own window too", async () => {
+  const { ff, x, windows: [a] } = await chaosStart({ windows: 1 });
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.run(1);
+  ff.closeTab(t.id);
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://e.example/"]);
+  assert.equal(ff.list(a.id).filter(y => y.pinned).length, 1);
+  x.kill();
+});
+
+test("an unloaded essential looked at while it seems unpinned after a drag still ends up once there", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  const copy = ff.list(b.id).find(y => y.pinned && y.discarded);
+  ff.rng = () => 0.5; // answers come at once, and the tab seems unpinned for longer than they take
+  ff.moveTabs([copy.id], { windowId: a.id, index: ff.pinnedCount(a) });
+  await ff.clock.idle(60000);
+  assert.equal(ff.list(a.id).filter(y => y.pinned).length, 1);
+  assert.equal(ff.list(b.id).filter(y => y.pinned).length, 1);
+  x.kill();
+});
+
+test("a sort's move that Firefox ignores does not leave the essential marked", async () => {
+  const { ff, x, windows: [a] } = await chaosStart({ windows: 1 });
+  const one = ff.openTab(a.id, { url: "https://one.example/", cookieStoreId: C1 });
+  const two = ff.openTab(a.id, { url: "https://two.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(one);
+  ff.pinTab(two);
+  await ff.clock.idle(60000);
+  const sorting = x.js("sortEssentials")(a.id, [...ff.store.essentials].reverse());
+  sorting.catch(() => {});
+  while (!x.js("ownMoves").size) await ff.clock.step();
+  const moving = ff.tabs.get([...x.js("ownMoves")][0]);
+  ff.unpinTab(moving); // unpinned on the way: Firefox ignores a move into the pinned part, without a word
+  await ff.clock.idle(60000);
+  assert.equal(x.js("ownMoves").size, 0);
+  x.kill();
+});
+
+test("using an essential in another window does not close the window it was the only tab of", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const a = ff.addWindow(), b = ff.addWindow({ focused: true });
+  ff.addTab(a.id, { url: "https://e.example/", pinned: true, active: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  ff.addTab(b.id, { url: "about:home", active: true });
+  const copy = ff.addTab(b.id, { url: GHOST("essential", "e"), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  ff.select(copy.id);
+  await ff.clock.idle(60000);
+  assert.ok(ff.wins.has(a.id), "the window is still there");
+  assert.equal(ff.list(a.id).filter(t => t.url.includes("kind=essential") && t.pinned).length, 1, "with a placeholder");
+  assert.deepEqual(ff.list(b.id).filter(t => t.pinned).map(t => t.url), ["https://e.example/"]);
+  x.kill();
+});
+
+test("a tile is drawn with the new title also when the queue was busy as it changed", async () => {
+  const { ff, x, windows: [w] } = await aloneStart({ windows: 1 });
+  ff.connectSidebar(w.id);
+  const t = ff.openTab(w.id, { url: "https://e.example/", active: true, cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  x.js("serial(() => sleep(1000))");
+  await ff.clock.run(10);
+  t.title = "(3) E";
+  ff.updated(t, { title: t.title }); // the sidebar is told now, while the list still has the old title
+  await ff.clock.idle(60000);
+  assert.equal(ff.views.get(w.id).essentials[0].title, "(3) E");
+  x.kill();
+});
+
+test("with Tidier alone a start puts the essentials back in the list's order", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  ff.store.essentials = four();
+  const w = ff.addWindow({ focused: true });
+  for (const key of ["c", "a", "d", "b"]) ff.addTab(w.id, { url: GHOST("essential", key), pinned: true, discarded: true, cookieStoreId: C1 }, { essentialKey: key });
+  ff.addTab(w.id, { url: "about:home", active: true, cookieStoreId: C1 });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.list(w.id).filter(t => t.pinned).map(t => ff.values.get(t.id).essentialKey), ["a", "b", "c", "d"]);
+  x.kill();
+});
+
+test("a switch of space is written down at once, for a restart", async () => {
+  const { ff, x, windows: [w] } = await aloneStart({ windows: 1 });
+  ff.connectSidebar(w.id);
+  await ff.clock.run(100);
+  ff.sidebarSays(w.id, { type: "space", space: "firefox-container-2" });
+  await ff.clock.idle(60000);
+  assert.equal(ff.winValues.get(w.id)?.space, "firefox-container-2");
+  x.kill();
+});
+
+test("a tab selected and dragged away at once does not decide the space of the window it left", async () => {
+  const { ff, x, windows: [a, b] } = await aloneStart();
+  const page = ff.openTab(a.id, { url: "about:preferences", active: true }); // no container, so it decides nothing
+  const t = ff.openTab(a.id, { url: "https://o.example/", cookieStoreId: "firefox-container-2" });
+  await ff.clock.idle(60000);
+  assert.equal(x.js("activeSpace").get(a.id), C1);
+  ff.select(t.id);
+  ff.moveTabs([t.id], { windowId: b.id, index: -1 });
+  await ff.clock.idle(60000);
+  assert.ok(ff.tabs.get(page.id).active);
+  assert.equal(x.js("activeSpace").get(a.id), C1);
+  x.kill();
 });

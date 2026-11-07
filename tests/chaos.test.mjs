@@ -102,7 +102,10 @@ class World {
     if (!key) {
       // Just being registered, perhaps: then it is only known by its address.
       this.closedAddresses.add(t.url);
-      if (this.ff.pages.get(t)?.url) this.closedAddresses.add(this.ff.pages.get(t).url); // on its way there
+      const on = this.ff.pages.get(t)?.url; // on its way there
+      if (on) this.closedAddresses.add(on);
+      // (A ghost that has just been made is known to Tidier already, and closes its tab everywhere.)
+      if (isPlaceholder(on)) this.excused.add(new URLSearchParams(on.split("?")[1]).get("key"));
       return;
     }
     const e = all[key];
