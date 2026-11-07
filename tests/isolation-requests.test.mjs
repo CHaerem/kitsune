@@ -166,6 +166,25 @@ test("an ordinary known tab outside any container keeps its key too, and the oth
   x.kill();
 });
 
+test("a known tab waiting in a busy queue to be replaced asks again: nothing more is opened", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { k: { url: "https://old.example/", title: "Old", cookieStoreId: NONE, parentKey: null, group: false, added: 1 } };
+  const { w } = aWindow(ff);
+  const t = ff.addTab(w.id, { url: GHOST("ghost", "k"), active: true }, { syncKey: "k", syncRole: "live" });
+  const x = await run(ff);
+  let free;
+  x.js("serial")(() => new Promise(resolve => { free = resolve; }));
+  const origin = GHOST("ghost", "k");
+  assert.equal((await ff.request({ tabId: t.id, url: "https://old.example/", originUrl: origin })).cancel, true);
+  assert.equal((await ff.request({ tabId: t.id, url: "https://old.example/", originUrl: origin })).cancel, true);
+  assert.equal(opened(ff, w.id, "https://old.example/").length, 1, "opening it twice would give you two of it");
+  free();
+  await wait(500);
+  assert.ok(!ff.tabs.has(t.id));
+  assert.equal(x.js("leaving.size"), 0);
+  x.kill();
+});
+
 // --- Two windows, and the same thing twice -----------------------------------------------
 test("a known tab outside any container, loading in two windows at once: one tab in the end, and one placeholder", async () => {
   const ff = new FakeFirefox();

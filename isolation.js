@@ -104,6 +104,7 @@ globalThis.openUnruled = props => {
 
 const requestOfTab = new Map(); // tabId -> its latest top-level request: a redirect has the same one
 const reopening = new Set(); // tabs being opened elsewhere: more of their requests are stopped too
+const leaving = new Set(); // tabs replaced by a new one, waiting in the queue to close: the same, or there would be two
 let guarding = false;
 const requestsGuarded = () => guarding; // spaces.js: then the tab need not be reopened afterwards
 
@@ -181,7 +182,7 @@ async function lookAtRequest(details, look) {
   if (!tidierAlone || tabId < 0 || details.incognito || !isWeb(url)) return {};
   const redirect = requestOfTab.get(tabId) === requestId;
   requestOfTab.set(tabId, requestId);
-  if (reopening.has(tabId)) return { cancel: true };
+  if (reopening.has(tabId) || leaving.has(tabId)) return { cancel: true };
   const rules = await rulesList.get();
   if (here !== NO_CONTAINER) {
     const rule = rules.find(r => ruleCounts(r) && ruleMatches(r.url, url)); // the first that matches decides
@@ -297,7 +298,8 @@ async function closeOldTab(tab, created, space) {
   if (!key) return browser.tabs.remove(tab.id).catch(() => {});
   // Now, not in the queue: or the new tab would be taken for a new one there.
   if (created.id) await setRole(created.id, key, "live").catch(noteError);
-  serial(() => recordIntoSpace(key, created, space));
+  leaving.add(tab.id);
+  serial(() => recordIntoSpace(key, created, space)).catch(() => {}).finally(() => leaving.delete(tab.id));
 }
 
 // A tab with a record, reopened from outside any container: the same tab, in a space. It
@@ -806,6 +808,7 @@ async function bringBackSpaces() {
   networkNow = await spaceNetwork.get();
   applyNetwork();
   rememberForStart();
+  await readSpaces();
   const { spaceOrder } = await browser.storage.local.get("spaceOrder");
   if (spaceOrder) await browser.storage.local.set({ spaceOrder: spaceOrder.map(moved) });
   await flushWrites();

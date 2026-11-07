@@ -142,3 +142,8 @@ Changed by saying so. All of them can be reversed.
   leaves, as Sidebery does. That takes access to all websites, so it is optional, asked
   for in the same click as hiding tabs. Without it a link's first request goes out with
   no container before it is opened in its space, as before: it carries no login.
+- An address that belongs in another space opens there, and the tab it was typed in stays
+  if it holds anything: a page's history or a saved tab is not lost for it. A rule's
+  regular expression runs on a small engine of Tidier's own, since Firefox's can take for
+  ever on every navigation. That engine has no look-around or back-references: such a rule
+  does nothing, and the settings page says so.
