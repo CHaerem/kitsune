@@ -1077,9 +1077,11 @@ class Soak:
         for name, size in sizes.items():
             if size > room:
                 self.violation("a list in memory outgrows the tabs", name, f"{size} entries, with {r['counts']['tabs']} tabs in {r['counts']['windows']} windows")
-        for problem in stats["problems"][self.problems_seen:]:
+        # By the count of errors: the list itself keeps only the last twenty.
+        fresh = stats["errors"] - self.errors_seen
+        for problem in stats["problems"][-fresh:] if fresh > 0 else []:
             self.violation("an error inside Tidier", problem)
-        self.problems_seen = len(stats["problems"])
+        self.errors_seen = stats["errors"]
         prev = self.samples[-1] if self.samples else None
         # Counted from the start of the run: an update or a restart starts Tidier's counts over.
         now = {"cpu": proc["cpuS"], "jobs": stats["jobs"], "queue": stats["queueMs"] / 1000, "lookups": stats["lookups"], "views": stats["views"], "errors": stats["errors"]}
@@ -1127,7 +1129,7 @@ class Soak:
     def run(self):
         args = self.args
         server, self.pages = serve_pages()
-        self.problems_seen = 0
+        self.errors_seen = 0
         print(f"Seed {args.seed}, {args.minutes} minutes, {'Tidier alone' if args.alone else 'with Sidebery'}, on port {args.port}. Every action: {self.logfile}", flush=True)
         r = self.call(SETUP)
         if not r.get("ok"):
@@ -1181,7 +1183,7 @@ class Soak:
             raise RuntimeError(f"Could not set up again: {r}")
         self.use_window(control=True)
         self.call(SHOW_SIDEBARS)
-        self.problems_seen = 0
+        self.errors_seen = 0
         self.segment = len(self.samples)  # memory starts over too
         settle_s, r = self.check_everything()
         self.sample(settle_s, r)
