@@ -1972,3 +1972,20 @@ test("a link whose rule names a space that has gone stays, in the space you are 
   x.js("problems.length = 0");
   x.kill();
 });
+
+test("moving over: one folder page closing in that moment does not leave the others", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.tidierAlone = true;
+  ff.store.syncedTabs = { F: { own: true, group: true, name: "F", url: FOLDER, oldUrl: FOLDER, title: "F", cookieStoreId: C1, rank: 1, parentKey: null, added: 1 } };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true, cookieStoreId: C1 });
+  const page = ff.addTab(w.id, { url: FOLDER, cookieStoreId: C1 }, { syncKey: "F", syncRole: "copy" });
+  const x = ff.boot();
+  const query = x.b.tabs.query; // as if a second page had closed right after this look
+  x.b.tabs.query = async q => { const tabs = await query(q); return q?.windowId === undefined && !q?.pinned ? [...tabs, { id: 99999, url: FOLDER, windowId: w.id }] : tabs; };
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.ok(!ff.tabs.has(page.id));
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
