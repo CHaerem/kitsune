@@ -1985,3 +1985,20 @@ test("the tabs of a folder no window has any more are no longer saved", async ()
   assert.equal((await ff.clock.settled(x.js("getSynced()"))).s.saved, undefined);
   x.kill();
 });
+
+test("a ghost pinned the moment its window comes back is an essential, not a placeholder of nothing", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const t = ff.openTab(a.id, { url: "https://a.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  const key = ff.values.get(t.id).syncKey;
+  ff.closeWindow(b.id);
+  await ff.clock.run(1000);
+  const back = ff.reopenLast();
+  const ghost = ff.list(back.id).find(y => ff.values.get(y.id)?.syncKey === key);
+  assert.ok(ghost.url.includes("kind=ghost"));
+  ff.pinTab(ff.tabs.get(ghost.id));
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://a.example/"]);
+  assert.ok(![...ff.tabs.values()].some(y => y.url.includes("kind=ghost")), "no placeholder of a tab that has gone");
+  x.kill();
+});

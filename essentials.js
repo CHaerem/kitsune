@@ -209,7 +209,8 @@ async function onPinned(tab) {
   }
   let { url, title, favIconUrl: icon } = tab;
   if (isGhostUrl(url)) {
-    const entry = (await getSynced())[syncKeyByTab.get(tab.id)];
+    // (By its address if tab sync does not know it yet: a window that has just come back.)
+    const entry = (await getSynced())[syncKeyByTab.get(tab.id) ?? placeholderOf(url).key];
     if (!entry || !isWeb(entry.url)) return;
     ({ url, title, icon } = entry);
   }
