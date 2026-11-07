@@ -8711,7 +8711,7 @@ def alone_many(m):
 
     # A placeholder without a page still shows its page's title and icon, from the record.
     number = int(space0.rsplit("-", 1)[1])
-    m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon", {userContextId: args[1], inBackground: true}); await wait(4000); return 1;""", m.pages, number)
+    m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon-png", {userContextId: args[1], inBackground: true}); await wait(4000); return 1;""", m.pages, number)
     # (Its row in view, in the page shown: an image out of view is not asked for.)
     m.js(H + """const w = main(); w.__before = w.gBrowser.selectedTab; w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(300); return 1;""")
     r = sidebar_page(m, MANY_PAGE + """const row = [...doc.querySelectorAll("#tabs .tab")].find(x => x.querySelector(".title").textContent === "With an icon");
@@ -8737,7 +8737,7 @@ def alone_many(m):
     check("a placeholder made without a page shows its page's title and icon", r.get("unloaded") and r.get("icon") == "data:image/png;base64," and r.get("drawn") == 16, str(r))
     check("an icon that does not load shows the letter, and is not asked for at every draw", r.get("firstTag") == "IMG" and r.get("letter") == "L" and r.get("again") == "SPAN", str(r))
     check("an icon far out of view is not asked for, and is when it comes into view", r.get("asked") is False and r.get("inView") is True, str(r))
-    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__before; await removeWhere((x, t) => url(t).endsWith("/icon")); return 1;""")
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__before; await removeWhere((x, t) => url(t).endsWith("/icon-png")); return 1;""")
 
     # From the event to the sidebar showing it, and a view's build, one at a time.
     r = sidebar_page(m, MANY_PAGE + """

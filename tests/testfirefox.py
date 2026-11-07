@@ -98,6 +98,8 @@ PAGES = {
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
     "/titled": "<script>document.title = decodeURIComponent(location.search.slice(1));</script>a page with the title in its address",
     "/icon": ICON_PAGE,
+    # A 16 px image as its icon, so its size can be read (alone_many).
+    "/icon-png": '<title>With an icon</title><link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mMQ7+//TwlmGDVg1IBRA4aLAQCLGDQfD7W9swAAAABJRU5ErkJggg==">a page with an icon',
     "/no-icon": "<title>No icon</title>a page without an icon",
     "/slow-icon": ICON_PAGE,  # answers after SLOW_ICON_S, the same page every time, so a load changes nothing else in the tab
     # There at once and still loading for SLOW_ICON_S, and its title changes meanwhile.
