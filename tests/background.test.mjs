@@ -1960,3 +1960,15 @@ test("a loaded essential you had gone further in stays in Recently Closed when y
   assert.deepEqual(closedPages(ff), ["https://e.example/a/deep/page"], "that place is nowhere else");
   x.kill();
 });
+
+test("a link whose rule names a space that has gone stays, in the space you are in", async () => {
+  const { ff, x, windows: [w] } = await aloneStart({ windows: 1 });
+  ff.store.rules = [];
+  await ff.clock.settled(x.js(`rulesList.get().then(list => { list.push({ url: "ruled.example", space: "${GONE}" }); })`));
+  ff.openTab(w.id, { url: "https://ruled.example/", active: true });
+  await ff.clock.idle(60000);
+  assert.deepEqual(ff.list(w.id).filter(t => t.url === "https://ruled.example/").map(t => t.cookieStoreId), [C1]);
+  assert.ok(x.errors.some(e => e.includes("No cookie store")), "and the refusal is noted");
+  x.js("problems.length = 0");
+  x.kill();
+});

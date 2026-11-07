@@ -218,7 +218,8 @@ async function byRule(tabId, url) {
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === rule.space) return intoSpace(tabId);
   newTabs.delete(tabId);
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
+  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(noteError);
+  if (!opened) return intoSpace(tabId); // a rule naming a space that has gone: closing it now would lose the link
   await browser.tabs.remove(tabId).catch(() => {});
   await forgetClosedPages([url]); // the same as in intoSpace, below
 }
