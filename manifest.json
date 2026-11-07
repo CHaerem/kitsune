@@ -53,6 +53,7 @@
       "livefolders.js",
       "spaces.js",
       "spaceactions.js",
+      "newtabs.js",
       "ownfolders.js",
       "safemoves.js",
       "tabactions.js",

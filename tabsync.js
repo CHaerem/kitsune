@@ -367,22 +367,6 @@ async function reconcileAll() {
   for (const w of wins) await fillWindow(w.id).catch(noteError);
 }
 
-// Where another window's placeholder of `tabId` goes (`tabs`: every window's, from
-// tabs.query): before the same neighbour it has in its own window. A tab is registered
-// when its page has settled, so tabs opened together (several moved to a space) come in
-// the order they finished loading; each simply added at the end, the windows would differ.
-function indexBeforeSameNeighbour(tabs, tabId, windowId) {
-  const tab = tabs.find(t => t.id === tabId);
-  const there = repMap(tabs.filter(t => t.windowId === windowId));
-  const after = tabs.filter(t => t.windowId === tab?.windowId && t.cookieStoreId === tab.cookieStoreId && !t.pinned && t.index > tab.index)
-    .sort((a, b) => a.index - b.index);
-  for (const t of after) {
-    const rep = there.get(syncKeyByTab.get(t.id));
-    if (rep !== undefined) return tabs.find(x => x.id === rep).index;
-  }
-  return undefined;
-}
-
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
 async function register(tabId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);

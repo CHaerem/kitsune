@@ -239,7 +239,7 @@ browser.tabs.onCreated.addListener(tab => {
   if (!isWeb(tab.url) && !isGhostUrl(tab.url)) firstPage.add(tab.id);
   if (tab.cookieStoreId !== NO_CONTAINER) return;
   newTabs.set(tab.id, Date.now());
-  setTimeout(() => newTabs.delete(tab.id), REOPEN_WINDOW_MS);
+  setTimeout(() => { if (newTabs.has(tab.id)) serial(() => drawAfterAll(tab.id)); }, REOPEN_WINDOW_MS);
   if (tab.url === "about:newtab" || tab.url === "about:home") serial(() => intoSpace(tab.id));
 });
 browser.tabs.onUpdated.addListener((tabId, change) => {
@@ -267,14 +267,13 @@ async function byRule(tabId, url) {
   const rule = (await rulesList.get()).find(r => ruleMatches(r.url, url));
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === rule.space || await exemptFromRules(tabId)) return intoSpace(tabId);
-  newTabs.delete(tabId);
-  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: tab.index + 1 }).catch(err => ruleFailed(rule, err));
+  const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: await indexWhenReopened(tab, rule.space) }).catch(err => ruleFailed(rule, err));
   if (!opened) return intoSpace(tabId); // closing it now would lose the link (safemoves.js)
   await browser.tabs.remove(tabId).catch(() => {});
 }
 
+// (The tab stays in newTabs until it is gone, so no view draws it meanwhile: reopensSoon.)
 async function intoSpace(tabId) {
-  newTabs.delete(tabId);
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId !== NO_CONTAINER) return;
   const win = await browser.windows.get(tab.windowId).catch(() => null);
@@ -283,7 +282,7 @@ async function intoSpace(tabId) {
   if (!win || win.type !== "normal" || !space) return;
   const url = NEW_TAB_PAGES.has(tab.url) ? undefined : tab.url;
   if (url !== undefined && !isWeb(url)) return;
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: tab.index + 1 });
+  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: await indexWhenReopened(tab, space) });
   await browser.tabs.remove(tab.id).catch(() => {});
 }
 

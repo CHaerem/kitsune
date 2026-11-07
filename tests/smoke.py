@@ -2563,6 +2563,160 @@ def alone_tab_menu(m):
     no_problems(m, "after the tab menu")
 
 
+def alone_new_tab(m):
+    # New tabs have one place, the top of today's tabs, for the button, ⌘T and a link
+    # from another app. Each tab's row is read from the real sidebar, once it has settled.
+    settled = """const settled = async (test, ms = 10000) => { const t0 = Date.now(); for (;;) { const v = test(); if (v || Date.now() - t0 > ms) return v; await wait(50); } };"""
+    rows = settled + """const ids = () => plainTabs().map(r => Number(r.dataset.tab));"""
+    # Waits for a tab to be first among today's, with the others as they were. Every view the
+    # sidebar is sent meanwhile is kept: a new row anywhere but first is a jump.
+    new_first = rows + """const before = args[0], known = [...doc.querySelectorAll("#tabs > .tab")].map(r => Number(r.dataset.tab)), views = [];
+      port.onMessage.addListener(v => views.push(v.tabs.map(t => t.id)));
+      await settled(() => !before.includes(ids()[0]) && ids().length === before.length + 1);
+      await wait(300);
+      const top = plainTabs()[0];
+      const jumped = views.filter(v => v.some(id => !known.includes(id)) && known.includes(v[0])).length;
+      return {before, after: ids(), active: top.classList.contains("active"), above: top.previousElementSibling?.className, jumped};"""
+    # Waits for tab `t` to be in the record and in the second window, and gives each window's order of its space.
+    both_orders = """const w = main(), ctx = t.userContextId;
+      const order = x => x.gBrowser.tabs.filter(y => !y.pinned && key(x, y) && y.userContextId === ctx).map(y => key(x, y));
+      await settled(() => key(w, t) && order(other()).includes(key(w, t)));
+      return {me: key(w, t), main: order(w), other: order(other()), ctx};"""
+    opened = m.js(H + settled + """if (other()) return false;
+      const a = main(), want = a.gBrowser.tabs.filter(t => !t.pinned && role(a, t)).length, w = a.OpenBrowserWindow(); w.__smoke = true;
+      await settled(() => w.gBrowser && w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length >= want, 20000);
+      a.focus(); await wait(500); return true;""")
+    more_tabs_here(m, "newtab")
+
+    # The button, with a folder drawn above. (moveTab puts the folder's tab last in the window; the unit test has one before.)
+    r = sidebar_page(m, rows + """
+      send({type: "newFolder", space: spaces().find(s => s.active).id, name: "Above the new tabs"});
+      const head = await settled(() => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Above the new tabs"));
+      send({type: "moveTab", tabId: ids()[0], folder: head.dataset.folderHead, before: null});
+      await settled(() => head.parentElement.querySelector(".tab"));
+      const before = ids();
+      doc.getElementById("new-tab").click();
+      await settled(() => ids().length === before.length + 1);
+      const top = plainTabs()[0];
+      return {folder: head.dataset.folderHead, before, after: ids(), active: top.classList.contains("active"), above: top.previousElementSibling?.className};""")
+    folder = r["folder"]
+    check("the new tab button opens the tab first among today's tabs, under the folders, selected",
+          r["after"][1:] == r["before"] and r["active"] and r["above"] == "divider", str(r))
+    s = m.js(H + settled + """const t = main().gBrowser.selectedTab, was = key(main(), t);
+      t.linkedBrowser.loadURI(Services.io.newURI("https://example.org/?smoke-newtab-button"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()});
+      """ + both_orders.replace("return {", "return {was, "))
+    check("a new tab is not in the other window until it has an address", not s["was"], str(s))
+    check("once it has one, the other window shows the same order", s["me"] and s["main"] == s["other"], str(s))
+
+    # ⌘T, through Firefox's own key. The tab comes without a container, and is opened again here.
+    before = sidebar_page(m, rows + "return ids();")
+    m.js(H + "main().focus(); await wait(300); return 1;")
+    press(m, "t", CMD)
+    r = sidebar_page(m, new_first, before)
+    t = m.js(H + "const t = main().gBrowser.selectedTab; return {ctx: t.userContextId, page: url(t)};")
+    check("⌘T opens the tab first among today's tabs, in the space, selected",
+          r["after"][1:] == r["before"] and r["active"] and t["ctx"] == s["ctx"], str((r, t)))
+
+    # A link from another app: an address, without a container.
+    before = r["after"]
+    # (A moment from now, once the views are being kept. Its row must never show at the end. A link
+    # is created on about:blank, and its address comes later: how much later is made sure here, or
+    # the check would depend on how fast Firefox is.)
+    m.js(H + """sT(() => { const t = main().gBrowser.addTrustedTab("about:blank", {inBackground: false});
+      sT(() => t.linkedBrowser.loadURI(Services.io.newURI("https://example.org/?smoke-newtab-link"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()}), 800); }, 3000); return 1;""")
+    r = sidebar_page(m, new_first, before)
+    check("a link without a container opens first among today's tabs, selected", r["after"][1:] == r["before"] and r["active"], str(r))
+    check("its row never shows anywhere else first", r["jumped"] == 0, str(r))
+    s = m.js(H + settled + "const t = main().gBrowser.tabs.find(x => url(x).includes('smoke-newtab-link'));" + both_orders)
+    check("the other window has the link in the same place", s["me"] and s["main"] == s["other"], str(s))
+    check("the link is in the space", s["ctx"] == t["ctx"], str(s))
+
+    # A site that takes long to answer: the row shows after a while, in the same place, and stays there.
+    before = r["after"]
+    m.js(H + """sT(() => { const t = main().gBrowser.addTrustedTab("about:blank", {inBackground: false});
+      sT(() => t.linkedBrowser.loadURI(Services.io.newURI("https://example.org/?smoke-newtab-slow"), {triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal()}), 4500); }, 3000); return 1;""")
+    r = sidebar_page(m, new_first, before)
+    check("a link that takes long shows first among today's while it waits", r["after"][1:] == r["before"] and r["jumped"] == 0, str(r))
+    r = sidebar_page(m, rows + """const waiting = args[0];
+      await settled(() => ids()[0] !== waiting);
+      return {waiting, after: ids(), active: plainTabs()[0].classList.contains("active")};""", r["after"][0])
+    check("and is still first once the site answers", r["after"][1:] == before and r["active"], str(r))
+    before = r["after"]
+
+    # A link from a tab: Firefox puts it next to that tab, in its container, and there it stays, in both windows.
+    s = m.js(H + settled + """const first = main(), space = first.gBrowser.selectedTab.userContextId;
+      const from = first.gBrowser.tabs.filter(t => !t.pinned && t.userContextId === space && url(t).includes("smoke-newtab-") && !/-(link|button|slow)/.test(url(t)))[1];
+      first.gBrowser.selectedTab = from; await settled(() => from.selected); await wait(300);
+      const t = first.gBrowser.addTrustedTab("https://example.org/?smoke-newtab-from-tab", {relatedToCurrent: true, inBackground: true});
+      """ + both_orders.replace("return {", "return {beside: first.gBrowser.tabs.indexOf(t) === first.gBrowser.tabs.indexOf(from) + 1, opener: key(first, from), "))
+    check("a link opened from a tab stays next to it", s["beside"] and s["main"][s["main"].index(s["opener"]) + 1] == s["me"], str(s))
+    check("and the other window has it there too", s["main"] == s["other"], str(s))
+
+    # A link from a tab drawn apart has nothing to stay next to. Next to the folder's tab would be the end of
+    # the list (moveTab puts it last in the window). A moment from now again, once the views are being kept.
+    before = sidebar_page(m, rows + "return ids();")
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.at(-1);
+      sT(() => w.gBrowser.addTrustedTab("https://example.org/?smoke-newtab-from-folder", {relatedToCurrent: true, inBackground: true}), 3000); return 1;""")
+    r = sidebar_page(m, new_first, before)
+    check("a link from a tab in a folder opens first among today's tabs", r["after"][1:] == r["before"], str(r))
+    s = m.js(H + settled + "const t = main().gBrowser.tabs.find(x => url(x).includes('smoke-newtab-from-folder'));" + both_orders)
+    check("and the other window has it there too (a folder's tab)", s["me"] and s["main"] == s["other"], str(s))
+    before = r["after"]
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => t.pinned && t.userContextId === args[0]);
+      sT(() => w.gBrowser.addTrustedTab("https://example.org/?smoke-newtab-from-essential", {relatedToCurrent: true, inBackground: true}), 3000); return 1;""", s["ctx"])
+    r = sidebar_page(m, new_first, before)
+    check("a link from an essential opens first among today's tabs", r["after"][1:] == r["before"], str(r))
+
+    # A double click on the empty part of the list; on a row it is only a click.
+    r = sidebar_page(m, rows + """
+      const fire = (e, type, detail) => e.dispatchEvent(new page.MouseEvent(type, {bubbles: true, cancelable: true, detail, button: 0}));
+      const twice = (first, second = first) => {
+        for (const [e, n] of [[first, 1], [second, 2]]) for (const type of ["mousedown", "mouseup", "click"]) fire(e, type, n);
+        fire(second, "dblclick", 2);
+      };
+      const list = doc.getElementById("tabs"), before = ids().length;
+      twice(plainTabs()[0]);
+      await wait(1200);
+      const onRow = ids().length;
+      // The row under the pointer can go between the clicks (its ×): the second then lands on the empty part.
+      twice(plainTabs()[1], list);
+      await wait(1200);
+      return {before, onRow, fromRow: ids().length};""")
+    check("a double click on a row opens no tab", r["onRow"] == r["before"], str(r))
+    check("a double click that began on a row opens no tab", r["fromRow"] == r["before"], str(r))
+    # The empty part with Firefox's own mouse events, on the sidebar page in front. Two
+    # clicks too far apart on a busy machine are no double click, so it may take another try.
+    before = sidebar_page(m, rows + "return ids();")
+    for _ in range(3):
+        m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        spot = m.cmd("WebDriver:ExecuteScript", {"args": [], "script": """const l = document.getElementById("tabs"), box = l.getBoundingClientRect(), x = Math.round(box.left + box.width / 2), y = Math.round(box.bottom - 4);
+          return {x, y, empty: document.elementFromPoint(x, y) === l};"""})
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "x": spot["x"], "y": spot["y"], "duration": 0},
+            {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}, {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
+        m.cmd("WebDriver:ReleaseActions")
+        m.chrome()
+        r = sidebar_page(m, new_first, before)
+        if r["after"][1:] == r["before"]:
+            break
+    check("a double click on the empty part of the list opens a tab first among today's, selected", spot["empty"] and r["after"][1:] == r["before"] and r["active"], str((spot, r)))
+
+    # What this group added goes again. The tabs are live in this window, so the other follows.
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(500); return 1;""", folder)
+    r = m.js(H + settled + """const a = main(), ours = t => url(t).includes("smoke-newtab") || /^about:(newtab|home)/.test(url(t));
+      for (const t of a.gBrowser.tabs.filter(t => !t.pinned && ours(t))) a.gBrowser.removeTab(t);
+      await settled(() => !other().gBrowser.tabs.some(t => !t.pinned && String(t.label).includes("smoke-newtab")));
+      await wait(2000);
+      if (args[0]) await close(other());
+      return 1;""", opened)
+    no_problems(m, "after opening new tabs")
+
+
 def alone_idle(m):
     # What the groups before did can still have a timer running, started by what they did:
     # the quiet line (10 s) and a placeholder's new title (up to a minute, refreshGhostsSoon).
@@ -4409,6 +4563,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_selection,
                 alone_space_menu,
                 alone_stay_put,
+                alone_new_tab,
                 alone_idle, alone_update, alone_end, alone_restart)
 
 
