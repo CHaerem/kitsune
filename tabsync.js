@@ -844,17 +844,23 @@ function unloadGhost(tabId) {
   const waiting = awaitingIcon.get(tabId);
   if (!waiting) return;
   browser.tabs.get(tabId).then(t => {
+    // Selected right now: leaving it brings it back (below). Going through tabs quickly, a tab
+    // passed in that moment never gets to hear it was left, and would stay loaded for good.
+    if (t.active) return;
     // Not yet: the events below bring it back. A placeholder can take many seconds to
     // report its load finished, with a new window's tabs all loading.
     if (!waiting.overdue && (t.status !== "complete" || (waiting.hasIcon && !t.favIconUrl))) return;
     if (awaitingIcon.get(tabId) !== waiting) return; // a newer load has asked meanwhile
     awaitingIcon.delete(tabId);
-    if (!t.active && isGhostUrl(t.url) && t.url === waiting.url) return browser.tabs.discard(tabId);
+    if (isGhostUrl(t.url) && t.url === waiting.url) return browser.tabs.discard(tabId);
   }).catch(() => awaitingIcon.delete(tabId));
 }
 browser.tabs.onUpdated.addListener(tabId => {
   if (awaitingIcon.has(tabId)) unloadGhost(tabId);
 }, { properties: ["favIconUrl", "status"] });
+browser.tabs.onActivated.addListener(({ previousTabId }) => {
+  if (awaitingIcon.has(previousTabId)) unloadGhost(previousTabId);
+});
 
 // A placeholder whose tab or essential no longer exists (left from before a
 // restart, or by an older version) has nothing to show or open: it is closed.

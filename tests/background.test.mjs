@@ -1603,3 +1603,24 @@ test("a tab dragged above a new tab in the sidebar is put there, not at the end"
   assert.deepEqual(ff.list(w.id).map(t => t.id), [a.id, c.id, fresh.id, ff.list(w.id).find(t => t.url === "https://b.example/").id]);
   x.kill();
 });
+
+test("a placeholder that was selected just as it was ready is unloaded when you have gone past it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  const stay = ff.addTab(other.id, { url: "about:blank" });
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.send({ type: "ghostReady", icon: false }, { tab: ff.snap(ghost), url: ghost.url });
+  await wait(100);
+  assert.equal(ff.tabs.get(ghost.id).discarded, false, "selected, it stays");
+  for (const t of ff.list(other.id)) ff.tabs.get(t.id).active = false;
+  ff.tabs.get(stay.id).active = true;
+  x.b.tabs.onActivated.fire({ tabId: stay.id, windowId: other.id, previousTabId: ghost.id });
+  await wait(100);
+  assert.equal(ff.tabs.get(ghost.id).discarded, true);
+  assert.equal(x.js("awaitingIcon.size"), 0);
+  x.kill();
+});
