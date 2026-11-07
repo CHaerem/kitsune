@@ -254,12 +254,16 @@ async function onClosed(tabId, windowId) {
 // moment and then pinned again (Firefox moves it as a new tab), so an unpin
 // counts only if the tab is still unpinned UNPIN_SETTLE_MS later.
 const UNPIN_SETTLE_MS = 500;
+// With Tidier alone only you pin and unpin, so that counts even on a copy Tidier has just
+// made (busy, for a moment): dragged back to the list then, the tab would be neither an
+// essential nor an ordinary tab, with the essential still in the list.
+const pinIgnored = tabId => !tidierAlone && busy.has(tabId);
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (busy.has(tabId) || !("pinned" in change)) return;
+  if (pinIgnored(tabId) || !("pinned" in change)) return;
   if (change.pinned) { serial(() => onPinned(tab)); return; }
   setTimeout(() => serial(async () => {
     const now = await browser.tabs.get(tabId).catch(() => null);
-    if (now && !now.pinned && !busy.has(tabId)) await onUnpinned(now);
+    if (now && !now.pinned && !pinIgnored(tabId)) await onUnpinned(now);
   }), UNPIN_SETTLE_MS);
 }, { properties: ["pinned"] });
 

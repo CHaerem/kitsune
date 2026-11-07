@@ -293,6 +293,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     unruled,
     earlyKeys,
     quietNotes, closeGroups,
+    closingOrder,
   };
   // Counted once Tidier is done with what it was doing (the helper page
   // asking this causes a little work), so a list only shows what it keeps.
@@ -365,6 +366,22 @@ async function reconcileAll() {
   for (const w of wins) await fillWindow(w.id).catch(noteError);
 }
 
+// Where another window's placeholder of `tabId` goes (`tabs`: every window's, from
+// tabs.query): before the same neighbour it has in its own window. A tab is registered
+// when its page has settled, so tabs opened together (several moved to a space) come in
+// the order they finished loading; each simply added at the end, the windows would differ.
+function indexBeforeSameNeighbour(tabs, tabId, windowId) {
+  const tab = tabs.find(t => t.id === tabId);
+  const there = repMap(tabs.filter(t => t.windowId === windowId));
+  const after = tabs.filter(t => t.windowId === tab?.windowId && t.cookieStoreId === tab.cookieStoreId && !t.pinned && t.index > tab.index)
+    .sort((a, b) => a.index - b.index);
+  for (const t of after) {
+    const rep = there.get(syncKeyByTab.get(t.id));
+    if (rep !== undefined) return tabs.find(x => x.id === rep).index;
+  }
+  return undefined;
+}
+
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
 async function register(tabId) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
@@ -387,7 +404,7 @@ async function register(tabId) {
   for (const w of await normalWindows()) {
     if (w.id === tab.windowId) continue;
     const parentId = parentKey ? repMap(tabs.filter(t => t.windowId === w.id)).get(parentKey) : undefined;
-    await createRep(w.id, key, entry, parentId);
+    await createRep(w.id, key, entry, parentId, tidierAlone ? indexBeforeSameNeighbour(tabs, tab.id, w.id) : undefined);
   }
 }
 
@@ -684,7 +701,9 @@ browser.tabs.onCreated.addListener(tab => {
 });
 
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!started || syncBusy.has(tabId)) return;
+  // Only you pin a tab with Tidier alone, so a pin counts even on a tab just pulled in or
+  // just created: missed, the tab would be an essential and an ordinary tab, for good.
+  if (!started || (syncBusy.has(tabId) && !(tidierAlone && change.pinned === true))) return;
   const key = syncKeyByTab.get(tabId);
   if (!key) {
     // A new tab that has navigated to a page, e.g. "New Tab" -> a URL.
@@ -865,13 +884,30 @@ browser.tabs.onDetached.addListener((tabId, { oldWindowId }) => noteOrder(oldWin
 browser.tabs.onUpdated.addListener((tabId, change, tab) => noteOrder(tab.windowId), { properties: ["discarded", "url"] });
 browser.windows.onRemoved.addListener(windowId => lastOrder.delete(windowId));
 
+// Tabs closed together (several picked in Tidier's sidebar): by the time the next one
+// closes, the one before it has left the order and lost its key, so each saved tab would
+// come back next to the same neighbour, and they would stand reversed in this window and
+// in the right order in the others. While tabs keep closing in a window, the order from
+// when the first of them closed holds, with the keys it had then. (With Sidebery, which
+// closes its own selection, this stays as it was.)
+const CLOSING_MS = 500;
+const closingOrder = new Map(); // windowId -> { order, timer }
+function orderWhileClosing(windowId) {
+  const burst = closingOrder.get(windowId) ?? { order: (lastOrder.get(windowId) || []).map(t => ({ ...t, key: syncKeyByTab.get(t.id) })) };
+  clearTimeout(burst.timer);
+  burst.timer = setTimeout(() => closingOrder.delete(windowId), CLOSING_MS);
+  closingOrder.set(windowId, burst);
+  return burst.order;
+}
+
 // Where a closed tab was: whether it was unloaded, and the synced tabs of its
 // space before and after it (nearest first), for placeNextTo.
 function closedPlace(windowId, tabId) {
-  const order = lastOrder.get(windowId) || [];
+  const held = tidierAlone ? orderWhileClosing(windowId) : [];
+  const order = held.some(t => t.id === tabId) ? held : lastOrder.get(windowId) || [];
   const i = order.findIndex(t => t.id === tabId);
   if (i < 0) return null;
-  const keysOf = list => list.filter(t => t.cookieStoreId === order[i].cookieStoreId && syncKeyByTab.has(t.id)).map(t => syncKeyByTab.get(t.id));
+  const keysOf = list => list.filter(t => t.cookieStoreId === order[i].cookieStoreId).map(t => t.key ?? syncKeyByTab.get(t.id)).filter(Boolean);
   return { unloaded: order[i].unloaded, before: keysOf(order.slice(0, i).reverse()), after: keysOf(order.slice(i + 1)) };
 }
 

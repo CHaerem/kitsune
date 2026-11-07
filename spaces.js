@@ -106,15 +106,18 @@ browser.commands.onCommand.addListener(name => {
 // The selected tab decides the space: a tab in another space (a link, an essential,
 // ⌃Tab) takes you there. Closing the last tab of a space is different: Firefox then
 // selects any tab it can show, and you stay in the space, with a new tab.
-const closedIn = new Map(); // windowId -> the space a tab was closed in, for a moment
+const closedIn = new Map(); // windowId -> { space } a tab was closed in, for a moment
 browser.tabs.onRemoved.addListener((tabId, { windowId, isWindowClosing }) => {
   // (Not while Firefox starts: restoring a session closes the window's first tab, which is no tab you left.)
   if (!tidierAlone || !started || isWindowClosing || !activeSpace.has(windowId)) return;
-  closedIn.set(windowId, activeSpace.get(windowId));
-  setTimeout(() => closedIn.delete(windowId), 200);
+  const closed = { space: activeSpace.get(windowId) };
+  closedIn.set(windowId, closed);
+  // Only its own moment: with several tabs closing, an earlier one's timer must not end
+  // the last one's, which is the one Firefox may answer by selecting another space's tab.
+  setTimeout(() => { if (closedIn.get(windowId) === closed) closedIn.delete(windowId); }, 200);
 });
 browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
-  const stay = closedIn.get(windowId); // now: the queue may be busy for longer than this is kept
+  const stay = closedIn.get(windowId)?.space; // now: the queue may be busy for longer than this is kept
   closedIn.delete(windowId);
   serial(async () => {
     const tab = await browser.tabs.get(tabId).catch(() => null);

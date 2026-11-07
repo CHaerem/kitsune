@@ -1448,7 +1448,9 @@ def alone_moves(m):
       await wait(2500);
       return {n, pinned, after: tiles().length, url: was};""")
     check("a tab pinned in the sidebar is an essential, and unpinned an ordinary tab again", r["pinned"] == r["n"] + 1 and r["after"] == r["n"], str(r))
-    r = m.js(H + """const counts = wins().map(w => w.gBrowser.tabs.filter(t => !t.pinned && t.linkedBrowser && !key(w, t) && /^https:/.test(url(t))).length); return counts;""")
+    r = m.js(H + """let counts;
+      for (let i = 0; i < 60; i++) { counts = wins().map(w => w.gBrowser.tabs.filter(t => !t.pinned && t.linkedBrowser && !key(w, t) && /^https:/.test(url(t))).length); if (counts.every(x => x === 0)) break; await wait(100); }
+      return counts;""")
     check("an essential unpinned while loaded is synced again, with a ghost in every window", all(x == 0 for x in r), str(r))
     # Moved to another space: there, and gone here, in every window.
     r = sidebar_page(m, """
@@ -3039,6 +3041,440 @@ def alone_tab_names(m):
       await wait(4500);""")  # a tab that lost its name tells its placeholders a moment later (refreshGhostsSoon)
 
 
+# What the selection's checks do in the sidebar: real events on the real rows, carrying
+# the modifier this machine uses, and waits for a state rather than for a time.
+PICKING = """
+      const MOD = (await page.browser.runtime.getPlatformInfo()).os === "mac" ? "metaKey" : "ctrlKey";
+      const press = (e, mods = {}) => { for (const type of ["mousedown", "mouseup", "click"]) e.dispatchEvent(new page.MouseEvent(type, {bubbles: true, cancelable: true, button: 0, ...mods})); };
+      const add = e => press(e, {[MOD]: true}), range = e => press(e, {shiftKey: true});
+      const idOf = e => Number(e.dataset.tab);
+      const picks = () => [...doc.querySelectorAll(".picked")].map(idOf);
+      const row = id => doc.querySelector(`#tabs .tab[data-tab="${id}"]`), tile = id => doc.querySelector(`#essentials .tile[data-tab="${id}"]`);
+      const ids = () => plainTabs().map(idOf), tileIds = () => [...doc.querySelectorAll("#essentials .tile")].map(idOf);
+      const head = name => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === name);
+      const inFolder = name => [...head(name).parentElement.querySelectorAll(".tab")].map(idOf);
+      const activeId = async () => (await page.browser.tabs.query({active: true, currentWindow: true}))[0].id;
+      const activeSpace = () => spaces().find(s => s.active).id;
+      const until = async (test, ms = 15000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (test()) return true; await wait(50); } return !!test(); };
+      const key = k => doc.body.dispatchEvent(new page.KeyboardEvent("keydown", {key: k, bubbles: true, cancelable: true}));
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      const select = async e => { const id = idOf(e); press(e); await until(() => (row(id) || tile(id))?.classList.contains("active")); };
+      const keysOf = list => Promise.all(list.map(id => page.browser.sessions.getTabValue(id, "syncKey")));
+      const drag = (from, to, below = false) => {
+        const data = new page.DataTransfer(), box = to.getBoundingClientRect();
+        const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + (below ? box.height - 1 : 1), dataTransfer: data};
+        from.dispatchEvent(new page.DragEvent("dragstart", at));
+        to.dispatchEvent(new page.DragEvent("dragover", at));
+        to.dispatchEvent(new page.DragEvent("drop", at));
+        from.dispatchEvent(new page.DragEvent("dragend", at));
+      };
+"""
+
+
+def order_everywhere(m, keys):
+    """Each window's order of these tabs, once it is as wanted (or the time is up)."""
+    return m.js(H + """const [want] = args; let got;
+      for (let i = 0; i < 100; i++) {
+        got = wins().map(w => w.gBrowser.tabs.map(t => value(w, t, "syncKey")).filter(k => want.includes(k)));
+        if (got.every(g => JSON.stringify(g) === JSON.stringify(want))) break;
+        await wait(100);
+      }
+      return got;""", keys)
+
+
+def alone_selection(m):
+    # Tabs to use up: at once, so this group need not wait for each lot. The last two
+    # are opened in the second window, so here they are placeholders.
+    space = sidebar_page(m, """return spaces().find(s => s.active).id;""")
+    fresh = m.js(H + """const ctx = Number(args[0].split("-").pop());
+      if (!other()) { const w = main().OpenBrowserWindow(); w.__smoke = true; await wait(4000); }
+      main().focus();
+      for (let i = 0; i < 28; i++) { (i < 26 ? main() : other()).gBrowser.addTrustedTab("https://example.org/?smoke-pick-" + i, {userContextId: ctx, inBackground: true}); await wait(100); }
+      let keys;
+      for (let i = 0; i < 300; i++) {  // until each window has all of them, with a record
+        const all = (await storage(args[1], ["syncedTabs"])).syncedTabs;
+        keys = Object.keys(all).filter(k => (all[k].url || "").includes("smoke-pick"));
+        if (keys.length === 28 && wins().every(w => w.gBrowser.tabs.filter(t => keys.includes(value(w, t, "syncKey"))).length === 28)) break;
+        await wait(100);
+      }
+      return keys;""", space, EXT_ID)
+    r = sidebar_page(m, PICKING + """
+      // The test's own page is a row too: last, out of the way.
+      const own = [...doc.querySelectorAll("#tabs > .tab")].find(x => x.querySelector(".title").textContent === "Tidier");
+      if (own) { send({type: "moveTab", tabId: idOf(own), before: null, folder: null}); await until(() => [...doc.querySelectorAll("#tabs > .tab")].at(-1) === own); }
+      const space = activeSpace();
+      send({type: "newFolder", space, name: "Picks"});
+      await until(() => head("Picks"));
+      send({type: "newFolder", space, name: "Picks closed"});
+      await until(() => head("Picks closed"));
+      const rowsNow = ids(), rowKeys = await keysOf(rowsNow), fresh = rowsNow.filter((id, i) => args[0].includes(rowKeys[i]));
+      const unloaded = id => row(id).classList.contains("unloaded");
+      const [f1, f2, g1, r0, r1, r2, r3, r4, r5, a, b, c, d, e, f, y1, y2, y3, s1, s2, s3, h1, h2, h3, h4, h5] = fresh.filter(id => !unloaded(id)), [p1, p2] = fresh.filter(unloaded);
+      const open = head("Picks").dataset.folderHead, closed = head("Picks closed").dataset.folderHead;
+      send({type: "moveTab", tabId: f1, before: null, folder: open});
+      send({type: "moveTab", tabId: f2, before: null, folder: open});
+      send({type: "moveTab", tabId: g1, before: null, folder: closed});
+      await until(() => inFolder("Picks").length === 2 && inFolder("Picks closed").length === 1);
+      send({type: "foldFolder", key: closed, collapsed: true});
+      await until(() => head("Picks closed").parentElement.classList.contains("collapsed"));
+      const out = {};
+
+      // Add and remove; the first click takes the selected tab in; the page stays.
+      await select(row(r0));
+      const selected = await activeId();
+      out.selectedFirst = selected === r0;
+      add(row(r2));
+      out.first = same(picks(), [r0, r2]);
+      add(row(r3));
+      out.added = same(picks(), [r0, r2, r3]);
+      add(row(r2));
+      out.removed = same(picks(), [r0, r3]);
+      out.forMenu = same(Array.from(page.selectedTabs(r3)), [r0, r3]) && same(Array.from(page.selectedTabs(r1)), [r1]);
+      await wait(400);
+      out.pageStays = (await activeId()) === selected && row(r0).classList.contains("active");
+
+      // A press on a picked row keeps them until release, and a plain click then ends it.
+      row(r3).dispatchEvent(new page.MouseEvent("mousedown", {bubbles: true, cancelable: true, button: 0}));
+      out.pressed = same(picks(), [r0, r3]);
+      row(r3).dispatchEvent(new page.MouseEvent("mouseup", {bubbles: true, cancelable: true, button: 0}));
+      row(r3).dispatchEvent(new page.MouseEvent("click", {bubbles: true, cancelable: true, button: 0}));
+      out.released = picks().length === 0;
+      await until(() => row(r3).classList.contains("active"));
+      out.plainSelects = (await activeId()) === r3;
+
+      // A range: from the selected tab, again from there, over a folder as drawn.
+      range(row(r5));
+      out.range = same(picks(), [r3, r4, r5]);
+      range(row(r1));
+      out.rangeAgain = same(picks(), [r1, r2, r3]);
+      range(row(f1));
+      out.overFolders = same(picks(), [f1, f2, ...ids().slice(0, ids().indexOf(r3) + 1)]);
+      out.notClosedFolder = !picks().includes(g1) && !doc.querySelector(".folder.collapsed .picked");
+      await wait(400);
+      out.pageStaysRange = (await activeId()) === r3;
+
+      // What clears: empty space, Esc after the menu, a space switch.
+      press(doc.getElementById("tabs"));
+      out.emptySpace = picks().length === 0;
+      add(row(r1));
+      doc.getElementById("menu").hidden = false;
+      key("Escape");
+      out.escMenu = doc.getElementById("menu").hidden && same(picks(), [r1, r3]);
+      key("Escape");
+      out.escPicks = picks().length === 0;
+      key("ArrowDown");
+      const hadCursor = !!doc.querySelector(".cursor");
+      key("Escape");
+      out.escCursor = hadCursor && !doc.querySelector(".cursor");
+      add(row(r2));
+      const there = spaces().find(s => !s.active && s.id !== "firefox-container-4").id;
+      const hadPicks = picks().length === 2;
+      send({type: "space", space: there});
+      await until(() => activeSpace() === there);
+      out.spaceSwitch = hadPicks && picks().length === 0;
+      send({type: "space", space});
+      await until(() => activeSpace() === space && row(r3)?.classList.contains("active"));
+      out.spaceBack = picks().length === 0;
+
+      // Another tab selected by other means than a click here: you have moved on.
+      add(row(r2));
+      const hadThem = same(picks(), [r2, r3]);
+      await page.browser.tabs.update(r1, {active: true});
+      await until(() => row(r1).classList.contains("active") && !picks().length);
+      out.movedOn = hadThem && picks().length === 0;
+      await select(row(r3));
+
+      // One kind: a tile and a row cannot both be picked.
+      add(row(r2));
+      add(doc.querySelector("#essentials .tile"));
+      out.tileAlone = doc.querySelectorAll(".tile.picked").length === 1 && !doc.querySelector(".tab.picked");
+      range(row(r2));
+      out.rowsAlone = !doc.querySelector(".tile.picked") && same(picks(), [r2, r3]);
+
+      // A row drawn again keeps its mark.
+      send({type: "mute", tabId: r2, muted: true});
+      await until(() => row(r2).querySelector(".sound"));
+      out.redraw = !!row(r2).querySelector(".sound") && same(picks(), [r2, r3]);
+      send({type: "mute", tabId: r2, muted: false});
+      await until(() => !row(r2).querySelector(".sound"));
+      out.redrawBack = same(picks(), [r2, r3]);
+
+      // A row in a folder you close leaves the selection: nothing acts on what you cannot see.
+      add(row(f1));
+      const hadF1 = picks().includes(f1);
+      send({type: "foldFolder", key: open, collapsed: true});
+      await until(() => !picks().includes(f1));
+      out.foldLeaves = hadF1 && same(picks(), [r2, r3]);
+      send({type: "foldFolder", key: open, collapsed: false});
+      await until(() => !head("Picks").parentElement.classList.contains("collapsed"));
+      out.unfoldStaysOut = same(picks(), [r2, r3]);
+      key("Escape");
+      return {out, f1, f2, g1, r0, r1, r2, r3, r4, r5, a, b, c, d, e, f, y1, y2, y3, s1, s2, s3, h1, h2, h3, h4, h5, p1, p2, space, there, open, closed};""", fresh)
+    out = r.get("out", {})
+    check("the first ⌘-click takes the selected tab in", out.get("selectedFirst") and out.get("first"), str(r))
+    check("⌘-click adds and removes", out.get("added") and out.get("removed"), str(out))
+    check("the tab menu's list is the selection if the tab is in it, else that tab", out.get("forMenu"), str(out))
+    check("the selected page does not change while you pick", out.get("pageStays") and out.get("pageStaysRange"), str(out))
+    check("a press on a picked row keeps the selection until release; a plain click then ends it and selects", out.get("pressed") and out.get("released") and out.get("plainSelects"), str(out))
+    check("⇧-click takes a range from the selected tab, and again changes it", out.get("range") and out.get("rangeAgain"), str(out))
+    check("a range goes over the rows as drawn, past a folder, not into a closed one", out.get("overFolders") and out.get("notClosedFolder"), str(out))
+    check("a click on empty space clears", out.get("emptySpace"), str(out))
+    check("Esc goes back a step at a time: menu, selection, cursor", out.get("escMenu") and out.get("escPicks") and out.get("escCursor"), str(out))
+    check("a space switch clears", out.get("spaceSwitch") and out.get("spaceBack"), str(out))
+    check("another tab selected (⌃Tab, a link) ends the selection", out.get("movedOn"), str(out))
+    check("a tile and a row cannot both be picked", out.get("tileAlone") and out.get("rowsAlone"), str(out))
+    check("the selection survives a redraw", out.get("redraw") and out.get("redrawBack"), str(out))
+    check("a row in a folder you close leaves the selection", out.get("foldLeaves") and out.get("unfoldStaysOut"), str(out))
+    tabs = {k: v for k, v in r.items() if k != "out"}
+
+    # Carrying: three rows that are not together go into a folder, in order, in every window.
+    r = sidebar_page(m, PICKING + """
+      const [{f1, f2, r0, r2, r3}] = args, out = {};
+      await select(doc.querySelector("#essentials .tile"));
+      add(row(r0)); add(row(r2)); add(row(r3));
+      out.picked = same(picks(), [r0, r2, r3]);
+      drag(row(r2), head("Picks"));
+      await until(() => inFolder("Picks").length === 5);
+      out.intoFolder = same(inFolder("Picks"), [f1, f2, r0, r2, r3]);
+      out.stillPicked = same(picks(), [r0, r2, r3]);
+      return {out, keys: await keysOf([f1, f2, r0, r2, r3])};""", tabs)
+    out = r.get("out", {})
+    check("a drag from a picked row carries them all into a folder, in order", out.get("picked") and out.get("intoFolder") and out.get("stillPicked"), str(r))
+    got = order_everywhere(m, r.get("keys"))
+    check("a second window has the same order in the folder", len(got) > 1 and all(g == r.get("keys") for g in got), str(got))
+
+    # Out of the folder to a place; a row that is not picked moves alone; dropped on their own, the order holds.
+    r = sidebar_page(m, PICKING + """
+      const [{f1, f2, r0, r1, r2, r3, r4, r5}] = args, out = {};
+      const mine = () => ids().filter(x => [r0, r1, r2, r3, r4, r5].includes(x));
+      drag(row(r0), row(r1));
+      await until(() => inFolder("Picks").length === 2 && same(mine(), [r0, r2, r3, r1, r4, r5]));
+      out.outOfFolder = same(inFolder("Picks"), [f1, f2]) && same(mine(), [r0, r2, r3, r1, r4, r5]);
+      drag(row(r4), row(r0));
+      await until(() => same(mine(), [r4, r0, r2, r3, r1, r5]));
+      out.loneRow = same(mine(), [r4, r0, r2, r3, r1, r5]) && same(picks(), [r0, r2, r3]);
+      drag(row(r0), row(r3), true);
+      await wait(800);
+      out.ontoOwn = same(mine(), [r4, r0, r2, r3, r1, r5]) && same(picks(), [r0, r2, r3]);
+      add(row(r5));
+      drag(row(r5), row(r2), true);
+      await until(() => same(mine(), [r4, r0, r2, r3, r5, r1]));
+      out.gathered = same(mine(), [r4, r0, r2, r3, r5, r1]);
+      // A row with no record (the test's own page, like a new tab page) is a place too.
+      const own = [...doc.querySelectorAll("#tabs > .tab")].at(-1);
+      drag(row(r4), own);
+      await until(() => row(r4).nextElementSibling === own);
+      out.beforeUnsynced = row(r4).nextElementSibling === own;
+      return {out, keys: await keysOf(mine())};""", tabs)
+    out = r.get("out", {})
+    check("picked rows dragged out of a folder are ordinary tabs, in order, where you put them", out.get("outOfFolder"), str(r))
+    check("a row that is not picked moves alone, and the selection stays", out.get("loneRow"), str(out))
+    check("dropped on themselves, picked rows stay as they were", out.get("ontoOwn"), str(out))
+    check("picked rows apart are brought together where you drop them", out.get("gathered"), str(out))
+    check("a tab dropped above a row with no record lands there", out.get("beforeUnsynced"), str(out))
+    got = order_everywhere(m, r.get("keys"))
+    check("a second window has the same order of the tabs", len(got) > 1 and all(g == r.get("keys") for g in got), str(got))
+
+    # To a space's dot, the selected tab among them: there in order, in every window, and you stay.
+    r = sidebar_page(m, PICKING + """
+      const [{r0, r2, r3}] = args;
+      press(doc.getElementById("tabs"));
+      await select(row(r0));
+      add(row(r2)); add(row(r3));
+      return {picked: same(picks(), [r0, r2, r3]), keys: await keysOf([r0, r2, r3])};""", tabs)
+    urls = m.js(H + """const all = (await storage(args[1], ["syncedTabs"])).syncedTabs; return args[0].map(k => all[k]?.url);""", r.get("keys"), EXT_ID)
+    r = sidebar_page(m, PICKING + """
+      const [{r0, r2, r3, space, there}] = args;
+      drag(row(r2), doc.querySelector(`#spaces .space[data-space="${there}"]`));
+      await until(() => !row(r0) && !row(r2) && !row(r3));
+      await until(() => tileIds().length && doc.querySelector(".active"));
+      return {gone: !row(r0) && !row(r2) && !row(r3), stayed: activeSpace() === space, picks: picks().length};""", tabs)
+    check("picked rows dragged to a space's dot leave this space, and you stay", r.get("gone") and r.get("stayed") and r.get("picks") == 0, str(r))
+    moved = m.js(H + """const [urls, ctx, ext] = args, wanted = JSON.stringify(urls); let got;
+      for (let i = 0; i < 100; i++) {
+        const all = (await storage(ext, ["syncedTabs"])).syncedTabs;
+        got = wins().map(w => w.gBrowser.tabs.filter(t => urls.includes(all[value(w, t, "syncKey")]?.url) && t.userContextId === ctx).map(t => all[value(w, t, "syncKey")].url));
+        if (got.every(g => JSON.stringify(g) === wanted)) break;
+        await wait(100);
+      }
+      return got;""", urls, int(tabs["there"].split("-")[-1]), EXT_ID)
+    check("they are in the other space in order, in every window", len(moved) > 1 and all(g == urls for g in moved), str(moved))
+
+    # Closing: ⌫ with the selected tab among them; × and a middle click; another row's own ×.
+    r = sidebar_page(m, PICKING + """
+      const [{r1, r4, r5, space}] = args;
+      await select(row(r1));
+      add(row(r4)); add(row(r5));
+      const had = same(picks(), [r5, r1, r4]);
+      key("Backspace");
+      await until(() => !row(r1) && !row(r4) && !row(r5));
+      await until(() => doc.querySelector(".active"));
+      return {had, gone: !row(r1) && !row(r4) && !row(r5), stayed: activeSpace() === space, picks: picks().length};""", tabs)
+    check("⌫ closes all picked rows, and you stay in the space", r.get("had") and r.get("gone") and r.get("stayed") and r.get("picks") == 0, str(r))
+    r = sidebar_page(m, PICKING + """
+      const [{a, b, c, d, e, f}] = args, out = {};
+      await select(doc.querySelector("#essentials .tile"));
+      add(row(a)); add(row(b));
+      press(row(c).querySelector(".close"));
+      await until(() => !row(c));
+      out.ownClose = !row(c) && same(picks(), [a, b]);
+      press(row(a).querySelector(".close"));
+      await until(() => !row(a) && !row(b));
+      out.close = !row(a) && !row(b) && picks().length === 0;
+      add(row(d)); add(row(e));
+      row(e).dispatchEvent(new page.MouseEvent("auxclick", {bubbles: true, cancelable: true, button: 1}));
+      await until(() => !row(d) && !row(e));
+      out.middle = !row(d) && !row(e) && !!row(f) && picks().length === 0;
+      row(f).dispatchEvent(new page.MouseEvent("auxclick", {bubbles: true, cancelable: true, button: 1}));
+      await until(() => !row(f));
+      out.middleOne = !row(f);
+      return out;""", tabs)
+    check("× on a row that is not picked closes that row only", r.get("ownClose"), str(r))
+    check("× on a picked row closes them all", r.get("close"), str(r))
+    check("a middle click on a picked row closes them all", r.get("middle"), str(r))
+    check("a middle click with nothing picked closes that row", r.get("middleOne"), str(r))
+
+    # Saved tabs closed together come back as placeholders where they were, here and elsewhere.
+    r = sidebar_page(m, PICKING + """
+      const [{f1, f2, s1, s2, s3, open}] = args;
+      for (const tabId of [s1, s2, s3]) send({type: "moveTab", tabId, before: f2, folder: open});
+      await until(() => same(inFolder("Picks"), [f1, s1, s2, s3, f2]));
+      const keys = await keysOf(inFolder("Picks"));
+      await wait(300);
+      await select(row(s2));
+      add(row(s1)); add(row(s3));
+      const had = same(picks(), [s1, s2, s3]);
+      key("Backspace");
+      await until(() => ![s1, s2, s3].some(row) && inFolder("Picks").length === 5);
+      let got;
+      for (let i = 0; i < 100; i++) { got = await keysOf(inFolder("Picks")); if (same(got, keys)) break; await wait(100); }
+      await until(() => doc.querySelector(".active"));
+      return {had, keys, got, unloaded: inFolder("Picks").slice(1, 4).every(id => row(id).classList.contains("unloaded"))};""", tabs)
+    check("saved tabs closed together are unloaded where they were, in order", r.get("had") and r.get("keys") == r.get("got") and r.get("unloaded"), str(r))
+    got = order_everywhere(m, r.get("keys"))
+    check("a second window has the same order in the folder after closing them", len(got) > 1 and all(g == r.get("keys") for g in got), str(got))
+
+    # What is left behind by a row that goes at the wrong moment.
+    r = sidebar_page(m, PICKING + """
+      const [{h1, h2, h3, h4, h5}] = args, out = {};
+      await select(doc.querySelector("#essentials .tile"));
+      add(row(h2)); add(row(h3));
+      for (let i = 0; i < 80 && !doc.querySelector(`.cursor[data-tab="${h1}"]`); i++) key("ArrowDown");
+      out.cursorOn = !!doc.querySelector(`.cursor[data-tab="${h1}"]`);
+      send({type: "close", tabId: h1});
+      await until(() => !row(h1) && !doc.querySelector(".cursor"));
+      out.cursorGone = !doc.querySelector(".cursor");
+      const tiles0 = tileIds().length;
+      key("Backspace");
+      await until(() => !row(h2) && !row(h3));
+      out.backspace = !row(h2) && !row(h3) && tileIds().length === tiles0;
+      add(row(h4)); add(row(h5));
+      const carrying = () => doc.documentElement.classList.contains("carrying");
+      row(h4).dispatchEvent(new page.DragEvent("dragstart", {bubbles: true, cancelable: true, dataTransfer: new page.DataTransfer()}));
+      await until(carrying);
+      out.carrying = carrying();
+      send({type: "close", tabId: h4});
+      await until(() => !row(h4) && !carrying());
+      out.notFaded = !carrying() && same(picks(), [h5]);
+      key("Escape");
+      return out;""", tabs)
+    check("a cursor on a tab that has gone is gone too, and ⌫ closes the picked rows, not another", r.get("cursorOn") and r.get("cursorGone") and r.get("backspace"), str(r))
+    check("the row you drag closes meanwhile: the others do not stay faded", r.get("carrying") and r.get("notFaded"), str(r))
+
+    # The selected tab, and placeholders Firefox would select in turn: all closed, in every window.
+    r = sidebar_page(m, PICKING + """
+      const [{y3, p1, p2}] = args;
+      const placeholders = row(p1).classList.contains("unloaded") && row(p2).classList.contains("unloaded");
+      await select(row(y3));
+      add(row(p1)); add(row(p2));
+      const keys = await keysOf([y3, p1, p2]);
+      key("Backspace");
+      await until(() => !row(y3) && !row(p1) && !row(p2));
+      return {placeholders, keys, gone: !row(y3) && !row(p1) && !row(p2)};""", tabs)
+    left = m.js(H + """const [keys] = args; let left;
+      for (let i = 0; i < 100; i++) { left = wins().flatMap(w => w.gBrowser.tabs.filter(t => keys.includes(value(w, t, "syncKey")))).length; if (!left) break; await wait(100); }
+      return left;""", r.get("keys"))
+    check("closing the selected tab and placeholders together closes them all, in every window", r.get("placeholders") and r.get("gone") and left == 0, str([r, left]))
+
+    # Essentials: two rows to the essentials, the two tiles among them, and back, each in order.
+    r = sidebar_page(m, PICKING + """
+      const [{y1, y2}] = args, out = {};
+      await select(doc.querySelector("#essentials .tile"));
+      const tiles0 = tileIds();
+      add(row(y1)); add(row(y2));
+      out.rowsOnly = same(picks(), [y1, y2]);
+      out.keys = await keysOf([y1, y2]);
+      // Carried, and at once on to the essentials: the selection stays after a drop for this.
+      drag(row(y1), doc.getElementById("tabs"));
+      drag(row(y1), doc.getElementById("essentials"));
+      await until(() => tileIds().length === tiles0.length + 2);
+      out.pinned = same(tileIds(), [...tiles0, y1, y2]);
+      out.pinnedLeft = picks().length === 0;
+      await select(plainTabs()[0]);
+      add(tile(y1)); add(tile(y2));
+      out.tilesOnly = same(picks(), [y1, y2]);
+      drag(tile(y2), tile(tiles0[0]));
+      await until(() => same(tileIds(), [y1, y2, ...tiles0]));
+      out.tilesMoved = same(tileIds(), [y1, y2, ...tiles0]);
+      return out;""", tabs)
+    check("picked rows dragged to the essentials are essentials, in order", r.get("rowsOnly") and r.get("pinned") and r.get("pinnedLeft"), str(r))
+    left = m.js(H + """const [keys, ext] = args; let left;
+      for (let i = 0; i < 100; i++) {
+        const all = (await storage(ext, ["syncedTabs"])).syncedTabs;
+        left = {records: keys.filter(k => all[k]).length, tabs: wins().flatMap(w => w.gBrowser.tabs.filter(t => keys.includes(value(w, t, "syncKey")))).length};
+        if (!left.records && !left.tabs) break;
+        await wait(100);
+      }
+      return left;""", r.get("keys"), EXT_ID)
+    check("carried and at once dragged to the essentials, they are not ordinary tabs as well", left == {"records": 0, "tabs": 0}, str(left))
+    check("picked essentials dragged among the essentials stay in order", r.get("tilesOnly") and r.get("tilesMoved"), str(r))
+    pins = m.js(H + """let got;
+      for (let i = 0; i < 100; i++) { got = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => ek(w, t))); if (got.every(g => JSON.stringify(g) === JSON.stringify(got[0]))) break; await wait(100); }
+      return got;""")
+    check("a second window has the same order of essentials", len(pins) > 1 and all(g == pins[0] for g in pins), str(pins))
+    # Closed together, with the selected one: back in their places, unloaded, once each.
+    r = sidebar_page(m, PICKING + """
+      const [{y1, y2}] = args, before = tileIds(), two = before.filter(id => id !== y1 && id !== y2).slice(0, 2);
+      await select(tile(two[0]));
+      add(tile(two[1]));
+      const had = same(picks(), two);
+      key("Backspace");
+      await until(() => tileIds().length === before.length && !two.some(tile));
+      await until(() => tileIds().every(id => tile(id)) && doc.querySelector(".active"));
+      const at = tileIds();
+      return {had, n: at.length === before.length, kept: at.includes(y1) && at.includes(y2), unloaded: at.filter(id => !before.includes(id)).every(id => tile(id).classList.contains("unloaded"))};""", tabs)
+    back = m.js(H + """const [want] = args; let got;
+      for (let i = 0; i < 100; i++) { got = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned).map(t => ek(w, t))); if (got.every(g => JSON.stringify(g) === JSON.stringify(want))) break; await wait(100); }
+      return got;""", pins[0])
+    check("picked essentials closed together come back in their places, unloaded, once each", r.get("had") and r.get("n") and r.get("kept") and r.get("unloaded") and all(g == pins[0] for g in back), str([r, back]))
+    r = sidebar_page(m, PICKING + """
+      const [{y1, y2}] = args, tiles0 = tileIds().length;
+      await select(plainTabs()[0]);
+      add(tile(y1)); add(tile(y2));
+      drag(tile(y1), doc.getElementById("tabs"));
+      await until(() => tileIds().length === tiles0 - 2 && row(y1) && row(y2));
+      const list = ids();
+      let keys;
+      for (let i = 0; i < 100; i++) { keys = await keysOf([y1, y2]); if (keys.every(Boolean)) break; await wait(100); }
+      return {back: !!row(y1) && !!row(y2) && list.indexOf(y2) === list.indexOf(y1) + 1, list, y1, y2, keys};""", tabs)
+    check("picked essentials dragged to the list are ordinary tabs, in order", r.get("back"), str(r))
+    got = order_everywhere(m, r.get("keys"))
+    check("a second window has them in the same order", len(got) > 1 and all(g == r.get("keys") for g in got), str(got))
+
+    # What this group added goes again.
+    sidebar_page(m, PICKING + """
+      const [{f1, f2, g1, y1, y2, open, closed}] = args;
+      send({type: "deleteFolder", key: open});
+      send({type: "deleteFolder", key: closed});
+      await until(() => !head("Picks") && !head("Picks closed"));
+      for (const tabId of [f1, f2, g1, y1, y2]) send({type: "close", tabId});
+      await until(() => ![f1, f2, g1, y1, y2].some(row));
+      return 1;""", tabs)
+    m.js(H + """const all = (await storage(args[0], ["syncedTabs"])).syncedTabs;
+      await removeWhere((w, t) => (all[value(w, t, "syncKey")]?.url || "").includes("smoke-pick"));
+      return 1;""", EXT_ID)
+
+
 def alone_settings(m):
     # The settings page draws, and rules work: a tab's first page, in the rule's space.
     r = ext_page(m, "/settings/settings.html", """
@@ -3119,6 +3555,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_quiet_undo,
                 alone_tab_menu,
                 alone_tab_names,
+                alone_selection,
                 alone_idle, alone_update, alone_end, alone_restart)
 
 

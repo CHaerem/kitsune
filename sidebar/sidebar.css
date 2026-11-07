@@ -170,3 +170,11 @@ body {
 }
 .clear-reach:hover .clear, .clear:focus-visible { opacity: 1; }
 .clear:hover { color: var(--text); }
+/* Several tabs picked (selection.js): a soft tint of the space's colour, apart from the
+ * selected tab's light and the keys' outline. Rows that are together read as one block. */
+.row.picked, .tile.picked { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.row.picked:hover, .tile.picked:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.row.active.picked, .tile.active.picked { background: color-mix(in srgb, var(--accent) 24%, var(--selected)); }
+.row.picked:has(+ .row.picked) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.row.picked + .row.picked { border-top-left-radius: 0; border-top-right-radius: 0; }
+.carrying .picked { opacity: .5; }
