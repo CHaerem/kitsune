@@ -118,7 +118,7 @@ async function closeHiddenTabs() {
     const key = syncKeyByTab.get(t.id);
     if (key) keepKeys.add(key);
   }
-  const closing = [], ghosts = new Set(), copies = new Set();
+  const closing = [], ghosts = new Set(), copies = new Set(), pages = new Set();
   for (const t of tabs) {
     if (!known.has(t.id)) continue;
     const now = await browser.tabs.get(t.id).catch(() => null);
@@ -128,6 +128,7 @@ async function closeHiddenTabs() {
     if (now.active) continue; // a selected tab cannot be left: its window has nothing to show yet
     if (key) { syncBusy.add(t.id); forget(t.id); ghosts.add(key); }
     if (t.pinned) { busy.add(t.id); const essential = await keyOf(t).catch(() => null); if (essential) copies.add(essential); }
+    if (isWeb(now.url)) pages.add(now.url);
     closing.push(t.id);
   }
   // Told in the record, for when the space shows again in a way that is not the settings page
@@ -136,6 +137,9 @@ async function closeHiddenTabs() {
   for (const key of ghosts) if (all[key]) all[key].wasHidden = true;
   if (ghosts.size) saveSynced(all);
   if (closing.length) await browser.tabs.remove(closing).catch(noteError);
+  // Hiding is not closing, and the record brings these back: ⌘⇧T stays with what you closed
+  // yourself, and does not open a page of a space that is hidden here.
+  for (const url of pages) toForget.set(url, Date.now() + FORGET_MS);
   if (ghosts.size) await forgetClosedPlaceholders("ghost", [...ghosts]);
   if (copies.size) await forgetClosedPlaceholders("essential", [...copies]);
   return stayed;

@@ -1573,6 +1573,7 @@ def alone_sync_hide(m):
       line.querySelector("input").click(); await wait(300);"""
     tab_order = """const n = args[0]; return main().gBrowser.tabs.filter(t => !t.pinned && t.userContextId === n).map(t => key(main(), t));"""
     order_before = m.js(H + tab_order, space)
+    open_pages = m.js(H + """const n = args[0]; return wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n && t.linkedPanel && url(t).startsWith("http")).map(url));""", space)
     # One page in it holds unsaved input: that one must stay, and be where you can reach it.
     unsaved = m.js(H + """const w = main(), t = w.gBrowser.addTrustedTab(args[0] + "/unsaved", {userContextId: args[1], inBackground: true});
       await wait(4000); return key(w, t);""", m.pages, space)
@@ -1584,6 +1585,8 @@ def alone_sync_hide(m):
       return {ok: !others.length && !selected.includes(n), others, selected, kept};""", space, unsaved)
     check("a hidden space has no other tab in any window, and every window has left it", r["ok"], str(r))
     check("a page with unsaved input stays open, and is not hidden away", r["kept"] == [False], str(r))
+    r = ext_page(m, settings, "await wait(1000); return (await page.browser.sessions.getRecentlyClosed({})).map(c => c.tab?.url);")
+    check("hiding is not closing: its pages are not in Recently Closed", open_pages and not set(open_pages) & set(r), f"{open_pages}, {r}")
     # Closed, it goes like any tab, and the rest stays as it was.
     r = until(m, """const n = args[1], k = args[2];
       for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (key(w, t) === k) w.gBrowser.removeTab(t, {skipPermitUnload: true});

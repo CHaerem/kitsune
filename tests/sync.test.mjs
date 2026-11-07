@@ -1535,3 +1535,17 @@ test("hiding and showing at random, among tabs, windows and restarts: what must 
     x.kill();
   }
 });
+
+test("hiding is not closing: ⌘⇧T stays with what you closed yourself", async () => {
+  const { ff, w, x } = await withTabs();
+  await hide(x, c(2));
+  await wait(100);
+  ff.recentlyClosed = [
+    { tab: { url: "https://you-closed-this.example/", sessionId: "yours", windowId: w.id } },
+    { tab: { url: "https://plain.example/", sessionId: "hidden", windowId: w.id } }, // a loaded page reaches the list a moment later
+  ];
+  x.b.sessions.onChanged.fire();
+  await wait(100);
+  assert.deepEqual(ff.recentlyClosed.map(item => item.tab.sessionId), ["yours"]);
+  x.kill();
+});

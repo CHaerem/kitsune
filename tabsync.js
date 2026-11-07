@@ -564,7 +564,7 @@ async function pull(ghostId) {
       // The old window gets a ghost where the live tab was.
       const opener = fromOpener !== undefined && (await browser.tabs.get(fromOpener).catch(() => null));
       // (A window whose only tab this was has closed with it. With spaces hidden, that can be a window in use.)
-      await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex).catch(() => {});
+      if (await browser.windows.get(fromWindow).catch(() => null)) await createRep(fromWindow, key, entry, opener && opener.windowId === fromWindow ? opener.id : undefined, fromIndex);
     }
   } finally {
     setTimeout(() => { syncBusy.delete(live.id); syncBusy.delete(ghostId); pulling--; }, 600);
