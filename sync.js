@@ -52,10 +52,16 @@ const SYNC_SHARED_PART = {
 };
 const syncSharedChanged = (key, change) => !SYNC_SHARED_PART[key] || JSON.stringify(SYNC_SHARED_PART[key](change.oldValue)) !== JSON.stringify(SYNC_SHARED_PART[key](change.newValue));
 
-browser.storage.onChanged.addListener((changes, area) => {
+function syncOnStorage(changes, area) {
   if (area === "local" && SYNC_WATCHED.some(k => k in changes && syncSharedChanged(k, changes[k]))) syncSoon();
   if (area === "sync" && Object.entries(changes).some(([k, c]) => syncWrote.get(k) !== JSON.stringify(c.newValue))) syncSoon();
-});
+}
+// Firefox hands a listener every write to storage, all of the tab record, old and new: only
+// while this is on. The daily browser, which gets every commit, must not pay for it.
+function syncListen() {
+  if (!syncIsOn) browser.storage.onChanged.removeListener(syncOnStorage);
+  else if (!browser.storage.onChanged.hasListener(syncOnStorage)) browser.storage.onChanged.addListener(syncOnStorage);
+}
 // A tab moved within a folder changes no record: its order is the window's (syncSnapshot).
 browser.tabs.onMoved.addListener(syncSoon);
 // A window after none, or a space shown again: filled by the record, and a round puts its order right.
@@ -535,6 +541,7 @@ async function syncTurn(on) {
   clearTimeout(syncTimer);
   syncTimer = null;
   syncIsOn = !!on;
+  syncListen();
   if (!syncIsOn) { syncProblem = null; setNotice("sync", null); } // what is off has no problem to show
   await browser.storage.local.set({ syncOn: syncIsOn });
   const st = await syncStateNow();
@@ -555,6 +562,7 @@ async function startSync() {
     return;
   }
   syncIsOn = !!stored.syncOn;
+  syncListen();
   syncSoon(); // what changed while Tidier was not running, and what came meanwhile
 }
 

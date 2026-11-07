@@ -54,6 +54,14 @@ export class FakeFirefox {
     this.tabs.delete(id); this.values.delete(id);
     this.ext?.b.tabs.onRemoved.fire(id, { windowId: t.windowId, isWindowClosing: closing });
     if (t.active && !closing && w.order.length) { const n = this.tabs.get(w.order[0]); n.active = true; this.ext?.b.tabs.onActivated.fire({ tabId: n.id, windowId: n.windowId, previousTabId: id }); }
+    if (!closing) this.closeIfEmpty(w);
+  }
+  // A window whose last tab is gone closes (only where a test asks: most model no such thing).
+  closeIfEmpty(w) {
+    if (!this.closesEmptyWindows || w.order.length || !this.wins.has(w.id)) return;
+    this.wins.delete(w.id);
+    if (this.focused === w.id) this.focused = [...this.wins.keys()][0] ?? -1;
+    this.ext?.b.windows.onRemoved.fire(w.id);
   }
   // Selecting a tab the way the tab strip does: events only, no extension call.
   select(id) {
@@ -92,7 +100,7 @@ export class FakeFirefox {
       create: async p => {
         if (!ff.wins.has(p.windowId)) throw new Error(`Invalid window ID: ${p.windowId}`);
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
-        const t = ff.addTab(p.windowId, { url: p.url, pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
+        const t = ff.addTab(p.windowId, { url: p.url ?? "about:newtab", pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.url });
         ff.log.push(["create", t.id, p.windowId, p.url]);
         b.tabs.onCreated.fire(ff.snap(t));
         if (p.active === undefined) ff.select(t.id); // Firefox selects a new tab unless told not to
@@ -114,8 +122,11 @@ export class FakeFirefox {
         from.order.splice(fromIndex, 1);
         if (to !== t.windowId) {
           const old = t.windowId; b.tabs.onDetached.fire(id, { oldWindowId: old, oldPosition: fromIndex });
+          // Firefox selects another tab in the window it leaves, and it is not selected where it arrives.
+          if (t.active) { t.active = false; const n = ff.tabs.get(from.order[0]); if (n) { n.active = true; b.tabs.onActivated.fire({ tabId: n.id, windowId: old, previousTabId: id }); } }
           t.windowId = to; ff.wins.get(to).order.splice(index, 0, id);
           b.tabs.onAttached.fire(id, { newWindowId: to, newPosition: index });
+          ff.closeIfEmpty(from);
         } else {
           from.order.splice(index, 0, id);
           b.tabs.onMoved.fire(id, { windowId: to, fromIndex, toIndex: index });

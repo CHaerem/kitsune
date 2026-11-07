@@ -57,6 +57,8 @@ $("sync-on").onchange = async e => {
 // What changes while the page is open, by a round in the background or on another machine.
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "sync" || "syncState" in changes || "hiddenSpaces" in changes) refreshSync();
+  // A page left open must not save an old list of rules over one that came from another machine.
+  if ("rules" in changes) refresh();
 });
-browser.contextualIdentities.onUpdated.addListener(refreshSync);
+browser.contextualIdentities.onUpdated.addListener(() => { refreshSync(); refresh(); });
 refreshSync();
