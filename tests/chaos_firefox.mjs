@@ -750,8 +750,4 @@ export class ChaosFirefox extends FakeFirefox {
     const off = { fire() {} };
     return { tabs: new Proxy({}, { get: () => off }), windows: new Proxy({}, { get: () => off }), sessions: new Proxy({}, { get: () => off }) };
   }
-  // The real pieces of state a check may want, in one place.
-  placeholderStillLoaded() {
-    return [...this.tabs.values()].filter(t => isPlaceholder(t.url) && !t.discarded && !t.active);
-  }
 }

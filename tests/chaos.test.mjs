@@ -86,6 +86,7 @@ class World {
     if (!key) {
       // Just being registered, perhaps: then it is only known by its address.
       this.closedAddresses.add(t.url);
+      if (this.ff.pages.get(t)?.url) this.closedAddresses.add(this.ff.pages.get(t).url); // on its way there
       return;
     }
     const e = all[key];
@@ -486,6 +487,9 @@ async function check(W, phase, { strong }) {
   // been written; such a tab is then known again by its address.
   // (Pinned, it is an essential now, at that address.)
   const addresses = new Set([...Object.values(all).flatMap(e => [e.url, e.saved?.url].filter(Boolean)), ...W.essentials.values()]);
+  // (A tab opened again in its space is the same page under a new key: what you did to the
+  // new one goes for the old one.)
+  for (const [key, k] of W.known) if (W.excused.has(key)) for (const u of k.urls) W.closedAddresses.add(u);
   for (const [key, k] of W.known) {
     if (W.excused.has(key) || all[key] || (k.group && !W.alone)) continue;
     if ([...k.urls].some(u => addresses.has(u) || W.closedAddresses.has(u))) continue;
@@ -620,8 +624,7 @@ export async function shrink(seq, kinds, { maxRuns = 400, maxMs = 60000 } = {}) 
 }
 
 export function describe(seq, violations) {
-  const round = a => ({ ...a, a: +a.a.toFixed(4), b: +a.b.toFixed(4), c: +a.c.toFixed(4) });
-  const line = JSON.stringify({ ...seq, actions: seq.actions.map(round) });
+  const line = JSON.stringify(seq);
   return [
     `Seed ${seq.seed}, ${seq.alone ? "Tidier alone" : "the Sidebery paths"}, ${seq.actions.length} actions:`,
     ...seq.actions.map(a => `  ${a.op} (then ${a.d} ms)`),
