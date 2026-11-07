@@ -1974,3 +1974,14 @@ test("moving over: one folder page closing in that moment does not leave the oth
   assert.deepEqual(x.errors, []);
   x.kill();
 });
+
+test("the tabs of a folder no window has any more are no longer saved", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { F: entry(FOLDER, { group: true }), s: entry("https://s.example/", { parentKey: "F", saved: { url: "https://s.example/", title: "S" } }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const x = ff.boot();
+  await ff.clock.settled(x.js(`dropIfUnused("F")`));
+  assert.equal((await ff.clock.settled(x.js("getSynced()"))).s.saved, undefined);
+  x.kill();
+});

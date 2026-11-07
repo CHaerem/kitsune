@@ -557,6 +557,7 @@ async function dropIfUnused(key) {
   if (repsOf(key, await browser.tabs.query({})).length) return;
   const all = await getSynced();
   delete all[key];
+  noteSaved(all); // the tabs of a folder that has gone are no longer saved
   saveSynced(all);
 }
 
