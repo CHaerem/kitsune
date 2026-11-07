@@ -243,18 +243,23 @@ async function forgetDismissed(entry) {
 // What deleting a folder changes, as a way to change it back (deleteFolder, ownfolders.js).
 // A live folder's tabs go with it, and come back with it. Each other tab has only left
 // the folder and is where it was, so it needs back what leaving changed, and nothing else.
+// (A saved tab's name goes when it leaves its folder, so it is part of that: noteSaved.)
 // A live folder comes back by itself at its next refresh; once it has, it is not added twice.
 async function rememberFolder(all, key, windowId) {
   const folder = { ...all[key] };
   const inside = Object.keys(all).filter(k => all[k].parentKey === key);
-  const was = inside.map(k => { const { parentKey, added, saved, liveFolder, liveUrl } = all[k]; return [k, { parentKey, added, saved, liveFolder, liveUrl }]; });
+  const was = inside.map(k => { const { parentKey, added, saved, liveFolder, liveUrl, name } = all[k]; return [k, { parentKey, added, saved, liveFolder, liveUrl, name }]; });
   const items = await Promise.all(inside.filter(k => all[k].liveFolder).map(k => rememberTab(k, all[k])));
   const tabs = await tabsNow(windowId);
   return async () => {
     const now = await getSynced();
     if (folder.live && Object.values(now).some(e => e.live === folder.live)) return;
     now[key] = folder;
-    for (const [k, fields] of was) if (now[k]) Object.assign(now[k], fields);
+    for (const [k, fields] of was) {
+      if (!now[k]) continue;
+      Object.assign(now[k], fields);
+      if (fields.name) refreshGhostsSoon(k); // its placeholders show it again
+    }
     noteSaved(now, inside);
     saveSynced(now);
     if (items.length) await bringBack(windowId, items, tabs);

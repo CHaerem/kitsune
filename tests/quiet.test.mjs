@@ -498,6 +498,22 @@ test("undo of a deleted live folder brings its tabs back too", async () => {
   x.kill();
 });
 
+test("Undo of a deleted folder gives its saved tabs their names back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { F: folder("Work", 1), s: entry(addr("s"), { parentKey: "F", saved: { url: addr("s") }, name: "Mine" }) };
+  const { w } = twoWindows(ff, ["a", "s"], { active: "a" });
+  const x = await alone(ff);
+  const port = sidebar(x, w.id);
+  port.send({ type: "deleteFolder", key: "F" });
+  await wait(1000);
+  assert.equal(ff.synced.s.name, undefined, "an ordinary tab has no name");
+  await undoOf(x, w.id);
+  await wait(500);
+  assert.equal(ff.synced.s.parentKey, "F");
+  assert.equal(ff.synced.s.name, "Mine");
+  x.kill();
+});
+
 test("a folder gone in the meantime leaves its tab an ordinary tab", async () => {
   const ff = new FakeFirefox();
   ff.store.syncedTabs = { F: folder("Work", 1), s: entry(addr("s"), { parentKey: "F", saved: { url: addr("s") } }) };
