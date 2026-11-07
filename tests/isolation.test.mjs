@@ -389,11 +389,11 @@ test("a proxy has to be complete, and a user agent is only changed for its space
   assert.equal(x.b.webRequest.onBeforeSendHeaders.ls.length, 0);
   await x.js("setSpaceNetwork")(A, { proxy: { type: "socks", host: "p.example", port: 1080 }, userAgent: "Agent X" });
   assert.equal(x.b.proxy.onRequest.ls.length, 1);
-  assert.equal(x.b.webRequest.onBeforeSendHeaders.ls.length, 1);
+  assert.equal(x.b.webRequest.onBeforeSendHeaders.ls.length, 2, "a user agent, and a look at how a page goes (tests/isolation-ways.test.mjs)");
   const proxy = x.b.proxy.onRequest.ls[0].f;
   assert.deepEqual({ ...proxy({ cookieStoreId: A }) }, { type: "socks", host: "p.example", port: 1080, proxyDNS: true }, "names are looked up by the proxy too");
   assert.equal(proxy({ cookieStoreId: B }), undefined);
-  const agent = x.b.webRequest.onBeforeSendHeaders.ls[0].f;
+  const agent = x.js("agentFor");
   const headers = () => [{ name: "User-Agent", value: "Firefox" }, { name: "Cookie", value: "x" }];
   assert.equal(agent({ cookieStoreId: A, requestHeaders: headers() }).requestHeaders[0].value, "Agent X");
   assert.equal(agent({ cookieStoreId: B, requestHeaders: headers() }), undefined, "other spaces are untouched");

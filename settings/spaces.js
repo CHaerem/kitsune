@@ -96,7 +96,8 @@ function networkFields(s) {
   for (const input of [type, host, port, agent]) input.oninput = () => { shown(); save.hidden = false; };
   save.onclick = async () => {
     const usesProxy = !!type.value, usesAgent = !!agent.value.trim();
-    const wanted = [...(usesProxy ? ["proxy"] : []), ...(usesAgent ? ["webRequest", "webRequestBlocking"] : [])];
+    // (A proxy needs both: isolation.js, notPastProxy.)
+    const wanted = [...(usesProxy ? ["proxy"] : []), ...(usesProxy || usesAgent ? ["webRequest", "webRequestBlocking"] : [])];
     const asked = { permissions: wanted, origins: ["<all_urls>"] };
     if (wanted.length && !await mayAsk(asked) && !await browser.permissions.contains(asked)) {
       spaceFacts.set(s.id, "Firefox did not give Tidier the permission for this, so nothing changed.");

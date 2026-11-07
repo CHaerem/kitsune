@@ -76,6 +76,11 @@ PAGES = {
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
     "/see-cookie": "<title>?</title><script>document.title = 'cookie=' + document.cookie;</script>what a page can read",
     "/go": "<title>Go</title><script>location.replace(new URLSearchParams(location.search).get('to'));</script>a page sending you on, as a link does",
+    # Back to this asks the server again: a page with an unload handler is not kept in the back-forward cache.
+    "/no-bfcache": "<title>Asked again</title><script>addEventListener('unload', () => {});</script>a page Firefox asks for again on going back",
+    # Two pages sending each other on with no page's name on the request: a sandboxed frame's top.location has none.
+    "/pp-one": "<title>One</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-two'</script>\"></iframe>",
+    "/pp-two": "<title>Two</title><iframe sandbox='allow-top-navigation allow-scripts' srcdoc=\"<script>top.location = '/pp-one'</script>\"></iframe>",
 }
 
 
@@ -86,14 +91,15 @@ def serve_pages():
     #   /r/anything       a plain page
     #   /set-cookie?v=x   sets a login cookie
     #   /redirect?to=...  a redirect, the way a sign-in passes through an address
+    #   /bounce/one, two  redirects to each other, until Firefox gives up
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             url = urllib.parse.urlsplit(self.path)
             query = urllib.parse.parse_qs(url.query)
             self.server.requests.append({"path": self.path, "cookie": self.headers.get("Cookie", ""), "agent": self.headers.get("User-Agent", ""), "proxied": bool(url.scheme)})
-            if url.path == "/redirect":
+            if url.path == "/redirect" or url.path.startswith("/bounce/"):
                 self.send_response(302)
-                self.send_header("Location", query["to"][0])
+                self.send_header("Location", query["to"][0] if url.path == "/redirect" else "/bounce/one" if url.path.endswith("two") else "/bounce/two")
                 self.end_headers()
                 return
             body = PAGES.get(url.path)

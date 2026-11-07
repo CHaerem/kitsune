@@ -151,6 +151,33 @@ browser.tabs.onUpdated.addListener((tabId, change) => {
   if (isWeb(change.url) && slipped.delete(tabId)) serial(moveStragglers);
 }, { properties: ["url"] });
 
+// A page whose request this listener never saw. Firefox hides those to its own restricted
+// addresses from every extension (addons.mozilla.org, accounts.firefox.com and the like),
+// and for a moment during an update nothing is listening. All that can be seen is the
+// address showing up in a tab, too late to stop it, but a page left outside any space
+// would stay there for good, and its next login with it. So it is moved as soon as it
+// shows, as without the permission. (spaces.js, from tabs.onUpdated.)
+const notLookedAt = (tabId, tab, wasFirstPage) => tidierAlone && !tab.discarded && !tab.incognito &&
+  (tab.cookieStoreId === NO_CONTAINER || (wasFirstPage && !requestOfTab.has(tabId)));
+async function moveShown(tabId, url, wasFirstPage) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (tab && !reopening.has(tabId)) await moveOutOfPlace(tab, url, wasFirstPage);
+}
+async function moveOutOfPlace(tab, url, wasFirstPage = false) {
+  const win = await browser.windows.get(tab.windowId).catch(() => null);
+  const popup = !!win && win.type !== "normal";
+  const home = tab.cookieStoreId === NO_CONTAINER ? await homeOf(tab) : null;
+  const rules = home?.inFolder ? [] : (await rulesList.get()).filter(ruleCounts);
+  const space = whereItBelongs({ url, tab, firstPage: wasFirstPage, popup, rules, activeSpace: home?.space });
+  if (!space) return;
+  reopening.add(tab.id); // a request it makes meanwhile is stopped too
+  try {
+    await openElsewhere(tab, url, space, popup, wasFirstPage);
+  } finally {
+    reopening.delete(tab.id);
+  }
+}
+
 // This runs for every top-level navigation, and the request waits for it, so a tab in
 // the right container passes after nothing but a look at the rules. A tab is only
 // looked up when it may have to move. Never through the queue, which can be busy for
@@ -164,7 +191,8 @@ async function lookAtRequest(details, look) {
   if (reopening.has(tabId)) return { cancel: true };
   const rules = await rulesList.get();
   if (here !== NO_CONTAINER) {
-    if (!rules.some(r => ruleCounts(r) && r.space !== here && ruleMatches(r.url, url))) return {};
+    const rule = rules.find(r => ruleCounts(r) && ruleMatches(r.url, url)); // the first that matches decides
+    if (!rule || rule.space === here) return {};
     if (redirect) { settle(tabId, url); return {}; }
     // (A form sent to a new tab cannot be sent again from another tab, so no rule takes it.)
     if ((details.method ?? "GET") !== "GET" || isSettled(tabId, url)) return {};
@@ -189,6 +217,7 @@ async function lookAtRequest(details, look) {
   // dropped this request, and opening it would only give you the page twice.
   if (look.given || requestOfTab.get(tabId) !== requestId) return {};
   if (here !== NO_CONTAINER && !firstPage && typedTooFast()) {
+    settle(tabId, url); // for good: such a page goes on asking, and must not get a tab out once the time is up
     tellOnce(tab.windowId, "A page kept sending this tab to other spaces, so it stays here");
     return {};
   }
@@ -200,11 +229,13 @@ async function lookAtRequest(details, look) {
   } finally {
     reopening.delete(tabId);
   }
-  // It could not be opened there. A tab in a space stays and loads there; a page that
-  // has no container is never loaded, since that is where a login must not land. The
+  // It could not be opened there, and is still not sent from here: a page that has no
+  // container is where a login must not land, and this space's login must not go to an
+  // address that belongs to another. (A rule whose space is gone counts for nothing, so
+  // this is a Firefox refusing for a moment, not an address that can never load.) The
   // address goes with what is said, since it is then nowhere else.
-  tellOnce(tab.windowId, here === NO_CONTAINER ? `This could not be opened in a space, so it was not loaded: ${url}` : "That page could not be opened in its space, so it stayed here");
-  return here === NO_CONTAINER ? { cancel: true } : {};
+  tellOnce(tab.windowId, here === NO_CONTAINER ? `This could not be opened in a space, so it was not loaded: ${url}` : `This could not be opened in its space, so it was not loaded: ${url}`);
+  return { cancel: true };
 }
 
 // The space you are in. Also while Firefox is still starting and Tidier has not read
@@ -232,9 +263,10 @@ async function homeOf(tab) {
 // only once the new one is there. A tab in a space showing a page or standing for one
 // (a saved tab, one in a folder, a placeholder, any page with its history) stays as it
 // was: what you asked for opens in its space, and what you had isn't lost for it. A tab
-// outside any container can't stay, so what it is goes with it (recordIntoSpace). Returns
-// whether it worked.
-async function openElsewhere(tab, url, space, popup) {
+// outside any container can't stay, so what it is goes with it (recordIntoSpace). A first
+// page that showed before it could be stopped (moveOutOfPlace) leaves too: it holds nothing
+// else. Returns whether it worked.
+async function openElsewhere(tab, url, space, popup, leaves = false) {
   if (tab.pinned && await essentialIntoSpace(tab, space)) return true;
   const opening = openIn(tab, url, space, popup);
   let timer;
@@ -243,15 +275,11 @@ async function openElsewhere(tab, url, space, popup) {
     new Promise(resolve => { timer = setTimeout(() => resolve(null), REOPEN_LIMIT_MS); }),
   ]).catch(() => null);
   clearTimeout(timer);
-  const stays = tab.cookieStoreId !== NO_CONTAINER && (syncKeyByTab.has(tab.id) || isWeb(tab.url) || isGhostUrl(tab.url));
+  const stays = !leaves && tab.cookieStoreId !== NO_CONTAINER && (syncKeyByTab.has(tab.id) || isWeb(tab.url) || isGhostUrl(tab.url));
   if (!created) {
-    // Too late to count, but it may still come. Then the page is either loading in the
-    // old tab or nowhere: never two of it, and never nothing.
-    opening.then(late => {
-      if (!late?.id) return;
-      if (tab.cookieStoreId === NO_CONTAINER) return closeOldTab(tab, late, space);
-      return browser.tabs.remove(late.id);
-    }).catch(() => {});
+    // Too late to count, but it may still come. The request has been stopped, so then
+    // this is the page: it is kept, and the old tab goes if it would have.
+    opening.then(late => { if (late?.id && !stays) return closeOldTab(tab, late, space); }).catch(() => {});
     return false;
   }
   newTabs.delete(tab.id);
@@ -276,6 +304,9 @@ async function closeOldTab(tab, created, space) {
 // gets its placeholder in the new container, in the same place and with the same
 // selection, before the old one goes: closing a window's last tab would close the window.
 async function recordIntoSpace(key, created, space) {
+  // Its copies in two windows can both load at once, and each asks here. The first one
+  // to get here closes the other's new tab along with the rest, and that is the end of it.
+  if (created.id && !await browser.tabs.get(created.id).catch(() => null)) return;
   const all = await getSynced();
   if (all[key]) {
     all[key].cookieStoreId = space;
@@ -283,7 +314,9 @@ async function recordIntoSpace(key, created, space) {
   }
   const old = repsOf(key, await browser.tabs.query({})).filter(t => t.id !== created.id);
   old.forEach(t => { syncBusy.add(t.id); forget(t.id); });
-  for (const t of all[key] ? old.filter(o => o.windowId !== created.windowId) : []) {
+  const perWindow = new Map();
+  for (const t of old) if (t.windowId !== created.windowId && (t.active || !perWindow.has(t.windowId))) perWindow.set(t.windowId, t);
+  for (const t of all[key] ? perWindow.values() : []) {
     const rep = await createRep(t.windowId, key, all[key], undefined, t.index).catch(noteError);
     if (rep && t.active) await browser.tabs.update(rep.id, { active: true }).catch(() => {});
   }
@@ -297,7 +330,7 @@ async function openIn(tab, url, space, popup) {
   const wins = await normalWindows();
   const win = wins.find(w => w.id === focusedWindowId) ?? wins[0];
   if (win) return browser.tabs.create({ windowId: win.id, cookieStoreId: space, url, active: true });
-  return browser.windows.create({ cookieStoreId: space, url });
+  return browser.windows.create({ cookieStoreId: space, url }).then(made => made.tabs?.[0] ?? made);
 }
 
 // An essential with no container: from before Tidier alone, say. It cannot stay what it
@@ -362,17 +395,13 @@ async function guardAfterReload() {
 // A web page already loaded outside any space when Tidier starts: it got there before
 // anything could stop it, with no login, since those are all in spaces, and it must not
 // stay there, where its next login would land. Only what is loaded: an unloaded tab is
-// stopped when it loads.
+// stopped when it loads. A pinned one too: Firefox loads those at once when it restores
+// them, so it is the likeliest to have got out, and it never navigates by itself.
 async function moveStragglers() {
   if (!tidierAlone) return;
-  const rules = await rulesList.get();
   for (const tab of await browser.tabs.query({ cookieStoreId: NO_CONTAINER })) {
-    if (tab.pinned || tab.incognito || tab.discarded || !isWeb(tab.url)) continue;
-    const win = await browser.windows.get(tab.windowId).catch(() => null);
-    const popup = !!win && win.type !== "normal";
-    const home = await homeOf(tab);
-    const space = whereItBelongs({ url: tab.url, tab, firstPage: false, popup, rules: home.inFolder ? [] : rules.filter(ruleCounts), activeSpace: home.space });
-    if (space) await openElsewhere(tab, tab.url, space, popup);
+    if (tab.incognito || tab.discarded || !isWeb(tab.url) || reopening.has(tab.id)) continue;
+    await moveOutOfPlace(tab, tab.url);
   }
 }
 
@@ -398,6 +427,31 @@ function proxyFor(details) {
   return proxy ? { ...proxy, ...(proxy.type.startsWith("socks") ? { proxyDNS: true } : {}) } : undefined;
 }
 
+// Firefox decides on a proxy as it opens a request, and at a start it opens the tabs it
+// restores before any extension has run. The listeners are there in time to hold such a
+// request, but too late for that decision: it would go out directly, with your own
+// address, from the very space that has a proxy so that it doesn't. So a page's request
+// says, just before anything is sent, how it is going, and if that is past the proxy it
+// is stopped and asked for again, which now goes the right way. Only pages: whatever a
+// page then asks for is opened with the proxy in place. An address on this machine never
+// goes through a proxy (Firefox's rule), and asking once is enough: more would be a loop.
+const ASK_AGAIN_MS = 5000;
+const askedAgain = new Set();
+const onThisMachine = url => /^(localhost|.*\.localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(new URL(url).hostname);
+function notPastProxy(details) {
+  const proxy = networkNow[details.cookieStoreId]?.proxy;
+  if (!proxy || onThisMachine(details.url) || (details.proxyInfo?.host === proxy.host && details.proxyInfo.port === proxy.port)) return undefined;
+  const { tabId, url } = details;
+  if (tabId >= 0 && !askedAgain.has(tabId)) {
+    askedAgain.add(tabId);
+    setTimeout(() => browser.tabs.update(tabId, { url, loadReplace: true }).catch(() => {}), 0); // once this one has gone
+    setTimeout(() => askedAgain.delete(tabId), ASK_AGAIN_MS);
+  } else if (tabId >= 0) {
+    browser.tabs.get(tabId).then(tab => tellOnce(tab.windowId, `This could not go through its space's proxy, so it was not loaded: ${url}`)).catch(() => {});
+  }
+  return { cancel: true };
+}
+
 // A page's scripts can still read the real one (navigator.userAgent): an extension can
 // only change the header without touching every page. README says so.
 function agentFor(details) {
@@ -421,6 +475,10 @@ function applyNetwork() {
   const all = Object.values(tidierAlone || startingAlone ? networkNow : {});
   const wantsProxy = all.some(n => n.proxy), wantsAgent = all.some(n => n.userAgent);
   const proxyEvent = browser.proxy?.onRequest, agentEvent = browser.webRequest?.onBeforeSendHeaders;
+  if (agentEvent) {
+    if (wantsProxy && !agentEvent.hasListener(notPastProxy)) agentEvent.addListener(notPastProxy, { urls: ["<all_urls>"], types: ["main_frame"] }, ["blocking"]);
+    if (!wantsProxy && agentEvent.hasListener(notPastProxy)) agentEvent.removeListener(notPastProxy);
+  }
   if (proxyEvent) {
     if (wantsProxy && !proxyEvent.hasListener(proxyFor)) proxyEvent.addListener(proxyFor, { urls: ["<all_urls>"] });
     if (!wantsProxy && proxyEvent.hasListener(proxyFor)) proxyEvent.removeListener(proxyFor);
@@ -430,7 +488,7 @@ function applyNetwork() {
     if (!wantsAgent && agentEvent.hasListener(agentFor)) agentEvent.removeListener(agentFor);
   }
   if (!tidierAlone) return;
-  const missing = (wantsProxy || wantsAgent) && (!hostsGiven || (wantsProxy && !proxyEvent) || (wantsAgent && !agentEvent));
+  const missing = (wantsProxy || wantsAgent) && (!hostsGiven || (wantsProxy && !proxyEvent) || !agentEvent);
   setNotice("spaceNetwork", missing ? "A space's proxy or user agent is not in use: Tidier no longer has the permission for it. It can be given on the settings page." : null);
 }
 

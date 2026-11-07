@@ -31,10 +31,23 @@ function drawRules() {
 }
 function ruleLine(rule, save) {
   const text = el("input", { type: "text", value: rule.url, placeholder: "address, or /regular expression/" });
-  const space = el("select", {}, ...state.spaces.map(s => el("option", { value: s.id, textContent: s.name, selected: s.id === rule.space })));
+  // A space that is gone is shown as that. With only the ones there are, the first would
+  // look chosen, and the next save would send the rule somewhere you never said.
+  const gone = !!rule.space && !state.spaces.some(s => s.id === rule.space);
+  const space = el("select", {},
+    ...(gone ? [el("option", { value: rule.space, textContent: "A space that is gone", selected: true })] : []),
+    ...state.spaces.map(s => el("option", { value: s.id, textContent: s.name, selected: s.id === rule.space })));
   const remove = el("button", { textContent: "×", title: "Remove" });
-  const line = el("div", { className: "line" }, text, space, remove);
-  text.onchange = space.onchange = save;
+  const why = el("p", { className: "hint rule-problem" });
+  // Why a rule does nothing, as it is typed: otherwise a rule would just never work.
+  const showWhy = () => {
+    why.textContent = ruleProblem(text.value.trim()) ?? (gone && space.value === rule.space ? "Its space is gone, so the rule does nothing." : "");
+    why.hidden = !why.textContent;
+  };
+  showWhy();
+  const line = el("div", { className: "line" }, text, space, remove, why);
+  text.oninput = showWhy;
+  text.onchange = space.onchange = () => { showWhy(); save(); };
   remove.onclick = () => { line.remove(); save(); };
   return line;
 }

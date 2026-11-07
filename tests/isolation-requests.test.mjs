@@ -167,6 +167,46 @@ test("an ordinary known tab outside any container keeps its key too, and the oth
 });
 
 // --- Two windows, and the same thing twice -----------------------------------------------
+test("a known tab outside any container, loading in two windows at once: one tab in the end, and one placeholder", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { k: { url: "https://old.example/", title: "Old", cookieStoreId: NONE, parentKey: null, group: false, added: 1, saved: { url: "https://old.example/" } } };
+  const { w } = aWindow(ff);
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "https://there.example/", cookieStoreId: A });
+  const one = ff.addTab(w.id, { url: GHOST("ghost", "k"), active: true }, { syncKey: "k", syncRole: "live" });
+  const two = ff.addTab(other.id, { url: GHOST("ghost", "k"), active: true }, { syncKey: "k", syncRole: "live" });
+  const x = await run(ff);
+  const origin = GHOST("ghost", "k");
+  const answers = await Promise.all([ff.request({ tabId: one.id, url: "https://old.example/", originUrl: origin }), ff.request({ tabId: two.id, url: "https://old.example/", originUrl: origin })]);
+  assert.ok(answers.every(a => a.cancel));
+  await wait(1200);
+  assert.equal(ff.synced.k.cookieStoreId, A);
+  const reps = [...ff.wins.keys()].map(id => ff.list(id).filter(t => ff.values.get(t.id)?.syncKey === "k"));
+  assert.deepEqual(reps.map(r => r.length), [1, 1], "once in each window");
+  assert.ok(reps.flat().every(t => t.cookieStoreId === A));
+  assert.equal(reps.flat().filter(t => !t.url.includes("ghost.html")).length, 1, "and loaded in one");
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
+test("two rules matching one address: the first decides everywhere, also when the page is already in its space", async () => {
+  const ff = new FakeFirefox();
+  ff.store.rules = [{ url: "work.example", space: B }, { url: "/work/", space: C }];
+  const { w } = aWindow(ff);
+  const x = await run(ff);
+  let lookups = 0;
+  const get = x.b.tabs.get;
+  x.b.tabs.get = async id => { lookups++; return get(id); };
+  const inB = ff.addTab(w.id, { url: "about:blank", cookieStoreId: B });
+  assert.equal((await ff.request({ tabId: inB.id, url: WORK })).cancel, undefined);
+  assert.equal(lookups, 0, "where the first rule says: nothing to look up");
+  const inC = newTab(ff, x, w, { cookieStoreId: C });
+  assert.equal((await ff.request({ tabId: inC.id, url: WORK })).cancel, true);
+  await wait(300);
+  assert.equal(opened(ff, w.id, WORK).at(-1).cookieStoreId, B);
+  x.kill();
+});
+
 test("two moved tabs with the same address: neither is sent back", async () => {
   const ff = new FakeFirefox();
   ff.store.rules = [{ url: "work.example", space: B }];
@@ -371,15 +411,25 @@ test("a tab that takes too long to open and comes after all: never two of it", a
   const create = x.b.tabs.create;
   let release;
   x.b.tabs.create = p => new Promise(resolve => { release = () => resolve(create(p)); });
-  // In a space: the request goes on where it is, so the late tab is the extra one.
+  // In a space: not sent from here, even so. The late tab is the page, and the empty one goes.
   const inSpace = newTab(ff, x, w, { cookieStoreId: A });
-  const answer = ff.request({ tabId: inSpace.id, url: WORK });
-  assert.equal((await answer).cancel, undefined);
+  assert.equal((await ff.request({ tabId: inSpace.id, url: WORK })).cancel, true);
   x.b.tabs.create = create;
   release();
   await wait(300);
-  assert.ok(ff.tabs.has(inSpace.id));
-  assert.equal(ff.list(w.id).filter(t => t.url === WORK).length, 0, "the late one is closed");
+  assert.equal(opened(ff, w.id, WORK).length, 1);
+  assert.equal(opened(ff, w.id, WORK)[0].cookieStoreId, B);
+  assert.ok(!ff.tabs.has(inSpace.id), "the empty one goes");
+
+  // A tab showing a page keeps it, whenever the new one comes.
+  x.b.tabs.create = p => new Promise(resolve => { release = () => resolve(create(p)); });
+  const showing = newTab(ff, x, w, { cookieStoreId: A, url: "https://old.example/" });
+  assert.equal((await ff.request({ tabId: showing.id, url: "https://work.example/two" })).cancel, true);
+  x.b.tabs.create = create;
+  release();
+  await wait(300);
+  assert.equal(opened(ff, w.id, "https://work.example/two").length, 1);
+  assert.ok(ff.tabs.has(showing.id));
 
   // Outside any container: the request was stopped, so the late tab is the one to keep.
   x.b.tabs.create = p => new Promise(resolve => { release = () => resolve(create(p)); });

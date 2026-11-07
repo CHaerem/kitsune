@@ -177,9 +177,15 @@ browser.tabs.onCreated.addListener(tab => {
   setTimeout(() => newTabs.delete(tab.id), REOPEN_WINDOW_MS);
   if (tab.url === "about:newtab" || tab.url === "about:home") serial(() => intoSpace(tab.id));
 });
-browser.tabs.onUpdated.addListener((tabId, change) => {
+browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (!change.url) return;
-  if (isWeb(change.url) && requestsGuarded()) { firstPage.delete(tabId); newTabs.delete(tabId); return; } // its request was already looked at, and a redirect does not count
+  if (isWeb(change.url) && requestsGuarded()) {
+    // Its request was already looked at, and a redirect does not count. Unless Firefox never showed it (isolation.js).
+    const wasFirst = firstPage.delete(tabId);
+    newTabs.delete(tabId);
+    if (notLookedAt(tabId, tab, wasFirst)) serial(() => moveShown(tabId, change.url, wasFirst));
+    return;
+  }
   if (isWeb(change.url) && firstPage.delete(tabId)) serial(() => byRule(tabId, change.url));
   else if (newTabs.has(tabId) && (isWeb(change.url) || change.url === "about:newtab" || change.url === "about:home")) serial(() => intoSpace(tabId));
 }, { properties: ["url"] });

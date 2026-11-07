@@ -1866,6 +1866,164 @@ def alone_isolation(m):
     time.sleep(1)
 
 
+def alone_requests(m):
+    # Nothing is lost, doubled or held up when a request is stopped: the cases are in
+    # tests/isolation-requests.test.mjs, and here Firefox itself asks.
+    base = m.pages
+    m.js(GIVE_PERMISSIONS, EXT_ID, ["webRequest", "webRequestBlocking"], ["<all_urls>"])
+    press(m, "1", CTRL)
+    time.sleep(1)
+    space = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
+    other, third = [c for c in (1, 2, 3) if c != space][:2]
+    here, there = "login=here", "login=there"
+    visit(m, space, f"{base}/set-cookie?v=here")
+    visit(m, other, f"{base}/set-cookie?v=there")
+
+    def rules(*pairs):
+        extension_message(m, {"type": "settings:rules", "rules": [{"url": u, "space": f"firefox-container-{c}"} for u, c in pairs]})
+
+    def only(part, cookie, what):
+        got = seen(m, part)
+        check(what, len(got) >= 1 and all(x["cookie"] == cookie for x in got), f"{part}: {got}")
+
+    # A regular expression that takes for ever on Firefox's own engine, on every navigation.
+    rules(("/(a+)+$/", other), ("/(x|x)*y/", other))
+    evil = f"{base}/r/catastrophe-{'a' * 60}!"
+    r = m.js(ISOLATION_JS + """const t = inTab(args[1], "about:blank"); await wait(400); const t0 = Date.now(); typed(t, args[0]);
+      const ok = await until(() => url(t) === args[0], 15000); return {ok, ms: Date.now() - t0};""", evil, space)
+    check(f"a catastrophic regular expression in a rule holds up no page ({r['ms']} ms)", r["ok"], str(r))
+    m.js(ISOLATION_JS + """await closeAll("catastrophe"); return 1;""")
+
+    # A rule for a space that is gone: Firefox refuses to open anything in it.
+    rules(("dead-rule", 99))
+    r = m.js(ISOLATION_JS + """main().gBrowser.addTrustedTab(args[0], {inBackground: true}); await until(() => containersOf("dead-rule").length); await wait(500); return containersOf("dead-rule");""", f"{base}/r/dead-rule")
+    check("a link a rule sends to a removed space opens in the active space all the same", r == [space], str(r))
+    only("dead-rule", here, "and goes out with that space's cookie")
+    m.js(ISOLATION_JS + """await closeAll("settings.html"); return 1;""")
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "dead-rule", "space": "firefox-container-99"}, {"url": "/(a)\\1/", "space": f"firefox-container-{other}"}, {"url": "/^https?:\\/\\/(www\\.)?x/", "space": f"firefox-container-{other}"}]})
+    r = ext_page(m, "/settings/settings.html", """await wait(800); return [...doc.querySelectorAll("#rules .line")].map(l => ({space: l.querySelector("select").selectedOptions[0].textContent, why: l.querySelector(".rule-problem").hidden ? "" : l.querySelector(".rule-problem").textContent}));""")
+    check("the settings page says a rule's space is gone, and doesn't pick another", "gone" in r[0]["space"] and "gone" in r[0]["why"], str(r))
+    check("and why an expression can't be used, and nothing about one that can", "back-references" in r[1]["why"] and r[2]["why"] == "", str(r))
+    m.js(ISOLATION_JS + """await closeAll("settings.html"); return 1;""")
+
+    # An address typed in a saved tab, selected, in a folder: the tab stays as it was.
+    rules()
+    visit(m, space, f"{base}/r/saved-one")
+    time.sleep(2.5)  # registered as a tab of the record
+    tab = m.js(ISOLATION_JS + """const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      return ExtensionParent.apiManager.global.tabTracker.getId(main().gBrowser.tabs.find(x => url(x).includes("saved-one")));""")
+    folder = sidebar_page(m, """
+      send({type: "newFolder", space: "firefox-container-" + args[0], name: "Kept"});
+      await wait(1000);
+      const key = [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".head .title").textContent === "Kept").dataset.key;
+      send({type: "moveTab", tabId: args[1], folder: key, before: null});
+      await wait(1000);
+      return key;""", space, tab)
+    rules(("rule-typed", other))
+    r = m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("saved-one"));
+      w.gBrowser.selectedTab = t; await wait(800);
+      typed(t, args[0]); await until(() => containersOf("rule-typed").length); await wait(1500);
+      const n = wins().flatMap(x => x.gBrowser.tabs).find(x => url(x).includes("rule-typed"));
+      const all = (await storage(args[1], ["syncedTabs"])).syncedTabs, entry = all[JSON.parse(key(w, t))];
+      return {shows: url(t), kept: t.isConnected, ctx: t.userContextId, new: n.userContextId, selected: w.gBrowser.selectedTab === n, beside: w.gBrowser.tabs.indexOf(n) === w.gBrowser.tabs.indexOf(t) + 1, parent: entry.parentKey, saved: entry.saved?.url};""", f"{base}/r/rule-typed", EXT_ID)
+    check("an address typed in a saved tab that a rule sends elsewhere: the saved tab stays as it was", r["kept"] and "saved-one" in r["shows"] and r["ctx"] == space and r["parent"] == folder and "saved-one" in (r["saved"] or ""), str(r))
+    check("and the address opens selected, in the rule's space, next to it", r["new"] == other and r["selected"] and r["beside"], str(r))
+    only("rule-typed", there, "and goes out with that space's cookie, from the first request on")
+    press(m, "1", CTRL)
+    time.sleep(1)
+
+    # A placeholder whose address a rule sends elsewhere opens where it is: it is yours.
+    rules()
+    r = m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("saved-one")), k = key(w, t);
+      w.gBrowser.removeTab(t, {skipPermitUnload: true}); await wait(2500);
+      return {k, placeholder: url(w.gBrowser.tabs.find(x => key(w, x) === k))};""")
+    check("(a saved tab closed is unloaded)", "ghost.html" in r["placeholder"], str(r))
+    k = r["k"]
+    rules(("saved-one", other))
+    r = m.js(ISOLATION_JS + """const w = main(), k = args[0], t = w.gBrowser.tabs.find(x => key(w, x) === k);
+      w.gBrowser.selectedTab = t; await until(() => containersOf("saved-one").length, 5000); await wait(1000);
+      const entry = (await storage(args[1], ["syncedTabs"])).syncedTabs[JSON.parse(k)];
+      return {where: containersOf("saved-one"), same: w.gBrowser.tabs.filter(x => key(w, x) === k).length, parent: entry.parentKey};""", k, EXT_ID)
+    check("a saved tab selected opens where it is, whatever a rule says about its address", r["where"] == [space] and r["same"] == 1 and r["parent"] == folder, str(r))
+    m.js(ISOLATION_JS + """await closeAll("rule-typed"); await closeAll("saved-one"); return 1;""")
+    sidebar_page(m, """send({type: "deleteFolder", key: args[0]}); await wait(800); return 1;""", folder)
+
+    # An essential stays one, wherever a rule says an address belongs.
+    rules(("rule-essential", other))
+    r = m.js(ISOLATION_JS + """const w = main(), t = w.gBrowser.tabs.find(x => x.pinned && x.userContextId === args[1]);
+      typed(t, args[0]); await until(() => url(t) === args[0]); await wait(800);
+      return {where: containersOf("rule-essential"), pinned: t.pinned, ctx: t.userContextId, connected: t.isConnected};""", f"{base}/r/rule-essential", space)
+    check("an address typed in an essential stays there, and it stays an essential", r["where"] == [space] and r["pinned"] and r["connected"], str(r))
+    m.js(ISOLATION_JS + """await closeAll("rule-essential"); return 1;""")
+
+    # Back through a sign-in it passed through: Firefox asks with no page's name on it, as for a typed address.
+    rules(("rule-back", other))
+    hop = f"{base}/redirect?to={base}/no-bfcache%3Frule%2Dback"
+    r = m.js(ISOLATION_JS + """const t = inTab(args[2], "about:blank"); await wait(400); typed(t, args[0]);
+      await until(() => url(t).includes("rule-back")); await wait(400);
+      typed(t, args[1]); await until(() => url(t) === args[1]); await wait(400);
+      t.linkedBrowser.goBack(); await until(() => url(t).includes("rule-back")); await wait(1000);
+      return {shows: url(t), where: containersOf("rule-back")};""", hop, f"{base}/no-bfcache?after", space)
+    check("going back through an address a rule has does not move the tab it passed through", "rule-back" in r["shows"] and r["where"] == [space], str(r))
+    check("(Firefox did ask again)", len(seen(m, "rule-back")) >= 2, str(seen(m, "rule-back")))
+    m.js(ISOLATION_JS + """await closeAll("no-bfcache"); return 1;""")
+
+    # The same address, by hand, twice.
+    rules()
+    for _ in range(2):
+        visit(m, space, f"{base}/r/copy-twice")
+    time.sleep(2.5)
+    ids = m.js(ISOLATION_JS + """const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs"), id = t => ExtensionParent.apiManager.global.tabTracker.getId(t);
+      return main().gBrowser.tabs.filter(x => url(x).includes("copy-twice")).map(id);""")
+    rules(("copy-twice", other))
+    copies = extension_message(m, {"type": "isolation:copy", "tabIds": ids, "space": f"firefox-container-{third}", "windowId": None})
+    time.sleep(2)
+    r = m.js(ISOLATION_JS + """return containersOf("copy-twice").sort();""")
+    check("two tabs with the same address copied by hand are both where you put them, whatever a rule says", copies == 2 and r == sorted([space, space, third, third]), f"{copies} {r}")
+    m.js(ISOLATION_JS + """await closeAll("copy-twice"); return 1;""")
+
+    # Two windows at once.
+    rules(("rule-windows", other))
+    r = m.js(ISOLATION_JS + """const a = main(); let b = other(), made = false;
+      if (!b) { b = a.OpenBrowserWindow(); b.__smoke = true; made = true; await wait(4000); }
+      const u = args[0];
+      a.gBrowser.addTrustedTab(u + "/rule-windows-a", {inBackground: true}); b.gBrowser.addTrustedTab(u + "/rule-windows-b", {inBackground: true});
+      a.gBrowser.addTrustedTab(u + "/plain-windows-a", {inBackground: true}); b.gBrowser.addTrustedTab(u + "/plain-windows-b", {inBackground: true});
+      await until(() => ["rule-windows-a", "rule-windows-b", "plain-windows-a", "plain-windows-b"].every(p => containersOf(p).length)); await wait(800);
+      const inWin = (w, p) => w.gBrowser.tabs.filter(t => url(t).includes(p)).map(t => t.userContextId);
+      const out = {a: [inWin(a, "rule-windows-a"), inWin(a, "plain-windows-a")], b: [inWin(b, "rule-windows-b"), inWin(b, "plain-windows-b")], crossed: [inWin(a, "windows-b"), inWin(b, "windows-a")], space: b.gBrowser.selectedTab.userContextId, made};
+      await closeAll("windows-"); if (made) await close(b);
+      return out;""", f"{base}/r", )
+    check("links in two windows at once: each opens once, in its own window", r["a"][0] == [other] and r["b"][0] == [other] and r["a"][1] == [space] and len(r["b"][1]) == 1 and r["crossed"] == [[], []], str(r))
+
+    # A redirect loop between two rules' addresses, on a real server.
+    rules(("bounce/one", other), ("bounce/two", third))
+    r = m.js(ISOLATION_JS + """const w = main(), count = () => w.gBrowser.tabs.length, t = inTab(args[1], "about:blank"); await wait(400);
+      const before = count(); typed(t, args[0]); await wait(4000);
+      const after = count();
+      await closeAll("bounce"); await closeAll("about:neterror");
+      return {before, after};""", f"{base}/bounce/one", space)
+    check("a redirect loop between two rules' addresses opens one tab, and Firefox ends it", r["after"] == r["before"] and len(seen(m, "/bounce/")) >= 2, f"{r} {len(seen(m, '/bounce/'))}")
+
+    # Two pages sending each other on from a sandboxed frame, which looks like an address you type.
+    rules(("pp-one", other), ("pp-two", third))
+    r = m.js(ISOLATION_JS + """const w = main(), part = "/pp-", count = () => containersOf(part).length; const t = inTab(args[1], args[2]); await until(() => url(t) === args[2]); await wait(400);
+      typed(t, args[0]); await wait(4000);
+      const first = count(); await wait(3000); const later = count();
+      const tabs = w.gBrowser.tabs.length;
+      await closeAll(part);
+      return {first, later};""", f"{base}/pp-one", space, f"{base}/r/pp-start")
+    check("two pages sending each other between two rules stop, with no storm of tabs", 1 <= r["first"] <= 4 and r["later"] == r["first"], str(r))
+
+    rules()
+    m.js(ISOLATION_JS + """await closeAll("127.0.0.1"); return 1;""")
+    stats = extension_message(m, {"type": "stats"})
+    check("nothing is kept of the tabs that have gone", stats["sizes"]["settled"] == 0 and stats["sizes"]["slipped"] == 0, str(stats["sizes"]))
+    no_problems(m, "after all this")
+    press(m, "1", CTRL)
+    time.sleep(1)
+
+
 def alone_idle(m):
     idle = extension_message(m, {"type": "idle", "ms": 15000})
     if idle["alarms"]:
@@ -2085,7 +2243,7 @@ SNAP_ALONE = H + """
   return {windows, folders: Object.values(all).filter(e => e.own).map(e => e.name).sort(), inFolders: Object.values(all).filter(e => e.saved).length};""" % EXT_ID
 
 ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alone_folders, alone_moves, alone_drag, alone_archive, alone_live_folders,
-                alone_settings, alone_copy, alone_isolation, alone_idle, alone_update, alone_end, alone_restart, alone_isolation_start)
+                alone_settings, alone_copy, alone_isolation, alone_requests, alone_idle, alone_update, alone_end, alone_restart, alone_isolation_start)
 
 
 GROUPS = (external_links, new_window, more_windows, essentials, folders, tab_sync, folder_pull, tab_moves, saved_tabs, ghost_title,
