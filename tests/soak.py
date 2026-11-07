@@ -317,7 +317,7 @@ ACTIONS = r"""
   const pick = list => list.length ? list[Math.floor(R() * list.length)] : null;
   let serial = 0;
   const pageUrl = () => a.pages + "/p/" + a.n + "-" + (serial++);
-  const note = {closed: [], unpinned: [], deleted: [], mayDouble: []};
+  const note = {closed: [], labels: [], unpinned: [], deleted: [], mayDouble: []};
   const here = () => {
     const f = Services.focus.activeWindow, ws = normal();
     if (ws.includes(f)) return f;
@@ -338,7 +338,8 @@ ACTIONS = r"""
   };
   const principal = () => Services.scriptSecurityManager.getSystemPrincipal();
   const go = (t, to) => t.linkedBrowser.fixupAndLoadURIString(to, {triggeringPrincipal: principal()});
-  const closing = (w, t) => { const k = keyOf(w, t); if (k) note.closed.push(k); };
+  // By its key and by its title: an unloaded tab can be without its values for a moment.
+  const closing = (w, t) => { const k = keyOf(w, t); if (k) note.closed.push(k); note.labels.push(t.label); };
   const inThisSidebar = (w, id) => { const t = tabOf(id); return t && t.ownerDocument.defaultView === w ? t : null; };
   const rowsOf = v => [...v.plain, ...v.folders.flatMap(f => f.tabs)];
   const tile = id => `.tile[data-tab="${id}"]`, row = id => `.tab[data-tab="${id}"]`, head = key => `[data-folder-head="${key}"]`;
@@ -952,6 +953,7 @@ class Soak:
         self.n = 0
         self.pop = {"windows": 1, "tabs": 10, "essentials": 6, "ticking": 0}
         self.closed, self.unpinned, self.deleted = set(), set(), set()
+        self.closed_labels = []
         self.no_live_ok = []
         self.may_double = []
         self.prev = None
@@ -988,6 +990,7 @@ class Soak:
             r = self.call(RUN_ACTION, name=name, seed=self.rng.getrandbits(32), n=self.n, windows=self.pop["windows"], ticking=self.pop["ticking"])
             self.pop = r["pop"]
             self.closed.update(r["note"]["closed"])
+            self.closed_labels += r["note"]["labels"]
             self.unpinned.update(r["note"]["unpinned"])
             self.deleted.update(r["note"]["deleted"])
             self.no_live_ok += r["note"].get("noLiveOk", [])
@@ -1060,6 +1063,9 @@ class Soak:
         # What is gone without having been closed.
         if self.prev:
             for k in set(self.prev["keys"]) - set(r["keys"]) - self.closed:
+                name = self.prev["names"].get(k, k)
+                if any(name in label for label in self.closed_labels):
+                    continue
                 # With Sidebery, a tab without a container is Sidebery's to reopen in the active
                 # space, which it does by closing that tab; Tidier then closes it everywhere.
                 if self.args.alone or k not in self.prev["noContainer"]:
@@ -1070,6 +1076,7 @@ class Soak:
                 self.violation("a folder is gone, and nothing deleted it", k)
         self.prev = r
         self.closed, self.unpinned, self.deleted = set(), set(), set()
+        self.closed_labels = []
         return settle_s, r
 
     def sample(self, settle_s, r):
