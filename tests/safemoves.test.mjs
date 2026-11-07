@@ -525,6 +525,22 @@ for (const order of ["only the container", "its tabs first, as Firefox's setting
   });
 }
 
+test("the space you are in is removed, and a view moved the window off it first: you still land on a tab of the next one", async () => {
+  const ff = new FakeFirefox();
+  const { w, a } = inRemovedSpace(ff);
+  ff.addTab(w.id, { url: "moz-extension://tidier/sidebar/sidebar.html", lastAccessed: 1500 });
+  w.order.unshift(w.order.pop()); // first, so it is what the fake selects once the selected tab closes
+  const x = await alone(ff);
+  ff.containers.delete(B);
+  await x.js("viewFor")(w.id); // its space is gone, so the view picks another (spaceOf)
+  assert.notEqual(x.js("activeSpace").get(w.id), B);
+  x.b.contextualIdentities.onRemoved.fire({ contextualIdentity: { cookieStoreId: B } });
+  await settled(x);
+  assert.equal(ff.tabs.get(a.id).active, true, "on a tab of the space you are in, not one in no space");
+  assert.equal(ff.tabs.get(a.id).hidden, false);
+  x.kill();
+});
+
 test("the space you are in is removed: you land on the tab you used last in the next one", async () => {
   const ff = new FakeFirefox();
   const { w, a } = inRemovedSpace(ff);

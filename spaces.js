@@ -263,6 +263,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
     const wasFirst = firstPage.delete(tabId);
     if (notLookedAt(tabId, tab, wasFirst)) serial(() => moveShown(tabId, change.url, wasFirst));
     else newTabs.delete(tabId);
+    if (wasFirst) serial(() => sayIfRuleGone(change.url));
     return;
   }
   if (isWeb(change.url) && firstPage.delete(tabId)) serial(() => byRule(tabId, change.url));
@@ -279,13 +280,18 @@ browser.tabs.onRemoved.addListener(tabId => { newTabs.delete(tabId); firstPage.d
 const rulesList = storedValue("rules", () => []); // [{ url, space }]
 const firstPage = new Set(); // tabs that have not shown a web page yet
 
-async function byRule(tabId, url) {
-  const matching = (await rulesList.get()).filter(r => ruleMatches(r.url, url)); // rulematch.js
-  const rule = matching.find(ruleCounts); // isolation.js
-  // One whose space is gone counts for nothing, but a rule that quietly stopped working
-  // should say which it is (safemoves.js). One with no space at all never worked.
-  const gone = !rule && matching.find(r => r.space && r.space !== NO_CONTAINER);
+// A rule whose space is gone counts for nothing (ruleCounts, isolation.js), but a rule that
+// quietly stopped working should say which it is (ruleFailed, safemoves.js). One with no
+// space at all never worked. For a first page, whichever way it was looked at.
+async function sayIfRuleGone(url) {
+  const matching = (await rulesList.get()).filter(r => ruleMatches(r.url, url));
+  const gone = !matching.some(ruleCounts) && matching.find(r => r.space && r.space !== NO_CONTAINER);
   if (gone) await ruleFailed(gone);
+}
+
+async function byRule(tabId, url) {
+  const rule = (await rulesList.get()).find(r => ruleCounts(r) && ruleMatches(r.url, url)); // rulematch.js, isolation.js
+  if (!rule) await sayIfRuleGone(url);
   const tab = rule && await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.cookieStoreId === rule.space || await exemptFromRules(tabId)) return intoSpace(tabId);
   const opened = await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: rule.space, url, active: tab.active, index: await indexWhenReopened(tab, rule.space) }).catch(err => ruleFailed(rule, err));

@@ -2,7 +2,7 @@
 // what lands in it and in which space, its limits, and coming back from it.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FakeFirefox, wait, GHOST } from "./fake_firefox.mjs";
+import { FakeFirefox, wait, realSleep, GHOST } from "./fake_firefox.mjs";
 
 const C1 = "firefox-container-1", C2 = "firefox-container-2";
 const entry = (url, more = {}) => ({ url, title: url, cookieStoreId: C1, parentKey: null, group: false, added: 1, ...more });
@@ -132,10 +132,11 @@ test("only web pages come in the list, and a space's and a tab without a contain
   await x.js("e => serial(() => noteArchived(e, 'closed'))")(entry("moz-extension://tidier/sidebar/sidebar.html"));
   assert.deepEqual(await listed(x), []);
   const note = (url, cookieStoreId) => x.js("e => serial(() => noteArchived(e, 'closed'))")(entry(url, { cookieStoreId }));
+  // (Real time between them: the list goes by the clock, and the fake's wait does not move it.)
   await note("https://first.example/", C1);
-  await wait(10);
+  await realSleep(5);
   await note("https://second.example/", "firefox-default");
-  await wait(10);
+  await realSleep(5);
   await note("https://third.example/", C1);
   assert.deepEqual((await listed(x, C1)).map(r => r.url), ["https://third.example/", "https://second.example/", "https://first.example/"]);
   assert.ok(w);

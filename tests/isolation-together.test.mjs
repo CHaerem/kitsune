@@ -141,3 +141,19 @@ test("the small window's menus can be started again: an id that is there is an e
   assert.equal(ids.size, 3);
   x.kill();
 });
+
+test("with the request looked at first, a rule whose space is gone still says which rule", async () => {
+  const ff = new FakeFirefox();
+  ff.store.rules = [{ url: "work.example", space: "firefox-container-9" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://home.example/", active: true, cookieStoreId: A });
+  const x = await run(ff);
+  const t = ff.addTab(w.id, { url: "about:blank", cookieStoreId: A });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  assert.deepEqual({ ...await ff.request({ tabId: t.id, url: WORK }) }, {}, "it counts for nothing, so the page loads here");
+  ff.navigate(t.id, WORK);
+  await wait(500);
+  assert.ok(ff.tabs.has(t.id));
+  assert.match((await x.js("viewFor")(w.id)).problem ?? "", /work\.example/);
+  x.kill();
+});

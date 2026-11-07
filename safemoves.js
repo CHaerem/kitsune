@@ -109,11 +109,14 @@ async function spaceRemoved(space) {
   // every link is refused (intoSpace) and the other spaces' tabs stay hidden. Nothing else
   // would tell it: on Firefox's settings page, where this is done, the selected tab is in
   // no space, so its selection does not change. And that tab stays selected.
+  // A window whose selected tab is in it goes too: a view drawn before the queue got here
+  // can have moved the window to another space already (spaceOf), and its tab would then
+  // close under you, and Firefox would select any tab, in no space.
   const next = (await spaceList(new Set())).find(s => s.id !== space)?.id;
-  for (const [windowId, active] of activeSpace) {
-    if (active !== space) continue;
-    if (!next) { activeSpace.delete(windowId); continue; }
+  for (const { id: windowId } of await normalWindows()) {
     const [on] = await browser.tabs.query({ windowId, active: true });
+    if (activeSpace.get(windowId) !== space && on?.cookieStoreId !== space) continue;
+    if (!next) { activeSpace.delete(windowId); continue; }
     await (on?.cookieStoreId === space ? switchSpace(windowId, next) : setSpace(windowId, next)).catch(noteError);
   }
   const all = await getSynced();

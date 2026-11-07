@@ -173,7 +173,7 @@ def fire_message(m, msg):
     time.sleep(1)
 
 
-def into_page(m, part, exact=False):
+def into_page(m, part, exact=False, focus=False):
     """Run the next scripts in the page of the tab with `part` in its address, main()'s first. Its
     handle is asked for, since switching through the tabs until the right one loads every unloaded
     tab on the way (Marionette reads each one's message manager), and then a tab that should stay
@@ -186,7 +186,7 @@ def into_page(m, part, exact=False):
     if not handle:
         raise RuntimeError(f"no tab with {part}")
     m.cmd("Marionette:SetContext", {"value": "content"})
-    m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": False})
+    m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": focus})  # focus: that tab is selected too
 
 
 def extension_message(m, msg):
@@ -1804,7 +1804,7 @@ def alone_safe_moves(m):
     def fell_back():
         state = sidebar_page(m, """const windowId = (await page.browser.windows.getCurrent()).id, active = spaces().find(s => s.active)?.id;
           const [on] = await page.browser.tabs.query({active: true, windowId}), tabs = await page.browser.tabs.query({windowId, pinned: false});
-          return {active, on: on.cookieStoreId, left: (await page.browser.tabs.query({cookieStoreId: args[0]})).length,
+          return {active, on: on.cookieStoreId, onUrl: on.url, left: (await page.browser.tabs.query({cookieStoreId: args[0]})).length,
                   hiddenHere: tabs.filter(t => t.cookieStoreId === active && t.hidden).length,
                   shownElsewhere: tabs.filter(t => t.cookieStoreId !== active && t.cookieStoreId !== "firefox-default" && !t.hidden && !t.active).length};""", made)
         return {**state, "done": state["left"] == 0 and state["active"] not in (None, made) and state["on"] == state["active"] and state["hiddenHere"] == 0 and state["shownElsewhere"] == 0}
@@ -2188,7 +2188,13 @@ MENU_TABS = H + """
   const entriesOf = (all, text) => Object.entries(all).filter(([, e]) => e.url?.includes(text));
 """ % EXT_ID
 
-ROW_MENU = ["Reload", "Mute", "Unload", "|", "Duplicate", "Copy address", "|", "Make essential", "Move to folder", "Move to space", "Always open this site here", "|", "Close"]
+ROW_MENU = ["Reload", "Mute", "Unload", "|", "Duplicate", "Copy address", "|", "Make essential", "Move to folder", "Move to space", "Open a copy in space", "Always open this site here", "|", "Close"]
+
+
+def no_cookies_item(labels):
+    """The menu without the one item that depends on an optional permission (isolation.js),
+    which a run may or may not have (TIDIER_ALONE_ALL_PERMISSIONS)."""
+    return [label for label in labels if label != "Clear this site's cookies in this space"]
 
 
 def alone_tab_menu(m):
@@ -2240,14 +2246,14 @@ def alone_tab_menu(m):
           await wait(500);
           const outside = {closed: menu.hidden, selected: doc.querySelector("#tabs .tab.active")?.dataset.tab === selectedBefore};
           return {labels, about, closed, left, tileLabels, keys: {inMenu, first, last, sub, back}, outside};""", a, b)
-        check("a right click on a row shows Tidier's menu, in its order", r["labels"] == ROW_MENU, str(r))
+        check("a right click on a row shows Tidier's menu, in its order", no_cookies_item(r["labels"]) == ROW_MENU, str(r))
         check("the menu marks the row it is about, and Esc closes it", r["about"] and r["closed"] and not r["left"], str(r))
         k = r["keys"]
         check("the arrow keys go through the menu, and into a list and back", k["inMenu"] and k["first"] == "Reload" and k["last"] == "Close" and k["sub"]["top"] == "Move to space"
               and not k["sub"]["focus"] and k["sub"]["at"] and k["back"] == 0, str(k))
         check("a click outside the menu only closes it", r["outside"] == {"closed": True, "selected": True}, str(r["outside"]))
-        tile_rest = ["Duplicate", "Copy address", "|", "Remove from essentials"]
-        check("a right click on a tile offers no folder, space or rule", r["tileLabels"] in (tile_rest, ["Reload", "Mute", "Unload", "|", *tile_rest, "|", "Close"]), str(r))
+        tile_rest = ["Duplicate", "Copy address", "|", "Remove from essentials", "Open a copy in space"]
+        check("a right click on a tile offers no folder, move to a space or rule", no_cookies_item(r["tileLabels"]) in (tile_rest, ["Reload", "Mute", "Unload", "|", *tile_rest, "|", "Close"]), str(r))
         r = sidebar_page(m, MENU_PAGE + """const row = rowOf(args[0]), opts = o => page.JSON.parse(JSON.stringify(o));
           // A redraw of its row (here: the sound mark) resets the row's classes.
           await rightClick(row);
@@ -2300,7 +2306,7 @@ def alone_tab_menu(m):
           return {unloaded: !t.linkedPanel, url: url(t), stored: entriesOf(all, "smoke-menu-a").length, selected: idOf(main().gBrowser.selectedTab)};""", a)
         check("Unload unloads a tab, which stays, and the selection stays too", r["unloaded"] and "smoke-menu-a" in r["url"] and r["stored"] == 1 and r["selected"] == selected, str(r))
         r = sidebar_page(m, MENU_PAGE + "await until(() => rowOf(args[0]).classList.contains('unloaded')); const l = await rightClick(rowOf(args[0])); menu.hidden = true; return {l, faded: rowOf(args[0]).classList.contains('unloaded')};", a)
-        check("an unloaded tab's menu has nothing to reload, mute or unload", r["l"] == ROW_MENU[4:] and r["faded"], str(r))
+        check("an unloaded tab's menu has nothing to reload, mute or unload", no_cookies_item(r["l"]) == ROW_MENU[4:] and r["faded"], str(r))
 
         # Duplicate of what is not loaded: the address, in the same container, an ordinary tab.
         act(a, "Duplicate")
@@ -2322,7 +2328,7 @@ def alone_tab_menu(m):
           return 1;""", b)
         r = sidebar_page(m, MENU_PAGE + """const head = [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Menu kept");
           await rightClick(head); const folder = shown(), list = await rightClick(doc.getElementById("tabs")); menu.hidden = true; return {folder, list};""")
-        check("a folder and the empty list keep their own short menus", r["folder"] == ["Rename", "Delete folder (its tabs stay)"] and r["list"][0] == "New folder" and "Reload" not in r["list"], str(r))
+        check("a folder and the empty list keep their own short menus", r["folder"] == ["Rename", "Delete folder (its tabs stay)", "Move to space"] and r["list"][0] == "New folder" and "Reload" not in r["list"], str(r))
         # Rename on a tile and on a saved tab's row opens the box, ready for typing. (What you
         # then do in it is for alone_tab_names.) Esc leaves everything as it was.
         r = sidebar_page(m, MENU_PAGE + """const named = async el => {
@@ -2386,7 +2392,7 @@ def alone_tab_menu(m):
         before = page_loads(far)
         r = sidebar_page(m, MENU_PAGE + """await until(() => rowOf(args[0])); const l = await rightClick(rowOf(args[0])); choose("Reload"); return l;""", ghost)
         after = m.js(MENU_TABS + "await until(() => byId(args[0]).linkedBrowser.innerWindowID !== args[1]); return byId(args[0]).linkedBrowser.innerWindowID;", far, before)
-        check("a placeholder's Reload loads the page in the other window again", ghost != far and r == ROW_MENU and after != before, f"{ghost}, {far}, {r}, {before}, {after}")
+        check("a placeholder's Reload loads the page in the other window again", ghost != far and no_cookies_item(r) == ROW_MENU and after != before, f"{ghost}, {far}, {r}, {before}, {after}")
         m.js(clipboard + 'Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString("before"); return 1;')
         act(ghost, "Copy address")
         copied = m.js(clipboard + 'await until(() => read() !== "before", 3000); return read();')
@@ -2415,7 +2421,7 @@ def alone_tab_menu(m):
         r = m.js(MENU_TABS + """await until(() => !byId(args[0]).linkedPanel); return {page: !!byId(args[0]).linkedPanel, url: url(byId(args[0])), here: !!byId(args[1])};""", far, ghost)
         check("a placeholder's Unload unloads the page in the other window", r == {"page": False, "url": "https://example.org/?smoke-menu-far", "here": True}, str(r))
         r = sidebar_page(m, MENU_PAGE + "const l = await rightClick(rowOf(args[0])); menu.hidden = true; return l;", ghost)
-        check("after which its menu has nothing to reload, mute or unload", r == ROW_MENU[4:], str(r))
+        check("after which its menu has nothing to reload, mute or unload", no_cookies_item(r) == ROW_MENU[4:], str(r))
 
         # Make essential: the page itself is pinned where it is, and stays loaded.
         ghost2 = placeholder_of(far2)
@@ -2510,7 +2516,7 @@ def alone_tab_menu(m):
           choose("Move to space"); choose(list[2]);
           await until(() => !rowOf(args[0]));
           return {list, dots, again, gone: !rowOf(args[0]), active: spaces().find(s => s.active).id};""", d)
-        check("Move to space lists the other spaces with their colours, and the row back goes back", r["dots"] == len(r["list"]) - 2 and r["dots"] >= 2 and r["again"] == ROW_MENU, str(r))
+        check("Move to space lists the other spaces with their colours, and the row back goes back", r["dots"] == len(r["list"]) - 3 and r["list"][-1] == "New space" and r["dots"] >= 2 and no_cookies_item(r["again"]) == ROW_MENU, str(r))
         moved = m.js(MENU_TABS + """await until(() => tabs().some(x => url(x.t).includes("smoke-menu-a") && x.t.userContextId !== args[0]));
           return {there: tabs().filter(x => url(x.t).includes("smoke-menu-a") && x.t.userContextId !== args[0]).length, selected: idOf(main().gBrowser.selectedTab)};""", ctx)
         check("Move to space moves the tab, and you stay where you are", r["gone"] and r["active"] == space and moved["there"] >= 1 and moved["selected"] == selected, f"{r}, {moved}")
@@ -2526,7 +2532,7 @@ def alone_tab_menu(m):
 
         sidebar_page(m, MENU_PAGE + "await until(() => rowOf(args[0])); rowOf(args[0]).click(); return 1;", s2)
         m.js(MENU_TABS + "await until(() => idOf(main().gBrowser.selectedTab) === args[0]); await wait(500); return 1;", s2)
-        many = ["Reload 3 tabs", "Mute 3 tabs", "Unload 3 tabs", "|", "Copy 3 addresses", "|", "Make 3 tabs essential", "Move 3 tabs to folder", "Move 3 tabs to space", "|", "Close 3 tabs"]
+        many = ["Reload 3 tabs", "Mute 3 tabs", "Unload 3 tabs", "|", "Copy 3 addresses", "|", "Make 3 tabs essential", "Move 3 tabs to folder", "Move 3 tabs to space", "Open copies of 3 tabs in space", "|", "Close 3 tabs"]
         m.js(clipboard + 'Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper).copyString("before"); return 1;')
         r = several("""const labels = await rightClick(rowOf(picked[0])), marks = picked.filter(id => rowOf(id).classList.contains("menu-for")).length;
           choose("Copy 3 addresses"); return {labels, marks};""")
@@ -4172,11 +4178,7 @@ def alone_archived(m):
 
     def mouse(x, y, click=True, double=False):
         """Firefox's own mouse, on the sidebar page in front. A double click has the slide's time between its clicks."""
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
-                break
+        into_page(m, "/sidebar/sidebar.html")  # not through every tab: that loads each unloaded one
         acts = [{"type": "pointerMove", "x": round(x), "y": round(y), "duration": 0}]
         press = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
         if click:
@@ -4441,11 +4443,7 @@ def alone_archived(m):
 
     # Firefox's own keyboard, on the sidebar page in front: ↓ moves, ⌫ forgets, ← goes back, Enter opens.
     def keyboard(*keys):
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
-                break
+        into_page(m, "/sidebar/sidebar.html")  # not through every tab: that loads each unloaded one
         acts = [a for k in keys for a in ({"type": "keyDown", "value": k}, {"type": "keyUp", "value": k})]
         m.cmd("WebDriver:PerformActions", {"actions": [{"type": "key", "id": "keyboard", "actions": acts}]})
         m.cmd("WebDriver:ReleaseActions")
@@ -4488,12 +4486,7 @@ LITTLE = H + """
 def little_page(m, handle_part, selector):
     """The element `selector` in the page of a tab with this address, that tab selected. Only that
     tab: selecting each tab on the way would take the window through all its spaces."""
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if handle_part in m.cmd("WebDriver:GetCurrentURL"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": True})
-            break
+    into_page(m, handle_part, focus=True)  # not through every tab: that loads each unloaded one
     return m.cmd("WebDriver:FindElement", {"using": "css selector", "value": selector})
 
 
@@ -4798,11 +4791,7 @@ def alone_little_window(m):
     r = m.js(state)
     check("with the access given, ⌥-click opens a link in a small window, in the page's space", r["popups"] == 1 and r["spaces"] == [1] and r["stayed"], str(r))
     m.js(LITTLE + """for (const p of popups()) p.close(); await until(() => !popups().length); return 1;""")
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if "little-page" in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    into_page(m, "little-page")  # not through every tab: that loads each unloaded one
     m.cmd("WebDriver:ExecuteScript", {"script": """document.querySelector("#a").addEventListener("click", e => e.preventDefault());
       document.querySelector("#a").dispatchEvent(new MouseEvent("click", {altKey: true, bubbles: true, cancelable: true}));"""})
     m.chrome()
@@ -6240,11 +6229,7 @@ def choose_file(m, input_id, contents):
         path = os.path.join(folder, "chosen.json")
         with open(path, "w") as out:
             out.write(contents if isinstance(contents, str) else json.dumps(contents))
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if "/settings/settings.html" in m.cmd("WebDriver:GetCurrentURL"):
-                break
+        into_page(m, "/settings/settings.html")  # not through every tab: that loads each unloaded one
         m.cmd("WebDriver:ExecuteScript", {"script": f'document.getElementById("{result}").textContent = ""; document.getElementById("merge").hidden = true;'})
         found = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": "#" + input_id})
         m.cmd("WebDriver:ElementSendKeys", {"id": next(iter(found.values())), "text": path})
