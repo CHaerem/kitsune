@@ -303,13 +303,14 @@ class TestFirefox:
                                          env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             # Marionette looks at the window's selected tab as it connects. With a link at the
-            # start, that tab can be just then being replaced by one in a space (alone_isolation_start).
-            for attempt in range(10 if url else 1):
+            # start, or a page with no container restored, that tab can be just then being
+            # replaced by one in a space (alone_isolation_start).
+            for attempt in range(10):
                 try:
                     self.m = Marionette(port=self.port, wait=60, alive=lambda: self.proc.poll() is None)
                     break
                 except RuntimeError:
-                    if attempt == (10 if url else 1) - 1:
+                    if attempt == 9:
                         raise
                     time.sleep(1)
         except OSError as err:
