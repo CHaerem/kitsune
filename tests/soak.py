@@ -24,13 +24,14 @@ what must always hold, in the real browser:
   - the sidebar shows exactly what the window has;
   - placeholders are unloaded, and a page is loaded only once;
   - no selected tab is left blank in the window you are using;
+  - with Tidier alone, a space's tabs in the same order in every window (counted, not failed);
   - no error inside Tidier (`problems`), or in the browser console from its pages.
 
 A violation counts only if it is still there after waiting: Tidier is allowed to be
 on its way. Each sample records the extension process's memory and CPU and how many
 jobs ran. At the end it prints a table, and fails on any violation, on memory that
-grows steadily, on a list in memory that outgrows the tabs there are, or on Tidier
-not doing nothing when nothing happens.
+grows at the same number of tabs, on a list in memory that outgrows the tabs there are,
+or on Tidier not doing nothing when nothing happens.
 """
 import argparse
 import http.server
@@ -54,8 +55,8 @@ MAX_WINDOWS = 4
 SETTLE_LIMIT_S = 60       # Tidier has this long to go quiet; longer is a violation
 VIOLATION_WAIT_S = 25     # and a broken promise this long to mend itself
 MEMORY_WARMUP = 2         # samples left out of the memory verdict: start-up, not growth
-GROWTH_MIN_MB = 30        # steady growth smaller than this is noise
-GROWTH_MIN_SHARE = 0.15   # as is growth smaller than this share of the whole
+GROWTH_MIN_SAMPLES = 6    # fewer than this, and a run says nothing about growth
+GROWTH_MIN_MB = 5         # growth smaller than this is noise (runs of up to 30 minutes without a leak: at most 4)
 SPARE_ENTRIES = 25        # what a list in memory may hold beyond the tabs and windows there are
 
 
@@ -66,30 +67,51 @@ SPARE_ENTRIES = 25        # what a list in memory may hold beyond the tabs and w
 # sidebar settles them; tools/fix_spaces.py exists for the daily browser.
 # It also keeps pinned tabs by space, and moves them itself at times.
 SIDEBERY_SAYS = {"an essential is in another space (pin race)", "a tab is in another space", "essentials not in the list's order"}
+# Counted, not failed, with or without Sidebery: no tab is lost by it. A new window's own first
+# tab, given an address, is first there and last elsewhere, as is a tab moved with Firefox's menu.
+ORDER = "a space's tabs have another order than in the first window"
 
 
-def grows_steadily(samples):
-    """Whether memory (a list, one number per sample) grows steadily.
+def growth(rows):
+    """How much memory grew over a run at the same number of tabs, in MB, or None if the run
+    is too short to say. `rows`: (minutes, tabs, MB allocated), one per sample.
 
-    By thirds: Firefox's memory goes up and down by tens of megabytes with what it
-    happens to do, and a single high sample means nothing. It must be higher in each
-    third than in the one before, by more than noise, and the middle of the run must
-    show it too (a jump at one moment, and flat from there on, is not a leak).
+    Memory follows the tabs: with Sidebery 36 MB with one window and 80 with four. They come
+    and go at random, so high and low samples mean little by themselves, and a limit that
+    allows for them lets a real leak through. So the part that follows the tabs is taken out
+    first, and what is left is compared with time (a regression on both). Also returned is
+    how far the samples lie from that line (their standard deviation), which is the noise
+    any growth has to stand out from: more with Sidebery, whose memory is in the same process.
     """
-    samples = samples[MEMORY_WARMUP:]
-    if len(samples) < 3:
-        return False
-    third = len(samples) // 3 or 1
-    a = statistics.median(samples[:third])
-    b = statistics.median(samples[third:-third] or samples[third:third + 1])
-    c = statistics.median(samples[-third:])
-    return a < b < c and c - a >= max(GROWTH_MIN_MB, GROWTH_MIN_SHARE * a) and min(b - a, c - b) >= 0.1 * (c - a)
+    rows = rows[MEMORY_WARMUP:]
+    if len(rows) < GROWTH_MIN_SAMPLES:
+        return None, None
+    minutes, tabs, mb = zip(*rows)
+
+    def slope(xs, ys):
+        mx, my = statistics.mean(xs), statistics.mean(ys)
+        spread = sum((x - mx) ** 2 for x in xs)
+        return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / spread if spread else 0
+
+    def without_tabs(ys):
+        s = slope(tabs, ys)
+        return [y - s * x for x, y in zip(tabs, ys)]
+
+    time_left, mb_left = without_tabs(minutes), without_tabs(mb)
+    per_minute = slope(time_left, mb_left)
+    return per_minute * (minutes[-1] - minutes[0]), statistics.pstdev(y - per_minute * x for x, y in zip(time_left, mb_left))
 
 
-assert not grows_steadily([200, 300, 300, 310, 305, 300, 308])  # a jump, then flat
-assert grows_steadily([200, 200, 300, 340, 380, 420, 460, 500, 540])
-assert not grows_steadily([200, 200, 300, 310, 305, 312, 309, 311, 310])  # noise
-assert not grows_steadily([200, 300])  # too few to say
+def grows(grew, noise):
+    return grew is not None and grew >= max(GROWTH_MIN_MB, 3 * noise)
+
+
+_flat = [(m, 20 + 30 * (m % 3), 10 + 2 * (20 + 30 * (m % 3))) for m in range(12)]
+assert not grows(*growth(_flat))  # up and down with the tabs
+assert 17 < growth([(m, t, y + 2 * m) for m, t, y in _flat])[0] < 19 and grows(*growth([(m, t, y + 2 * m) for m, t, y in _flat]))  # 2 MB a minute, whatever the tabs do
+assert not grows(*growth([(m, t, y + 0.5 * m + 12 * (m % 2)) for m, t, y in _flat]))  # as much, but lost in noise
+assert growth(_flat[:7]) == (None, None)  # too few to say
+assert not grows(*growth([(m, 30, 50) for m in range(12)]))  # the same number of tabs throughout
 
 
 # What the pages do is the test's own, so no action depends on a site being up, and
@@ -364,7 +386,8 @@ ACTIONS = r"""
     },
     address_in_new_tab() {
       // ⌘T, then an address typed in it.
-      const w = here(), t = pick(plainTabs(w).filter(x => /^about:(newtab|home|blank)/.test(url(x))));
+      // (Not a tab with a key: unloaded, it says about:blank too, and it is no new tab.)
+      const w = here(), t = pick(plainTabs(w).filter(x => x.linkedPanel && !keyOf(w, x) && /^about:(newtab|home|blank)/.test(url(x))));
       if (!t) return null;
       w.gBrowser.selectedTab = t;
       const to = pageUrl();
@@ -491,7 +514,6 @@ ACTIONS = r"""
       // Dragged from the tab strip, or Firefox's own "Move Tab" menu.
       const w = anyWindow(), there = otherWindow(w), t = pick(plainTabs(w).filter(x => !isGroup(x)));
       if (!there || !t || w.gBrowser.tabs.length < 2) return null;
-      closing(w, t); // Firefox loses the values of an unloaded tab it moves, so an action could not name it later
       const what = short(t) + " (" + roleOf(w, t) + ")";
       // Next to its own space's tabs: Sidebery gives a tab that another extension moves
       // the space of the tab it lands on (README), and its own drag does not do that.
@@ -506,13 +528,15 @@ ACTIONS = r"""
       there.gBrowser.adoptTab(t, {tabIndex: 0});
       return "to another window: " + what;
     },
-    tear_off() {
+    async tear_off() {
       if (a.windows >= $MAX_WINDOWS) return null;
       const w = anyWindow(), t = pick(plainTabs(w).filter(x => !isGroup(x)));
       if (!t || plainTabs(w).length < 2) return null;
-      closing(w, t);
       const what = short(t) + " (" + roleOf(w, t) + ")";
       w.gBrowser.replaceTabWithWindow(t);
+      // Closing the window it comes from in this very moment, which no hand can do, leaves
+      // Firefox with a window that has no working tabs, where it refuses everything.
+      await wait(500);
       return "tear off into a new window: " + what;
     },
     new_window() {
@@ -810,6 +834,19 @@ INVARIANTS = LIB + r"""
       if (panel && panel !== panels[x.ctx]) bad(x.pinned ? "an essential is in another space (pin race)" : "a tab is in another space", x.label, x.ctx + " in window " + x.wi + ", role " + x.role + ", at " + x.w.gBrowser.tabs.indexOf(x.t) + " among " + x.w.gBrowser.tabs.map(t => t.userContextId).join(""));
     }
   }
+  // --- Order: every window shows the same tabs in the same order ---
+  const ORDER = "a space's tabs have another order than in the first window";
+  if (ALONE) {
+    for (const ctx of new Set(tabs.map(x => x.ctx))) {
+      const orderIn = wi => tabs.filter(x => x.wi === wi && x.ctx === ctx && !x.pinned && x.key && all[x.key]).map(x => x.key);
+      const first = orderIn(0);
+      for (let wi = 1; wi < ws.length; wi++) {
+        const here = orderIn(wi), common = new Set(here.filter(k => first.includes(k)));
+        const a1 = first.filter(k => common.has(k)), a2 = here.filter(k => common.has(k));
+        if (JSON.stringify(a1) !== JSON.stringify(a2)) bad(ORDER, ctx + " window " + wi, a1.map(k => all[k].url?.split("/").pop()).join(" ") + " vs " + a2.map(k => all[k].url?.split("/").pop()).join(" "));
+      }
+    }
+  }
   const errors = control().__soakErrors.splice(0);
   for (const e of errors) bad("an error in the browser console", e);
 
@@ -960,7 +997,7 @@ class Soak:
         self.restarts = self.segment = 0
         self.raw, self.offset = {}, {}
         self.violations = {}    # (kind, subject) -> the first detail, when
-        self.known = {}         # the same for what Sidebery decides (SIDEBERY_SAYS)
+        self.known = {}         # the same for what is counted, not failed (SIDEBERY_SAYS, ORDER)
         self.action_failures = {}
         self.samples = []
         self.count = {}
@@ -1032,7 +1069,7 @@ class Soak:
         id_ = (kind, subject)
         if id_ in self.violations or id_ in self.known:
             return
-        if kind in SIDEBERY_SAYS and not self.args.alone:
+        if kind == ORDER or (kind in SIDEBERY_SAYS and not self.args.alone):
             self.known[id_] = detail
             self.say(f"KNOWN {kind}: {subject} ({detail})")
             return
@@ -1064,7 +1101,8 @@ class Soak:
         if self.prev:
             for k in set(self.prev["keys"]) - set(r["keys"]) - self.closed:
                 name = self.prev["names"].get(k, k)
-                if any(name in label for label in self.closed_labels):
+                # (An unloaded tab just moved has its address for a title, with the key in it.)
+                if any(name in label or k in label for label in self.closed_labels):
                     continue
                 # With Sidebery, a tab without a container is Sidebery's to reopen in the active
                 # space, which it does by closing that tab; Tidier then closes it everywhere.
@@ -1218,16 +1256,17 @@ class Soak:
         # taken back yet. (Where that number cannot be had, the total.)
         rows = self.samples[self.segment:]
         memory = [s["heap"] or s["mb"] for s in rows]
-        steady = grows_steadily(memory)
+        grew, noise = growth([(s["t"] / 60, s["tabs"], m) for s, m in zip(rows, memory)])
+        steady = grows(grew, noise)
         if memory:
             print(f"Memory of the extension process: {memory[0]} MB allocated at the start, {memory[-1]} MB at the end, highest {max(memory)} MB "
-                  f"(the process: {rows[0]['mb']}, {rows[-1]['mb']}, highest {max(s['mb'] for s in rows)} MB): "
-                  + ("grows steadily" if steady else "no steady growth"), flush=True)
+                  f"(the process: {rows[0]['mb']}, {rows[-1]['mb']}, highest {max(s['mb'] for s in rows)} MB). "
+                  + ("Too short a run to say whether it grows." if grew is None else f"At the same number of tabs it grew {grew:.1f} MB, with {noise:.1f} MB of noise: " + ("it grows" if steady else "no steady growth")), flush=True)
         if self.samples:
             s = self.samples[-1]
             print(f"In {s['t'] / 60:.1f} minutes: {s['actions']} actions, {s['jobs']} jobs, queue busy {s['queue']:.0f} s, {s['cpu']:.0f} s CPU in the extension process, {s['errors']} errors", flush=True)
         if self.known:
-            print(f"KNOWN  {len(self.known)} tabs that Sidebery put in another space (not failed; see SIDEBERY_SAYS and the log)", flush=True)
+            print(f"KNOWN  {len(self.known)} things that are counted, not failed (SIDEBERY_SAYS, ORDER; see the log)", flush=True)
         if self.violations:
             print(f"\n{len(self.violations)} violations, seed {self.args.seed}:", flush=True)
             for (kind, subject), (detail, when) in self.violations.items():
