@@ -1590,3 +1590,19 @@ test("a window that refuses a new tab does not keep the others in a hidden space
   assert.equal(x.js(`activeSpace.get(${two.id})`), c(1), "the other window has left it");
   x.kill();
 });
+
+test("a page that stayed for its unsaved input and comes back with a restart keeps its way back", async () => {
+  const { ff, w } = machine({ 1: "Work", 2: "Client" });
+  ff.managed.hiddenSpaces = ["Client"];
+  ff.store.syncedTabs = { plain: { url: "https://input.example/", title: "Input", cookieStoreId: c(2), parentKey: null, group: false, added: 1 } };
+  ff.addTab(w.id, { url: "https://input.example/", title: "Input", cookieStoreId: c(2), discarded: true }, { syncKey: "plain", syncRole: "live" }); // as a restart restores it
+  const x = await boot(ff);
+  await wait(100);
+  assert.deepEqual(inSpace(ff, w, c(2)), [], "it goes like the rest");
+  assert.ok(ff.synced.plain, "the record keeps it");
+  ff.recentlyClosed = [{ tab: { url: "https://input.example/", sessionId: "input", windowId: w.id } }];
+  x.b.sessions.onChanged.fire();
+  await wait(100);
+  assert.equal(ff.recentlyClosed.length, 1, "with what you had typed, which only Recently Closed still has");
+  x.kill();
+});

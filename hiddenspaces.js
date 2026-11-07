@@ -128,7 +128,9 @@ async function closeHiddenTabs() {
     if (now.active) continue; // a selected tab cannot be left: its window has nothing to show yet
     if (key) { syncBusy.add(t.id); forget(t.id); ghosts.add(key); }
     if (t.pinned) { busy.add(t.id); const essential = await keyOf(t).catch(() => null); if (essential) copies.add(essential); }
-    if (isWeb(now.url)) pages.add(now.url);
+    // (One already unloaded when this began may be a page that stayed for its unsaved input, brought
+    // back by a restart. Firefox unloaded it, so this says nothing about the input: Recently Closed keeps it.)
+    if (isWeb(now.url) && !t.discarded) pages.add(now.url);
     closing.push(t.id);
   }
   // Told in the record, for when the space shows again in a way that is not the settings page
