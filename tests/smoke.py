@@ -1492,24 +1492,28 @@ def alone_restart(m):
         return
     no_problems(m, "before a restart with Tidier alone")
     # Names, as the record and the list keep them: an essential's, and a saved tab's.
+    more_tabs_here(m, "restart")
     named = sidebar_page(m, """
-      const until = async f => { for (let t = 0; t < 8000 && !f(); t += 50) await wait(50); return f(); };
+      const until = async f => { for (const end = Date.now() + 8000; Date.now() < end; await wait(50)) { const v = f(); if (v) return v; } return f(); };
       const tile = doc.querySelector("#essentials .tile"), space = spaces().find(s => s.active).id;
       send({type: "newFolder", space, name: "Named"});
       const head = await until(() => [...doc.querySelectorAll("#tabs .folder .head")].find(h => h.querySelector(".title").textContent === "Named"));
-      const tab = Number(plainTabs()[0].dataset.tab);
+      const tab = Number(plainTabs().at(-1).dataset.tab);
       send({type: "moveTab", tabId: tab, folder: head.dataset.folderHead, before: null});
       await until(() => doc.querySelector(`#tabs .tab[data-tab="${tab}"]`)?.dataset.folder);
       send({type: "renameTab", tabId: Number(tile.dataset.tab), name: "Named essential"});
       send({type: "renameTab", tabId: tab, name: "Named tab"});
-      return await until(() => tile.title.startsWith("Named essential") && rows().includes("Named tab"));""")
-    check("names: an essential and a saved tab named before the restart", named, str(named))
+      await until(() => tile.title.startsWith("Named essential") && rows().includes("Named tab"));
+      return {tile: tile.title, rows: rows()};""")
+    check("names: an essential and a saved tab named before the restart", named.get("tile", "").startswith("Named essential") and "Named tab" in named.get("rows", []), str(named))
     before = m.js(SNAP_ALONE)
     m.restart()
     m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(12000); return 1;""")
     after = m.js(SNAP_ALONE)
     check("after a restart with Tidier alone, the same tabs, folders and one space shown", before == after, f"{before} -> {after}")
-    r = sidebar_page(m, """await wait(500); return {tiles: tiles().map(t => t.split("\\n")[0]), rows: rows()};""")
+    # The page from before the restart is not loaded again by itself: a new one.
+    m.js(H + """for (const t of [...main().gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) main().gBrowser.removeTab(t); await wait(300); return 1;""")
+    r = sidebar_page(m, """for (const end = Date.now() + 8000; Date.now() < end && !tiles().length; await wait(50)); return {tiles: tiles().map(t => t.split("\\n")[0]), rows: rows()};""")
     check("after a restart, an essential and a saved tab keep their names", "Named essential" in r.get("tiles", []) and "Named tab" in r.get("rows", []), str(r))
     r = m.js(H + """const labels = w => w.gBrowser.tabs.filter(t => !t.selected && !t.linkedPanel).map(t => t.label); return wins().map(labels).flat();""")
     check("after a restart, their placeholders still show them", "Named essential" in r and "Named tab" in r, str(r))
@@ -1579,7 +1583,9 @@ def alone_tab_names(m):
     # menu's Rename calls; everything after that is what you do in the box.
     ENTER, ESC, BACKSPACE = "\ue007", "\ue00c", "\ue003"
     PAGE = "/sidebar/sidebar.html"
-    UNTIL = """const until = async (f, ms = 10000) => { for (let t = 0; t < ms; t += 50) { const v = f(); if (v) return v; await wait(50); } return f(); };
+    pages = {}
+    # By the clock: a page in a background tab has its timers slowed to one a second or less.
+    UNTIL = """const until = async (f, ms = 10000) => { for (const end = Date.now() + ms; Date.now() < end; await wait(50)) { const v = f(); if (v) return v; } return f(); };
       const row = id => doc.querySelector(`#tabs .tab[data-tab="${id}"]`), tile = id => doc.querySelector(`#essentials .tile[data-tab="${id}"]`);
       const nameOf = id => row(id)?.querySelector(".title")?.textContent;
       const tip = e => e?.title.split("\\n")[0];
@@ -1605,15 +1611,32 @@ def alone_tab_names(m):
           """ + UNTIL + """
           (async () => { """ + script + """ })().then(r => done(JSON.parse(JSON.stringify(r ?? null))), e => done({error: String(e)}));""", "args": list(args)})
 
+    def switch_to(text):
+        """To the tab with `text` in its address. Switching to a tab loads it, so a walk through
+        placeholders leaves them loaded for the groups after this one: from the end, where a new
+        tab is, and only once. A tab can close during the walk, and a new one take a moment."""
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        if text in pages:
+            m.cmd("WebDriver:SwitchToWindow", {"handle": pages[text], "focus": False})
+            return
+        for _ in range(100):
+            for h in reversed(m.cmd("WebDriver:GetWindowHandles")):
+                try:
+                    m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+                    if text in m.cmd("WebDriver:GetCurrentURL"):
+                        pages[text] = h
+                        return
+                except RuntimeError as e:
+                    if "no such window" not in str(e):
+                        raise
+            time.sleep(0.1)
+        raise RuntimeError(f"no tab with {text}")
+
     def front():
         m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes(args[0])); w.focus();
           if (w.gBrowser.selectedTab !== t) { w.__beforeNames ??= w.gBrowser.selectedTab; w.gBrowser.selectedTab = t; await wait(500); }
           return 1;""", PAGE)
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if PAGE in m.cmd("WebDriver:GetCurrentURL"):
-                return
+        switch_to(PAGE)
 
     def behind(body, *args):
         """Something that happens beside the open box, from the browser's side, while the page keeps its focus."""
@@ -1621,6 +1644,14 @@ def alone_tab_names(m):
         out = m.js(H + body, *args)
         front()
         return out
+
+    # Firefox's notice that an extension hides tabs opens at every hide until you keep them hidden,
+    # and takes the focus, which closes an open box. A person answers it once; so does this.
+    m.js(H + """const {ExtensionSettingsStore} = ChromeUtils.importESModule("resource://gre/modules/ExtensionSettingsStore.sys.mjs");
+      await ExtensionSettingsStore.initialize();
+      await ExtensionSettingsStore.addSetting(args[0], "tabHideNotification", args[0], true, () => false);
+      for (const w of wins()) for (const p of w.document.querySelectorAll("panel")) if (p.state === "open") p.hidePopup();
+      await wait(300); return 1;""", EXT_ID)
 
     # Two folders, the first only to go away while the box is open, two saved tabs, and a second window.
     more_tabs_here(m, "names")
@@ -1633,7 +1664,7 @@ def alone_tab_names(m):
       send({type: "moveTab", tabId: tabs[0], folder: headOf("Names"), before: null});
       await until(() => row(tabs[0])?.dataset.folder);
       const tileEl = doc.querySelector("#essentials .tile");
-      return {above: headOf("Above"), names: headOf("Names"), saved: tabs[0], plain: tabs[1], tile: Number(tileEl.dataset.tab), tileTitle: tip(tileEl), page: nameOf(tabs[0])};""")
+      return {space, above: headOf("Above"), names: headOf("Names"), saved: tabs[0], plain: tabs[1], tile: Number(tileEl.dataset.tab), tileTitle: tip(tileEl), page: nameOf(tabs[0])};""")
     check("names: a folder with a saved tab to name", setup.get("saved") and setup.get("page") and setup.get("tile"), str(setup))
     m.js(H + """if (!other()) { const w = main().OpenBrowserWindow(); w.__smoke = true; await wait(4000); } return 1;""")
     saved, tile_id, page_title = setup["saved"], setup["tile"], setup["page"]
@@ -1786,12 +1817,18 @@ def alone_tab_names(m):
 
         # Every window: the second window's own sidebar page, and its placeholder.
         m.js(H + """const t = other().gBrowser.addTrustedTab("moz-extension://" + JSON.parse(Services.prefs.getStringPref("extensions.webextensions.uuids"))[args[0]] + args[1] + "?second", {inBackground: true}); await wait(1500); return 1;""", EXT_ID, PAGE)
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if "?second" in m.cmd("WebDriver:GetCurrentURL"):
-                break
-        r = in_front("""await until(() => [...doc.querySelectorAll("#essentials .tile")].some(t => tip(t) === "Jira")); return [...doc.querySelectorAll("#essentials .tile")].map(tip);""")
+        switch_to("?second")
+        # It may be in another space, whose essentials are others; then to this one and back.
+        # (Not the window you are using, so that selects a placeholder without pulling its tab in.)
+        r = in_front("""const names = () => [...doc.querySelectorAll("#essentials .tile")].map(tip);
+          const button = id => doc.querySelector(`#spaces .space[data-space="${id}"]`);
+          const was = await until(() => doc.documentElement.dataset.space);
+          if (was !== args[0]) button(args[0]).click();
+          await until(() => names().includes("Jira"));
+          const seen = names();
+          if (was !== args[0]) button(was).click();
+          await until(() => doc.documentElement.dataset.space === was);
+          return seen;""", setup["space"])
         check("a second window's sidebar shows the same name", "Jira" in (r or []), str(r))
         m.chrome()
         r = m.js(H + """const list = (await storage("%s", ["essentials"])).essentials, e = list.find(x => x.name === "Jira");
@@ -1898,7 +1935,7 @@ def alone_tab_names(m):
         m.js(H + """const w = main(); if (w.__beforeNames && !w.__beforeNames.closing) w.gBrowser.selectedTab = w.__beforeNames; delete w.__beforeNames; await wait(500); return 1;""")
     sidebar_page(m, """const heads = [...doc.querySelectorAll("#tabs .folder")].filter(f => ["Names", "Last", "Above"].includes(f.querySelector(".head .title").textContent));
       for (const f of heads) send({type: "deleteFolder", key: f.dataset.key});
-      await wait(1000);""")
+      await wait(4500);""")  # a tab that lost its name tells its placeholders a moment later (refreshGhostsSoon)
 
 
 def alone_settings(m):

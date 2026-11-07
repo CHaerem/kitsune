@@ -112,15 +112,19 @@ test("an ordinary tab gets no name, and a live folder's tab neither", async () =
 
 test("a tab that left its folder has no name any more, and a folder keeps its own", async () => {
   const ff = new FakeFirefox();
-  const { x, one, liveSaved } = await twoWindows(ff);
+  const { x, one, liveSaved, ghostSaved } = await twoWindows(ff);
   const a = sidebar(x, one.id);
   await a.send({ type: "renameTab", tabId: liveSaved.id, name: "Sprint board" });
+  ff.tabs.get(ghostSaved.id).discarded = true; // it unloads itself; the fake leaves it loaded
   await a.send({ type: "moveTab", tabId: liveSaved.id, before: null, folder: null });
   await wait(200);
   const all = await x.js("getSynced()");
   assert.ok(!("saved" in all.s) && !("name" in all.s));
   assert.equal(all.F.name, "Kept");
   assert.equal(row(a.last(), liveSaved.id).title, "Board");
+  await wait(4000);
+  const reloaded = ff.log.filter(l => l[0] === "update-url" && l[1] === ghostSaved.id).length;
+  assert.ok(reloaded >= 2, "the placeholder took the name, and is told when it is gone");
   x.kill();
 });
 
@@ -196,6 +200,20 @@ test("a saved tab made an essential keeps its name, and an essential made an ord
   const key = ff.values.get(liveSaved.id)?.syncKey;
   assert.ok(key, "an ordinary tab again");
   assert.ok(!("name" in (await x.js("getSynced()"))[key]));
+  x.kill();
+});
+
+// Seen in a real Firefox, without any name: the unpin was taken for Tidier's own change, so
+// the tab stayed an unpinned placeholder of an essential that also stayed in the list.
+test("a placeholder made an essential and at once taken back is an ordinary tab with its page", async () => {
+  const ff = new FakeFirefox();
+  const { x, two, ghostOrdinary } = await twoWindows(ff);
+  const b = sidebar(x, two.id);
+  await b.send({ type: "pin", tabId: ghostOrdinary.id, pinned: true });
+  await b.send({ type: "pin", tabId: ghostOrdinary.id, pinned: false });
+  await wait(1000);
+  assert.equal((await x.js("getList()")).length, 0);
+  assert.equal(ff.tabs.get(ghostOrdinary.id).url, "https://b.example/");
   x.kill();
 });
 
