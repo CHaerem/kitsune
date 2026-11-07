@@ -148,15 +148,15 @@ archivedBox.oncontextmenu = e => e.preventDefault(); // Firefox's menu for a pag
 // the second would land on what has come under the pointer: another tab selected, "New tab"
 // pressed, the next row forgotten or opened, a folder renamed by the double click itself.
 let archivedClickIn = false; // the last single click was in the view
-const secondClick = e => {
+const archivedSecondClick = e => {
   if (!archivedClickIn || e.detail < 2) return false;
   e.stopPropagation();
   e.preventDefault();
   return true;
 };
-addEventListener("dblclick", secondClick, true);
+addEventListener("dblclick", archivedSecondClick, true);
 addEventListener("click", e => {
-  if (secondClick(e)) return;
+  if (archivedSecondClick(e)) return;
   archivedClickIn = archivedBox.contains(e.target);
   if (archivedSpace && !archivedClickIn && !e.target.closest?.("#menu")) closeArchived();
 }, true);

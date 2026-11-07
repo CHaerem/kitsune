@@ -1477,7 +1477,7 @@ def alone_archived(m):
     TITLE = "A page with a title"
     s = m.js(H + settled + """const w = main(), [pages, ctx] = args, away = ctx === 1 ? 2 : 1;
       const open = (q, c) => w.gBrowser.addTrustedTab(pages + "/titled?smoke-archived-" + q, {userContextId: c, inBackground: true});
-      const made = [open("forget", ctx), open("back", ctx), open("away", away)];
+      const made = [open("forget", ctx), open("back-slow", ctx), open("away", away)];
       await settled(() => made.every(t => key(w, t) && t.label === %s && other().gBrowser.tabs.some(x => key(other(), x) === key(w, t))));
       await wait(500);
       return {keys: made.map(t => JSON.parse(key(w, t))), urls: made.map(url), away: "firefox-container-" + away, labels: made.map(t => t.label)};""" % json.dumps(TITLE), m.pages, ctx)
@@ -1591,9 +1591,12 @@ def alone_archived(m):
     check("a click on a space closes the view, and goes there", r.get("closed") and r.get("went"), str(r))
     r = sidebar_page(m, box + """page.openArchived(); await settled(() => open() && rowsHere().length); await settled(() => box.getBoundingClientRect().left === 0); return rowsHere().length;""")
 
-    # A click brings it back: with its title from the very first view, selected, in its space,
-    # also with a rule for its address: it is coming back to where it was, not a new tab.
+    # A click brings it back: with its title from the very first view, long before its page
+    # has answered, selected, in its space, also with a rule for its address: it is coming
+    # back to where it was, not a new tab.
     extension_message(m, {"type": "settings:rules", "rules": [{"url": "smoke-archived-back", "space": s["away"]}]})
+    # (Firefox can find a title in its history by itself; the list must not depend on that.)
+    m.js(H + """await main().PlacesUtils.history.remove(args[0]); return 1;""", back_url)
     r = sidebar_page(m, box + """
       const seen = [];
       port.onMessage.addListener(v => { for (const t of v.tabs) if (!seen.some(x => x.id === t.id)) seen.push({id: t.id, title: t.title}); });
@@ -1607,9 +1610,11 @@ def alone_archived(m):
       await settled(() => doc.querySelector("#tabs > .tab.active"));
       const row = doc.querySelector("#tabs > .tab.active");
       const fresh = seen.filter(x => !had.has(x.id));
-      return {closed, title: row.querySelector(".title").textContent, first: fresh.map(x => x.title),
+      const title = row.querySelector(".title").textContent;
+      await wait(1000);
+      return {closed, title, later: row.querySelector(".title").textContent, first: fresh.map(x => x.title),
               list: await page.browser.runtime.sendMessage({type: "archivedTabs", space: args[0]}).then(l => JSON.parse(JSON.stringify(l)))};""", space)
-    check("a click on a row closes the view, and the tab comes back selected, with its title at once", r.get("closed") and r.get("title") == TITLE and r.get("first") and r["first"][0] == TITLE, str(r))
+    check("a click on a row closes the view, and the tab comes back selected, with its title at once", r.get("closed") and r.get("title") == TITLE and r.get("later") == TITLE and r.get("first") and r["first"][0] == TITLE, str(r))
     check("it leaves the list", r.get("list") == [], str(r))
     t = m.js(H + settled + """const u = args[0];
       await settled(() => wins().every(w => w.gBrowser.tabs.some(t => key(w, t) && (url(t) === u || value(w, t, "syncRole") === "ghost" && String(t.label) === %s))));

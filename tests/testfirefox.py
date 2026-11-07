@@ -81,8 +81,13 @@ def serve_pages():
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             body = PAGES.get(self.path.split("?")[0])
+            slow = "slow" in self.path  # for what must show before a page has answered, so not from the cache either
+            if slow:
+                time.sleep(2)
             self.send_response(200 if body else 404)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            if slow:
+                self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write((body or "").encode())
 
