@@ -2025,6 +2025,7 @@ def alone_command_bar(m):
 def alone_bar_edges(m):
     """Around the bar: other keys, things changing while it is open, a prompt left behind."""
     start = m.js(H + """const w = main(); w.focus(); await wait(300); return {space: w.gBrowser.selectedTab.userContextId, tabs: w.gBrowser.tabs.length};""")
+    kept_before = extension_message(m, {"type": "stats"})["sizes"]
     keys = m.js(BAR_KEYS)
     check("with Tidier alone the command bar has its keys", len(keys) == 2, str(keys))
 
@@ -2128,6 +2129,10 @@ def alone_bar_edges(m):
     time.sleep(1)
     left = m.js(H + """return wins().filter(w => !w.toolbar.visible).length;""")
     check("no window stays behind after all that", left == 0, str(left))
+    m.js(H + "await wait(%d); return 1;" % 2500)  # marks on tabs made a moment ago last that long
+    kept = extension_message(m, {"type": "stats"})["sizes"]
+    grown = {name: (kept_before[name], kept[name]) for name in kept if kept[name] > kept_before[name]}
+    check("and no list in memory has grown with all those bars", not grown, str(grown))
 
 
 def alone_end(m):

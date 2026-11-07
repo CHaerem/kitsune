@@ -46,6 +46,8 @@ test("the active space does not lift a poor match over a good one", () => {
 test("the tab you are on comes after other tabs that match as well", () => {
   const items = [tab("Docs one", { here: true, current: true, lastUsed: NOW }), tab("Docs two", { here: true, lastUsed: NOW - 3600e3 })];
   assert.deepEqual(titles(rankResults("docs", items, NOW)), ["Docs two", "Docs one"]);
+  const elsewhere = [items[0], tab("Docs three", { here: false, lastUsed: NOW - 30 * 24 * 3600e3 })];
+  assert.deepEqual(titles(rankResults("docs", elsewhere, NOW)), ["Docs three", "Docs one"], "also when the other is in another space, and old");
 });
 
 test("no fuzzy nonsense: letters must stand together, and one or two must start a word", () => {
@@ -263,8 +265,10 @@ test("the bar finds a placeholder by the real tab's address, unloaded tabs, esse
   const ff = new FakeFirefox();
   const { v } = world(ff);
   const x = await started(ff);
+  ff.synced.nowhere = { url: "https://nowhere.example/", title: "In no window", cookieStoreId: C1, parentKey: null, added: 1 };
   const page = await openBar(ff, x, v.id);
   const { items, space } = page.sent[0];
+  assert.ok(!items.some(i => i.id === "tab:nowhere"), "a tab no window has is nothing to go to");
   assert.equal(space, C1);
   const byId = id => items.find(i => i.id === id);
   assert.equal(byId("tab:there").url, "https://there.example/page"); // here only a placeholder
@@ -652,11 +656,11 @@ test("a sidebar that does not answer does not hold up the bar", async () => {
 test("what archiving closed and what was closed can be found, and come back", async () => {
   const ff = new FakeFirefox();
   const { w } = world(ff);
-  ff.recentlyClosed = [
+  const x = await started(ff);
+  ff.recentlyClosed = [ // after the start, or Tidier has already forgotten the placeholder
     { lastModified: 5, tab: { sessionId: "s1", url: "https://closed.example/", title: "Closed one", windowId: w.id } },
     { lastModified: 4, tab: { sessionId: "s2", url: GHOST("ghost", "x"), title: "A placeholder", windowId: w.id } },
   ];
-  const x = await started(ff);
   x.js(`globalThis.archivedTabs = async () => [{ url: "https://old.example/", title: "Archived one", icon: null, when: 3, space: "${C2}" }];`);
   let restored = null;
   x.b.sessions.restore = async id => { restored = id; };
@@ -957,4 +961,17 @@ test("the sidebar answers with the selection, also when the tab you are on is no
   const link = sidebarLink({ selection: true, picked: [2] });
   await new Promise(r => setTimeout(r, 5));
   assert.equal(link({ type: "commandBarSelection", windowId: 8, tabId: 1 }), undefined, "another window's question");
+});
+
+test("moving back to Sidebery takes the bar's keys away again", async () => {
+  const ff = new FakeFirefox();
+  world(ff);
+  const x = await started(ff);
+  const reset = [];
+  x.b.commands.reset = async name => { reset.push(name); };
+  x.b.tabs.hide = async () => {};
+  x.b.runtime.reload = () => {};
+  await x.js("moveBack()");
+  assert.ok(reset.includes("command-bar") && reset.includes("command-bar-t"), reset.join());
+  x.kill();
 });
