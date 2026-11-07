@@ -2158,8 +2158,14 @@ def alone_stay_put(m):
       return out;""")
     check("each tab is in a window once and live in one window, after all this", r == {"doubled": [], "loadedTwice": []}, str(r))
 
-    # Its tabs must be out of the folder before closing them, or they only unload.
-    sidebar_page(m, STAY_PUT + """for (const head of doc.querySelectorAll("#tabs .folder .head")) if (head.querySelector(".title").textContent === "Stay") send({type: "deleteFolder", key: head.dataset.folderHead});
+    # Its tabs must be out of the folder before closing them, or they only unload; and one
+    # that is only a placeholder by now, having no page, is closed for good from the folder.
+    sidebar_page(m, STAY_PUT + """for (const head of doc.querySelectorAll("#tabs .folder .head")) if (head.querySelector(".title").textContent === "Stay") {
+        const unloaded = () => [...head.parentElement.querySelectorAll(".tab.unloaded")];
+        for (const r of unloaded()) await tabs.remove(Number(r.dataset.tab));
+        await until(() => !unloaded().length);
+        send({type: "deleteFolder", key: head.dataset.folderHead});
+      }
       await until(() => !folders().some(f => f.name === "Stay")); list.style.cssText = "";""")
     m.js(H + """await removeWhere((x, t) => url(t).includes("smoke-stay"));
       const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t);
