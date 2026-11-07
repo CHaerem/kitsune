@@ -913,6 +913,24 @@ test("For you comes back after an update, with its note and its mark", async () 
   y.kill();
 });
 
+test("answers do not pile up in memory while the bridge stays on", async () => {
+  // Racing every call against one promise that lasts as long as the bridge leaves something on
+  // that promise per call that holds the call's result, so every page and picture read would
+  // stay until a Stop. Nothing here can see memory reliably, so this looks for the pattern.
+  const ff = new FakeFirefox();
+  alone(ff);
+  const x = await start(ff);
+  await x.settings("on", { on: true });
+  x.js(`{ const race = Promise.race, seen = new Set(); globalThis.racedAgain = 0;
+    Promise.race = function (list) { for (const p of list) { if (seen.has(p)) globalThis.racedAgain++; seen.add(p); } return race.call(this, list); }; }`);
+  const host = x.hosts[0];
+  const { tab } = JSON.parse((await host.call("open_tab", { url: "https://a.example/" })).text);
+  for (let i = 0; i < 5; i++) assert.ok((await host.call("read_page", { tab })).ok);
+  assert.equal(x.js("racedAgain"), 0);
+  assert.equal(x.js("bridgeCalls.size"), 0, "and nothing is kept of a call that has ended");
+  x.kill();
+});
+
 test("the background scripts: what others call into is there before they can call", () => {
   // A sidebar can say hello while the scripts are still loading (Firefox starts it by itself
   // at a start), and a view then calls here (bridgeRests, forYouNotes). With this at the end

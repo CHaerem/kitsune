@@ -354,7 +354,7 @@ class Messages(Base):
         conn.connect("bridge.sock")
         os.chdir(cwd)
         conn.settimeout(5)
-        for rubbish in (b'{"id": 1, "tool": "x", "args": {"a": NaN}}\n', b'{"id": 1, "tool": "x", "args": {"a": -Infinity}}\n', b'{"id": 1, "tool": "x", "args": ' + b"[" * 100_000 + b"]" * 100_000 + b"}\n"):
+        for rubbish in (b'{"id": 1, "tool": "x", "args": {"a": NaN}}\n', b'{"id": 1, "tool": "x", "args": {"a": -Infinity}}\n', b'{"id": 1, "tool": "x", "args": {"a": 1e999}}\n', b'{"id": 1, "tool": "x", "args": ' + b"[" * 100_000 + b"]" * 100_000 + b"}\n"):
             conn.sendall(rubbish)
             self.assertIn(b"Not a request", conn.recv(65536))
         conn.close()

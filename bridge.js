@@ -437,7 +437,7 @@ let bridgePort = null; // only while the bridge is on
 let bridgeWanted = false; // on, whether or not the host is there right now
 let bridgeReady = false;
 let bridgeEpoch = 0; // grows at every stop: what an agent had under way goes no further
-let bridgeHalt = null; // rejected at a stop, so a call that is waiting ends at once
+const bridgeCalls = new Set(); // how to end each call under way, so that a Stop ends what is waiting at once
 let bridgeTries = 0, bridgeRetry = null;
 let bridgeServer = null; // where the MCP server is, for the settings page
 // The line to give to Claude Code. Quoted when it has to be: this folder can have a space in it.
@@ -474,12 +474,6 @@ function bridgeConnect() {
   const port = browser.runtime.connectNative(BRIDGE_HOST);
   bridgePort = port;
   bridgeReady = false;
-  if (!bridgeHalt) {
-    let reject;
-    const promise = new Promise((_, r) => { reject = r; });
-    promise.catch(() => {});
-    bridgeHalt = { promise, reject };
-  }
   port.onMessage.addListener(msg => {
     if (port !== bridgePort || !msg) return;
     if (msg.type === "ready") {
@@ -524,11 +518,21 @@ function bridgeCut() {
   bridgeReady = false;
   bridgeCurrent = null;
   bridgeProblem = null;
-  bridgeHalt?.reject(bridgeRefusal("The bridge was stopped."));
-  bridgeHalt = null;
+  for (const end of bridgeCalls) end(bridgeRefusal("The bridge was stopped."));
+  bridgeCalls.clear();
   try { port?.disconnect(); } catch (err) { /* already gone */ }
   setNotice("bridge", null);
   agentQuiet();
+}
+
+// Not Promise.race with one promise that lasts as long as the bridge: each race leaves
+// something on that promise that holds its result, so every page and picture an agent
+// read would stay in memory until a Stop.
+function bridgeUntilStopped(call) {
+  return new Promise((resolve, reject) => {
+    bridgeCalls.add(reject);
+    call.then(resolve, reject).finally(() => bridgeCalls.delete(reject));
+  });
 }
 
 async function bridgeAnswer(port, msg) {
@@ -537,7 +541,7 @@ async function bridgeAnswer(port, msg) {
   bridgeBusy++;
   let reply;
   try {
-    reply = await Promise.race([bridgeRun(name, ctx), bridgeHalt.promise]);
+    reply = await bridgeUntilStopped(bridgeRun(name, ctx));
   } catch (err) {
     if (port !== bridgePort) return; // stopped meanwhile: nothing goes back, and nothing shows
     if (!err?.refused) console.warn("Tidier: an agent's call", name, err);

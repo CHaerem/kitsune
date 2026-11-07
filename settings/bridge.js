@@ -45,7 +45,7 @@ function bridgeDrawState(state) {
     const choose = bridgeEl("select", { title: s.name }, ...[["", "Closed"], ["read", "Can read"], ["write", "Can read and act"]]
       .map(([value, textContent]) => bridgeEl("option", { value, textContent, selected: (s.mode ?? "") === value })));
     choose.dataset.space = s.id;
-    choose.onchange = () => bridgeAsk("allow", { space: s.id, mode: choose.value || null }).then(bridgeDrawState);
+    choose.onchange = () => { bridgeAsk("allow", { space: s.id, mode: choose.value || null }); }; // not drawn again: the keyboard stays on this list
     return bridgeEl("div", { className: "line" }, bridgeEl("span", { textContent: "●", style: `color:${s.color}` }), bridgeEl("span", { className: "bridge-space-name", textContent: s.name }), choose);
   }));
 }

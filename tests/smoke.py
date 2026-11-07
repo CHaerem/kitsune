@@ -1635,6 +1635,9 @@ def alone_bridge(m):
       s.dispatchEvent(new page.Event("change", {bubbles: true})); await wait(600); return doc.querySelectorAll("#bridge-spaces select").length;""", space, mode)
     open_as = lambda mode: open_space(f"firefox-container-{mine['context']}", mode)
     check("the settings page lists the other spaces", open_as("read") >= 3 - 1)
+    r = ext_page(m, "/settings/settings.html", """const s = doc.querySelector(`#bridge-spaces select[data-space="${args[0]}"]`); s.focus(); s.dispatchEvent(new page.Event("change", {bubbles: true})); await wait(300);
+      return doc.activeElement?.dataset?.space ?? null;""", f"firefox-container-{mine['context']}")
+    check("choosing for a space keeps the keyboard on its list", r == f"firefox-container-{mine['context']}", str(r))
     text, is_error, _ = client.call("read_page", tab=other_tab)
     check("a space you open read-only can be read", not is_error and "<untrusted" in text, text[:200])
     check("the agent is told which it is", "read only" in client.call("list_spaces")[0])
@@ -1800,7 +1803,8 @@ def bridge_shot(m, name, path="/sidebar/sidebar.html"):
 
     shoot("")
     m.js("Services.prefs.setIntPref('layout.css.prefers-color-scheme.content-override', 1); return 1;")
-    time.sleep(0.5)
+    # (Without the look from dotfiles, whose tints per space are for a dark theme.)
+    ext_page(m, path, """for (const style of doc.head.querySelectorAll("style")) style.remove(); await wait(500); return 1;""")
     shoot("-light")
     m.js("Services.prefs.clearUserPref('layout.css.prefers-color-scheme.content-override'); return 1;")
 
