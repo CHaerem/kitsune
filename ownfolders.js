@@ -77,7 +77,9 @@ async function moveTab(windowId, tabId, beforeTabId, folderKey) {
     for (const w of await normalWindows()) {
       const tabs = await browser.tabs.query({ windowId: w.id });
       const reps = repMap(tabs);
-      if (reps.has(key)) await moveInWindow(tabs, reps.get(key), beforeKey ? reps.get(beforeKey) : null);
+      // (Here the tab you dropped it on, also a new tab that has no copy elsewhere yet: it
+      // would otherwise go to the end of the list instead of where you put it.)
+      if (reps.has(key)) await moveInWindow(tabs, reps.get(key), w.id === windowId ? beforeTabId : beforeKey ? reps.get(beforeKey) : null);
     }
   } else {
     await moveInWindow(await browser.tabs.query({ windowId }), tabId, beforeTabId);

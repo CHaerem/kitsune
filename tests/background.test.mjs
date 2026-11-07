@@ -1588,3 +1588,18 @@ test("a reopened window's placeholder whose title comes late, as an address, get
   assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === back.id), "its placeholder is loaded again");
   x.kill();
 });
+
+test("a tab dragged above a new tab in the sidebar is put there, not at the end", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/"), c: entry("https://c.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const fresh = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://c.example/", cookieStoreId: C1 }, { syncKey: "c", syncRole: "live" });
+  const x = await alone(ff);
+  const c = ff.list(w.id).find(t => t.url === "https://c.example/");
+  await x.js(`moveTab(${w.id}, ${c.id}, ${fresh.id}, undefined)`);
+  assert.deepEqual(ff.list(w.id).map(t => t.id), [a.id, c.id, fresh.id, ff.list(w.id).find(t => t.url === "https://b.example/").id]);
+  x.kill();
+});
