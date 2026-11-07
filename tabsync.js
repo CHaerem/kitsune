@@ -124,7 +124,13 @@ async function createRep(windowId, key, entry, parentId, index) {
   const props = { windowId, active: false, cookieStoreId: entry.cookieStoreId };
   if (parentId !== undefined && !tidierAlone) props.openerTabId = parentId;
   if (index !== undefined) props.index = index;
-  const tab = await browser.tabs.create({ ...props, url: entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key) });
+  const url = entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key);
+  const tab = await browser.tabs.create({ ...props, url }).catch(err => {
+    // Its folder closed, or went to another window, a moment ago: better outside it than not there.
+    if (props.openerTabId === undefined || !/^(Invalid tab ID|Opener tab must)/.test(err?.message)) throw err;
+    const { openerTabId, ...rest } = props;
+    return browser.tabs.create({ ...rest, url });
+  });
   syncBusy.add(tab.id);
   setTimeout(() => syncBusy.delete(tab.id), SETTLE_MS);
   await setRole(tab.id, key, entry.group ? "copy" : "ghost");

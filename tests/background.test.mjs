@@ -1690,3 +1690,14 @@ test("a window that closes while its sidebar is waited for does not hold everyth
   assert.ok(ff.clock.now - t0 < 1000, `the queue was free after ${ff.clock.now - t0} ms`);
   x.kill();
 });
+
+test("a ghost whose folder closes or leaves its window in that moment is still made", async () => {
+  const { ff, x, windows: [a, b] } = await chaosStart();
+  const away = ff.openTab(a.id, { url: "about:blank" }); // the parent as last seen: in another window now
+  const made = await ff.clock.settled(x.js(`createRep(${b.id}, "k", { url: "https://k.example/", cookieStoreId: "${C1}" }, ${away.id})`));
+  assert.equal(made.windowId, b.id);
+  const closed = await ff.clock.settled(x.js(`createRep(${b.id}, "k2", { url: "https://l.example/", cookieStoreId: "${C1}" }, 99999)`));
+  assert.equal(closed.windowId, b.id);
+  await assert.rejects(ff.clock.settled(x.js(`createRep(99999, "k3", { url: "https://m.example/", cookieStoreId: "${C1}" })`)), /Invalid window ID/);
+  x.kill();
+});
