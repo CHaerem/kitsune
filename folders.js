@@ -37,7 +37,7 @@ async function foldersFirstAll() {
 // and a tab dragged out of a folder must not still count as in it.
 const foldersTimers = new Map();
 const foldersFirstSoon = windowId => {
-  if (!started) return;
+  if (!started || tidierAlone) return; // Tidier's sidebar draws folders first itself
   clearTimeout(foldersTimers.get(windowId));
   foldersTimers.set(windowId, setTimeout(() => { foldersTimers.delete(windowId); serial(() => foldersFirst(windowId)); }, FOLDERS_SETTLE_MS));
 };

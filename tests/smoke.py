@@ -1300,14 +1300,22 @@ def move_over(m):
     no_problems(m, "after moving over")
     keys = m.js(keys_now, EXT_ID)
     check("after moving over, Tidier's keys are given", keys["tab-1"] == "Ctrl+1" and keys["space-1"] == "MacCtrl+1" and keys["next-tab"] == "Ctrl+MacCtrl+Down", str(keys))
+    # A placeholder made from here on has no page, and Sidebery draws the tab itself:
+    # after moving back it has its icon.
+    icon_key = m.js(H + """const t = main().gBrowser.addTrustedTab(args[0] + "/icon", {userContextId: 1, inBackground: true}); await wait(4000); return JSON.parse(key(main(), t));""", m.pages)
     # And back: Sidebery on first, and its folder pages return.
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       await (await AddonManager.getAddonByID("%s")).enable(); await wait(4000); return 1;""" % SIDEBERY_ID)
     fire_message(m, {"type": "settings:moveBack"})
     m.js(H + "await wait(10000); return 1;")
     back = m.js(record)
-    check("after moving back, every folder has its tabs and its pages", back["folders"] == before["folders"] and back["tabs"] == before["tabs"] and back["pages"] == before["pages"], f"{before} -> {back}")
+    check("after moving back, every folder has its tabs and its pages", back["folders"] == before["folders"] and [k for k in back["tabs"] if k != icon_key] == before["tabs"] and back["pages"] == before["pages"], f"{before} -> {back}")
     check("after moving back, Sidebery has the keys again", m.js(keys_now, EXT_ID) == keys0, str(m.js(keys_now, EXT_ID)))
+    r = m.js(H + """const copies = () => wins().flatMap(w => w.gBrowser.tabs.filter(t => value(w, t, "syncKey") === args[0] && value(w, t, "syncRole") === "ghost"));
+      for (let i = 0; i < 80 && !(copies().length && copies().every(t => t.image && !t.linkedPanel)); i++) await wait(250);
+      return copies().map(t => ({icon: (t.image || "").slice(0, 10), loaded: !!t.linkedPanel}));""", icon_key)
+    check("after moving back, a placeholder made meanwhile has its icon, and is unloaded", r and all(x["icon"] == "data:image" and not x["loaded"] for x in r), str(r))
+    m.js(H + """await removeWhere((w, t) => value(w, t, "syncKey") === args[0]); return 1;""", icon_key)
 
 
 # The windows whose essentials (pinned tabs) are not together by space, with
@@ -1547,6 +1555,8 @@ def alone_live_folders(m):
     r = m.js(H + """await wait(1500); const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
       return {tabs: Object.values(all).filter(e => e.liveFolder === "prs").length, left: wins().flatMap(w => w.gBrowser.tabs).filter(t => t.label.includes("r#")).length, folder: Object.values(all).some(e => e.live === "prs")};""" % EXT_ID)
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
+    r = sidebar_page(m, RECENTLY_CLOSED_PLACEHOLDERS)
+    check("and it leaves no placeholder in Recently Closed, for ⌘⇧T to bring back", not r["left"], str(r))
 
 
 def alone_safe_moves(m):
@@ -8570,6 +8580,275 @@ def alone_bar_edges(m):
     check("and no list in memory has grown with all those bars", not grown, str(grown))
 
 
+# How many tabs alone_many uses; TIDIER_MANY=1000 measures more (the limits below
+# are for its default).
+MANY = int(os.environ.get("TIDIER_MANY", "300"))
+# In the sidebar's page, which is a background tab: its timers are slowed to one a
+# second, but a change on the page is seen at once.
+MANY_PAGE = """
+  const ask = async msg => JSON.parse(page.JSON.stringify(await page.browser.runtime.sendMessage(page.JSON.parse(JSON.stringify(msg)))));
+  const bg = obj => page.JSON.parse(JSON.stringify(obj));
+  const until = test => new Promise(resolve => {
+    if (test()) return resolve(true);
+    const o = new MutationObserver(() => { if (test()) { o.disconnect(); resolve(true); } });
+    o.observe(doc.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ["class"]});
+    setTimeout(() => { o.disconnect(); resolve(false); }, 60000);
+  });
+  const median = list => [...list].sort((a, b) => a - b)[list.length >> 1];
+  const rowOf = id => doc.querySelector(`[data-tab="${id}"]`);
+  const windowId = (await page.browser.windows.getCurrent()).id;
+"""
+MANY_COUNT = H + """const w = main(), keys = new Set(w.gBrowser.tabs.filter(t => url(t).includes("smoke-many-") && role(w, t) === "live").map(t => key(w, t)));
+  return wins().map(x => x.gBrowser.tabs.filter(t => keys.has(key(x, t))).length);"""
+
+
+def many_wait(m, test, limit):
+    """Ask Firefox until `test` holds of the answer, and say how long that took (None: never)."""
+    t0 = time.time()
+    while time.time() - t0 < limit:
+        reply = m.js(test)
+        if reply is True or (isinstance(reply, list) and reply and reply[0] is True):
+            return round(time.time() - t0, 1)
+        time.sleep(0.25)
+    return None
+
+
+def many_diff(before, after):
+    return {k: round(after[k] - before[k]) for k in ("jobs", "queueMs", "lookups", "views", "viewMs")}
+
+
+# Placeholders in Recently Closed, in a page of Tidier's own: they go a moment after they
+# are closed, so they are given a moment. (The smoke test's own helper pages are kind=test.)
+RECENTLY_CLOSED_PLACEHOLDERS = """
+  const look = async () => (await page.browser.sessions.getRecentlyClosed()).map(c => c.tab?.url || "").filter(u => /ghost\\.html\\?kind=(ghost|essential|lazy)/.test(u));
+  let left = await look();
+  for (let i = 0; i < 40 && left.length; i++) { await wait(500); left = await look(); }
+  return {left};"""
+
+
+def alone_many(m):
+    # The owner has about 33 essentials and 53 tabs; this is well beyond that. All of it
+    # in the real test Firefox, with tabs that were never loaded, as after a restart, so
+    # it measures Tidier and not page loads. Each limit is far above what it takes, so a
+    # busy machine does not fail it; the numbers are printed to compare with.
+    n = MANY
+    numbers = {"tabs": n}
+    made_window = m.js(H + """const a = main(); if (other()) return false;
+      const w = a.OpenBrowserWindow(); w.__smoke = true;
+      for (let i = 0; i < 100 && !w.gBrowser; i++) await wait(100);
+      await wait(4000); return true;""")
+    stats = sidebar_page(m, MANY_PAGE + """return {stats: await ask({type: "stats"}), active: spaces().find(s => s.active).id};""")
+    stats, space0 = stats["stats"], stats["active"]
+    numbers["memory0"] = m.js(PROC_INFO)["mb"]
+    t0 = time.time()
+    m.js(H + """const w = main();
+      for (let i = 0; i < args[0]; i++) {
+        w.gBrowser.addTrustedTab("https://example.org/?smoke-many-" + i, {userContextId: 1 + i % 3, inBackground: true, createLazyBrowser: true});
+        if (i % 10 === 9) await wait(0);
+      }
+      return 1;""", n)
+    numbers["createdS"] = round(time.time() - t0, 1)
+    spread = None
+    while time.time() - t0 < 900:
+        spread = m.js(MANY_COUNT)
+        if len(spread) >= 2 and all(c == n for c in spread):
+            break
+        time.sleep(1)
+    numbers["burstS"] = round(time.time() - t0, 1)
+    check(f"{n} tabs opened at once are in both windows ({numbers['burstS']} s)", len(spread) >= 2 and all(c == n for c in spread), str(spread))
+    r = sidebar_page(m, MANY_PAGE + """return {stats: await ask({type: "stats"}), rows: doc.querySelectorAll("#tabs .tab").length};""")
+    burst = many_diff(stats, r["stats"])
+    numbers["burst"] = {**burst, "longestJobMs": round(r["stats"]["longestJobMs"]), "longestViewMs": round(r["stats"]["longestViewMs"])}
+    numbers["memory1"] = m.js(PROC_INFO)["mb"]
+    check("the sidebar shows them", r["rows"] >= n // 3, str(r))
+    check(f"a burst of tabs does not build a view per tab ({burst['views']})", burst["views"] < n, str(burst))
+    check(f"and the queue is not held for long ({burst['queueMs']} ms for {n} tabs)", burst["queueMs"] < n * 60, str(burst))
+    # Placeholders load no page, which is what would take the memory.
+    loaded = many_wait(m, H + """return wins().every(w => !w.gBrowser.tabs.some(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html")));""", 20)
+    check("no placeholder stays loaded", loaded is not None, str(numbers))
+
+    # A placeholder without a page still shows its page's title and icon, from the record.
+    number = int(space0.rsplit("-", 1)[1])
+    m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon", {userContextId: args[1], inBackground: true}); await wait(4000); return 1;""", m.pages, number)
+    # (Its row in view, in the page shown: an image out of view is not asked for.)
+    m.js(H + """const w = main(); w.__before = w.gBrowser.selectedTab; w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(300); return 1;""")
+    r = sidebar_page(m, MANY_PAGE + """const row = [...doc.querySelectorAll("#tabs .tab")].find(x => x.querySelector(".title").textContent === "With an icon");
+      if (!row) return {missing: rows().slice(-3)};
+      row.scrollIntoView();
+      const seen = await new Promise(resolve => { const look = n => { const i = row.querySelector("img"); if ((i && i.naturalWidth) || !n) resolve(i); else setTimeout(() => look(n - 1), 100); }; look(50); });
+      doc.getElementById("tabs").scrollTop = 0;
+      // An icon that does not load becomes the letter, and is not asked for again at the next draw.
+      const bad = {icon: args[0] + "/no-icon-here.png", title: "Letter"}, first = page.icon(bad);
+      first.style.position = "fixed"; first.style.top = "0"; doc.body.append(first);
+      const letter = await new Promise(resolve => { const look = n => { const l = doc.body.querySelector(":scope > .letter"); if (l || !n) resolve(l); else setTimeout(() => look(n - 1), 100); }; look(50); });
+      const again = page.icon(bad).tagName;
+      letter?.remove(); first.remove();
+      // Far out of view it is not asked for at all, and is once it comes into view.
+      const far = page.icon({icon: args[0] + "/no-icon-far-away.png", title: "Far"});
+      far.style.position = "fixed"; far.style.top = "100000px"; doc.body.append(far);
+      await wait(1500);
+      const asked = !far.isConnected || far.complete;
+      far.style.top = "0";
+      const inView = await new Promise(resolve => { const look = n => { if (!far.isConnected || !n) resolve(!far.isConnected); else setTimeout(() => look(n - 1), 100); }; look(50); });
+      doc.body.querySelector(":scope > .letter")?.remove(); far.remove();
+      return {unloaded: row.classList.contains("unloaded"), icon: seen?.src.slice(0, 22), drawn: seen?.naturalWidth, firstTag: first.tagName, letter: letter?.textContent, again, asked, inView};""", m.pages)
+    check("a placeholder made without a page shows its page's title and icon", r.get("unloaded") and r.get("icon") == "data:image/png;base64," and r.get("drawn") == 16, str(r))
+    check("an icon that does not load shows the letter, and is not asked for at every draw", r.get("firstTag") == "IMG" and r.get("letter") == "L" and r.get("again") == "SPAN", str(r))
+    check("an icon far out of view is not asked for, and is when it comes into view", r.get("asked") is False and r.get("inView") is True, str(r))
+    m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__before; await removeWhere((x, t) => url(t).endsWith("/icon")); return 1;""")
+
+    # From the event to the sidebar showing it, and a view's build, one at a time.
+    r = sidebar_page(m, MANY_PAGE + """
+      const space = spaces().find(s => s.active).id, before = await ask({type: "stats"}), shown = [], gone = [];
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        const tab = await page.browser.tabs.create(bg({windowId, cookieStoreId: space, url: "https://example.org/?smoke-many-probe-" + i, active: false, discarded: true}));
+        if (!await until(() => rowOf(tab.id))) return {missing: tab.id};
+        shown.push(performance.now() - t0);
+        await wait(2500);  // tab sync takes it in after a moment
+        const t1 = performance.now();
+        await page.browser.tabs.remove(tab.id);
+        if (!await until(() => !rowOf(tab.id))) return {stays: tab.id};
+        gone.push(performance.now() - t1);
+        await wait(500);
+      }
+      const after = await ask({type: "stats"});
+      return {shown: Math.round(median(shown)), gone: Math.round(median(gone)), views: after.views - before.views, viewMs: Math.round((after.viewMs - before.viewMs) / Math.max(1, after.views - before.views))};""")
+    numbers["newTabShownMs"], numbers["closedGoneMs"], numbers["viewMs"] = r.get("shown"), r.get("gone"), r.get("viewMs")
+    check(f"a new tab is in the sidebar soon ({r.get('shown')} ms; gone {r.get('gone')} ms when closed)", (r.get("shown") or 1e9) < 3000 and (r.get("gone") or 1e9) < 3000, str(r))
+    check(f"a view is quick to build ({r.get('viewMs')} ms)", (r.get("viewMs") or 1e9) < 300, str(r))
+
+    # What drawing costs with nothing to change, and how big a view is.
+    r = sidebar_page(m, MANY_PAGE + """
+      let last = null;
+      port.onMessage.addListener(v => { last = v; });
+      send({type: "hello", windowId});
+      for (let i = 0; i < 40 && !last; i++) await wait(100);
+      const text = page.JSON.stringify(last), times = [], first = [];
+      const draw = view => { const t0 = performance.now(); page.render(view); doc.documentElement.getBoundingClientRect(); return performance.now() - t0; };
+      for (let i = 0; i < 5; i++) times.push(draw(page.JSON.parse(text)));
+      // All rows new, as when a sidebar opens or a space is shown for the first time.
+      for (let i = 0; i < 3; i++) {
+        const view = page.JSON.parse(text);
+        for (const tab of view.tabs) tab.id += 1e6 * (i + 1);
+        first.push(draw(view));
+        draw(page.JSON.parse(text));
+      }
+      return {bytes: text.length, rows: last.tabs.length, drawMs: Math.round(median(times) * 10) / 10, firstDrawMs: Math.round(median(first))};""")
+    numbers["view"] = r
+    check(f"drawing {r.get('rows')} rows is quick ({r.get('firstDrawMs')} ms all new, {r.get('drawMs')} ms with nothing to change)", (r.get("firstDrawMs") or 1e9) < 2000 and r["drawMs"] < 500, str(r))
+
+    # A page whose title ticks: nothing to do for a sidebar showing another space,
+    # and at most a view per tick where it is shown.
+    r = sidebar_page(m, MANY_PAGE + """
+      // Away: the last space, which no window shows (the first ones may be another window's).
+      const here = spaces().find(s => s.active).id, away = spaces().filter(s => !s.active).at(-1).id, out = {};
+      for (const [name, space] of [["away", away], ["here", here]]) {
+        const tab = await page.browser.tabs.create(bg({windowId, cookieStoreId: space, url: args[0] + "/ticking", active: false}));
+        await wait(2000);
+        const before = await ask({type: "stats"});
+        await wait(3000);
+        const after = await ask({type: "stats"});
+        out[name] = {views: after.views - before.views, ms: Math.round(after.viewMs - before.viewMs), jobs: after.jobs - before.jobs};
+        await page.browser.tabs.remove(tab.id);
+        await wait(1000);
+      }
+      return out;""", m.pages)
+    numbers["ticking"] = r
+    check("a page ticking in another space builds no view", r["away"]["views"] == 0, str(r))
+    check("a page ticking in this one is drawn, with at most a view per tick", 1 <= r["here"]["views"] <= 25, str(r))
+
+    # Selecting a ghost, in the window you are using.
+    r = m.js(H + """const x = other(), times = []; x.focus(); await wait(500);
+      for (const g of x.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && role(x, t) === "ghost").slice(0, 5)) {
+        const k = key(x, g), t0 = Date.now();
+        x.gBrowser.selectedTab = g;
+        for (let i = 0; i < 1000; i++) { const s = x.gBrowser.selectedTab; if (key(x, s) === k && role(x, s) === "live" && !url(s).includes("ghost.html")) { times.push(Date.now() - t0); break; } await wait(10); }
+        await wait(800);
+      }
+      main().focus(); await wait(300);
+      return times.sort((a, b) => a - b);""")
+    numbers["ghostPullMs"] = r[len(r) >> 1] if r else None
+    check(f"selecting a ghost brings its tab soon ({numbers['ghostPullMs']} ms)", len(r) == 5 and numbers["ghostPullMs"] < 5000, str(r))
+
+    # Switching space, from a click to the sidebar having drawn it.
+    r = sidebar_page(m, MANY_PAGE + """
+      const times = [], order = spaces().map(s => s.id), from = spaces().find(s => s.active).id;
+      const click = id => doc.querySelector(`#spaces .space[data-space="${id}"]`).click();
+      for (const id of [...order.filter(s => s !== from).slice(0, 2), from, ...order.filter(s => s !== from).slice(0, 2), from]) {
+        if (spaces().find(s => s.active).id === id) continue;
+        const t0 = performance.now();
+        click(id);
+        if (!await until(() => spaces().find(s => s.active).id === id)) return {stuck: id};
+        times.push(performance.now() - t0);
+        await wait(1000);
+      }
+      return {ms: Math.round(median(times)), most: Math.round(Math.max(...times))};""")
+    numbers["spaceSwitch"] = r
+    check(f"switching space is quick ({r.get('ms')} ms)", (r.get("ms") or 1e9) < 3000, str(r))
+    shown = m.js(H + """const w = main(); await wait(500); return [...new Set(w.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && t.userContextId).map(t => t.userContextId))];""")
+    check("and shows one space", len(shown) == 1, str(shown))
+
+    # Back in a space, the tab you used there, not one opened in another window meanwhile:
+    # its placeholder here is newer, and selecting that would pull it out of that window.
+    space = number
+    m.js(H + """const w = main(); w.focus(); await wait(300);
+      w.gBrowser.selectedTab = w.gBrowser.addTrustedTab(args[0] + "/icon?used", {userContextId: args[1]}); await wait(2500); return 1;""", m.pages, space)
+    press(m, "2" if space == 1 else "1", CTRL)
+    time.sleep(1.5)
+    m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon?elsewhere", {userContextId: args[1], inBackground: true}); await wait(3500); return 1;""", m.pages, space)
+    press(m, str(space), CTRL)
+    time.sleep(2)
+    r = m.js(H + """const w = main(), s = w.gBrowser.selectedTab, r = {selected: url(s), elsewhere: other().gBrowser.tabs.some(t => url(t).endsWith("/icon?elsewhere"))};
+      await removeWhere((x, t) => url(t).includes("/icon?")); return r;""")
+    check("back in a space, the tab you used is selected, and a tab opened elsewhere stays there", r["selected"].endswith("/icon?used") and r["elsewhere"], str(r))
+
+    # A new window, on top of the two.
+    before = sidebar_page(m, MANY_PAGE + """return await ask({type: "stats"});""")
+    t0 = time.time()
+    want = m.js(H + """const w = main(), want = [w.gBrowser.tabs.filter(t => t.pinned).length, w.gBrowser.tabs.filter(t => !t.pinned && role(w, t)).length];
+      const n = w.OpenBrowserWindow(); n.__extra = true;
+      for (let i = 0; i < 100 && !n.gBrowser; i++) await wait(100);
+      return want;""")
+    full = many_wait(m, H + """const n = wins().find(w => w.__extra); if (!n?.gBrowser) return false;
+      return n.gBrowser.tabs.filter(t => t.pinned).length >= %d && n.gBrowser.tabs.filter(t => !t.pinned && role(n, t)).length >= %d;""" % tuple(want), 600)
+    numbers["newWindowS"] = None if full is None else round(time.time() - t0, 1)
+    settled = many_wait(m, H + """const n = wins().find(w => w.__extra); return n.gBrowser.tabs.filter(t => t.linkedPanel && !t.selected && url(t).includes("ghost.html")).length === 0;""", 600)
+    numbers["newWindowSettledS"] = None if settled is None else round(time.time() - t0, 1)
+    after = sidebar_page(m, MANY_PAGE + """return await ask({type: "stats"});""")
+    numbers["newWindow"] = many_diff(before, after)
+    numbers["memory2"] = m.js(PROC_INFO)["mb"]
+    check(f"a new window gets all {n} tabs soon ({numbers['newWindowS']} s, {numbers['newWindowSettledS']} s until unloaded)",
+          numbers["newWindowS"] is not None and numbers["newWindowS"] < n * 0.07 and settled is not None, str(numbers["newWindow"]))
+    check(f"and takes little memory ({numbers['memory0']} MB before the tabs, {numbers['memory2']} MB after)", numbers["memory2"] - numbers["memory0"] < n * 1.5, str(numbers))
+    m.js(H + """await close(wins().find(w => w.__extra)); return 1;""")
+
+    # Nothing happening, with this many tabs: nothing done.
+    idle = sidebar_page(m, MANY_PAGE + """return await ask({type: "idle", ms: 5000});""")
+    numbers["idle"] = idle
+    if idle["alarms"]:
+        print(f"SKIP  idle check: a timed check ran meanwhile ({idle})", flush=True)
+    else:
+        check(f"with {n} tabs and nothing happening, Tidier does nothing", idle["jobs"] == 0 and idle["lookups"] == 0 and idle["views"] == 0, str(idle))
+
+    # And all of them closed at once, everywhere.
+    t0 = time.time()
+    m.js(H + """for (const w of wins()) w.gBrowser.removeTabs(w.gBrowser.tabs.filter(t => url(t).includes("smoke-many-"))); return 1;""")
+    gone = many_wait(m, H + """const all = (await storage("%s", ["syncedTabs"])).syncedTabs; return !Object.values(all).some(e => (e.url || "").includes("smoke-many-"));""" % EXT_ID, 600)
+    numbers["closedAllS"] = gone
+    left = many_wait(m, H + """const keys = new Set(Object.keys((await storage("%s", ["syncedTabs"])).syncedTabs));
+      return !wins().some(w => w.gBrowser.tabs.some(t => { const k = value(w, t, "syncKey"); return k && !keys.has(k); }));""" % EXT_ID, 300)
+    numbers["closedAllTabsS"] = None if left is None else round(time.time() - t0, 1)
+    check(f"closing them all closes them everywhere ({numbers['closedAllTabsS']} s)", gone is not None and left is not None, str(numbers))
+    r = sidebar_page(m, RECENTLY_CLOSED_PLACEHOLDERS)
+    check("and leaves no placeholder in Recently Closed", not r["left"], str(r))
+    m.js(H + """await removeWhere((x, t) => url(t).includes("ticking")); return 1;""")
+    sidebar_page(m, MANY_PAGE + """const id = args[0]; if (spaces().find(s => s.active).id !== id) { doc.querySelector(`#spaces .space[data-space="${id}"]`).click(); await wait(1000); } return 1;""", space0)
+    if made_window:
+        m.js(H + """await close(other()); return 1;""")
+    print("INFO  " + json.dumps(numbers), flush=True)
+
+
 def alone_end(m):
     no_problems(m, "with Tidier alone")
 
@@ -8974,6 +9253,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_shortcuts,
                 alone_sync_hide,
                 alone_bridge,
+                alone_many,
                 alone_idle, alone_update, alone_folds_rest_kept, alone_end, alone_restart, alone_folds_rest_kept, alone_isolation_start, alone_little_restart)
 
 

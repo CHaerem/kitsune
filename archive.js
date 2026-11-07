@@ -45,8 +45,9 @@ async function archiveIdleTabs({ now = Date.now(), onlyKeys, explain = false } =
   const tabs = await browser.tabs.query({});
   const archived = [], kept = {};
   const tabsById = new Map(tabs.map(t => [t.id, t]));
+  const reps = repsByKey(tabs); // closing a tab below changes only that tab's own entry
   for (const key of onlyKeys || Object.keys(all)) {
-    const why = keepReason(all, key, repsOf(key, tabs), tabsById, now, since, hours);
+    const why = keepReason(all, key, reps.get(key) ?? [], tabsById, now, since, hours);
     if (why) { kept[key] = why; continue; }
     if (!(await closesQuietly(key))) { kept[key] = "unsaved"; continue; }
     // A real page has Recently Closed as well. A tab that is only a placeholder has nothing

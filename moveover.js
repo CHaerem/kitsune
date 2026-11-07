@@ -49,9 +49,9 @@ async function moveOver() {
 async function closeOldFolderPages() {
   await readAlone();
   if (!tidierAlone) return;
-  await loadRoles();
   const pages = (await browser.tabs.query({})).filter(t => isSideberyGroup(t.url));
-  if (!pages.length) return;
+  if (!pages.length) return; // as at every start but the first: reading every tab's values is left for the start itself
+  await loadRoles();
   pages.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   await browser.tabs.remove(pages.map(t => t.id)).catch(noteError);
 }
@@ -79,8 +79,19 @@ async function moveBack() {
   await browser.tabs.show((await browser.tabs.query({ hidden: true })).map(t => t.id)).catch(() => {});
   await takeKeysBack(); // Sidebery's again, the command bar's too (keys-commands.js)
   stopIsolation();
-  await browser.storage.local.set({ tidierAlone: false });
+  await browser.storage.local.set({ tidierAlone: false, placeholdersNeedPages: true });
   browser.runtime.reload();
+}
+
+// Placeholders made with Tidier alone have no page (placeholderWithoutPage), but Sidebery
+// draws the tab itself. Once, after moving back and with Tidier started again, those
+// without an icon load their page, which sets title and icon and unloads itself.
+async function pagesAfterMovingBack() {
+  if (tidierAlone || !(await browser.storage.local.get("placeholdersNeedPages")).placeholdersNeedPages) return;
+  for (const t of await browser.tabs.query({ discarded: true })) {
+    if (isGhostUrl(t.url) && !t.favIconUrl) await browser.tabs.update(t.id, { url: t.url }).catch(() => {});
+  }
+  await browser.storage.local.remove("placeholdersNeedPages");
 }
 
 // --- Sidebery's export -----------------------------------------------------------

@@ -23,10 +23,11 @@ async function containerSpaces() {
   const ids = await browser.contextualIdentities.query({}).catch(() => []);
   return ids.map(c => ({ id: c.cookieStoreId, name: c.name, color: c.colorCode, icon: c.icon, iconUrl: c.iconUrl }));
 }
+const declaredSpaces = () => browser.storage.managed.get("spaces").then(stored => stored.spaces, () => undefined);
 async function spaceList(used) {
   const all = (await containerSpaces()).filter(s => !isHiddenSpace(s.id)); // hiddenspaces.js
   if (!tidierAlone) return all.filter(s => used.has(s.id));
-  const declared = (await browser.storage.managed.get("spaces").catch(() => ({}))).spaces;
+  const declared = await declaredSpaces();
   const { spaceOrder } = await browser.storage.local.get("spaceOrder"); // from Sidebery's export (moveover.js)
   const first = Array.isArray(declared) ? declared : spaceOrder ?? (await getList()).map(e => e.cookieStoreId);
   const rank = new Map([...new Set(first)].map((id, i) => [id, i]));
@@ -34,11 +35,12 @@ async function spaceList(used) {
   return all.filter(listed).sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
 }
 
-// The window's active space: the one it has, else the selected tab's.
+// The window's active space: the one it has, else the selected tab's (`tabs`: the
+// window's, if you have them).
 async function spaceOf(windowId, tabs, spaces) {
   let space = activeSpace.get(windowId) ?? await browser.sessions.getWindowValue(windowId, SPACE_KEY).catch(() => undefined);
   if (!spaces.some(s => s.id === space)) {
-    const selected = tabs.find(t => t.active);
+    const selected = tabs ? tabs.find(t => t.active) : (await browser.tabs.query({ windowId, active: true }).catch(() => []))[0];
     space = spaces.some(s => s.id === selected?.cookieStoreId) ? selected.cookieStoreId : spaces[0]?.id;
     // A space removed lands here first if a view comes before the queue gets to it
     // (spaceRemoved, safemoves.js), and then nothing else would show this space's tabs.
@@ -70,7 +72,12 @@ async function showSpace(windowId) {
   if (!tidierAlone) return;
   const space = activeSpace.get(windowId);
   if (!space) return;
-  const tabs = await browser.tabs.query({ windowId, pinned: false }).catch(() => []);
+  // Only tabs that may have to change, as this runs for every burst of new tabs: the hidden
+  // ones that may show here (usually none), and those shown (not the other spaces' hidden ones).
+  const tabs = (await Promise.all([
+    browser.tabs.query({ windowId, pinned: false, hidden: true, cookieStoreId: [space, NO_CONTAINER, ...hiddenSpaceIds] }),
+    browser.tabs.query({ windowId, pinned: false, hidden: false }),
+  ]).catch(() => [])).flat();
   const all = await getSynced();
   const visible = t => shownInSpace(t, space) && !restsInFolder(all, syncKeyByTab.get(t.id)); // hiddenspaces.js, foldrest.js
   const show = tabs.filter(t => t.hidden && visible(t)).map(t => t.id);
@@ -80,10 +87,14 @@ async function showSpace(windowId) {
   if (hide.length) await browser.tabs.hide?.(hide).catch(() => {});
 }
 
-// The tab to go back to in a space: the one used last, an essential counts.
+// The tab to go back to in a space: the one used last, an essential counts. A placeholder
+// only if there is nothing else: its lastAccessed is when it was made, not when you used
+// it, so a tab opened in another window meanwhile would count as the one used last here,
+// and going back to the space would pull it out of the window you opened it in.
 async function lastUsedIn(windowId, space, ...except) {
   const tabs = await browser.tabs.query({ windowId, cookieStoreId: space }).catch(() => []);
-  return tabs.filter(t => !except.includes(t.id)).sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  return tabs.filter(t => !except.includes(t.id))
+    .sort((a, b) => isGhostUrl(a.url) - isGhostUrl(b.url) || (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 }
 
 // The tab to land on when the selected one closes. You did not ask for this tab, so it

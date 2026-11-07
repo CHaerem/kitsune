@@ -14,7 +14,13 @@ export const wait = ms => realSleep(ms / SCALE); // wait in the scripts' time
 const ev = () => {
   const ls = [];
   return { ls, addListener(f, filter) { ls.push({ f, filter }); }, removeListener(f) { const i = ls.findIndex(l => l.f === f); if (i >= 0) ls.splice(i, 1); }, hasListener(f) { return ls.some(l => l.f === f); },
-    fire(...a) { for (const { f } of [...ls]) { try { const r = f(...a); if (r?.catch) r.catch(() => {}); } catch { /* as in Firefox: a listener's error stays with it */ } } } };
+    fire(...a) {
+      for (const { f, filter } of [...ls]) {
+        // As in Firefox: a listener with a filter hears only of the properties it names.
+        if (filter?.properties && !filter.properties.some(p => a[1] && p in a[1])) continue;
+        try { const r = f(...a); if (r?.catch) r.catch(() => {}); } catch { /* as in Firefox: a listener's error stays with it */ }
+      }
+    } };
 };
 
 export class FakeFirefox {
@@ -94,7 +100,7 @@ export class FakeFirefox {
       TAB_ID_NONE: -1,
       onCreated: ev(), onUpdated: ev(), onRemoved: ev(), onMoved: ev(), onActivated: ev(), onAttached: ev(), onDetached: ev(),
       query: async (q = {}) => { if (ff.hooks.query) await ff.hooks.query(q); let out = [...ff.wins.values()].flatMap(w => ff.list(w.id));
-        for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId", "audible"]) if (q[k] !== undefined) out = out.filter(t => t[k] === q[k]);
+        for (const k of ["windowId", "pinned", "active", "discarded", "hidden", "cookieStoreId", "audible"]) if (q[k] !== undefined) out = out.filter(t => [q[k]].flat().includes(t[k]));
         if (q.muted !== undefined) out = out.filter(t => !!t.mutedInfo?.muted === q.muted);
         if (q.currentWindow) out = out.filter(t => t.windowId === ff.focused);
         return out; },
@@ -102,6 +108,9 @@ export class FakeFirefox {
       create: async p => {
         if (!ff.wins.has(p.windowId)) throw new Error(`Invalid window ID: ${p.windowId}`);
         if (p.cookieStoreId && !ff.containers.has(p.cookieStoreId)) throw new Error(`No cookie store exists with ID ${p.cookieStoreId}`);
+        if (p.discarded && p.pinned) throw new Error("Pinned tabs cannot be created and discarded.");
+        if (p.discarded && p.active) throw new Error("Active tabs cannot be created and discarded.");
+        if (p.title && !p.discarded) throw new Error("Title may only be set for discarded tabs.");
         const t = ff.addTab(p.windowId, { url: p.url ?? "about:newtab", pinned: !!p.pinned, active: !!p.active, cookieStoreId: p.cookieStoreId || "firefox-default", openerTabId: p.openerTabId, index: p.index, title: p.title ?? p.url, discarded: !!p.discarded });
         ff.log.push(["create", t.id, p.windowId, p.url]);
         // ff.blankFirst: as Firefox really does, a tab with an address is announced on
@@ -236,7 +245,9 @@ export class FakeFirefox {
     addIsolationApis(ff, b);
     const errors = [];
     const quiet = { ...console, error: (...a) => { errors.push(a.map(x => x?.message ?? String(x)).join(" ")); }, warn() {} };
-    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance, navigator: {}, localStorage: ff.pageStorage });
+    // performance runs as much faster as the timers, so that waits worked out from it agree with them.
+    const clock = { now: () => performance.now() * SCALE };
+    const ctx = vm.createContext({ browser: b, console: quiet, ...T, URL, URLSearchParams, crypto: globalThis.crypto, performance: clock, navigator: {}, localStorage: ff.pageStorage });
     const files = JSON.parse(readFileSync(new URL("manifest.json", REPO), "utf8")).background.scripts;
     for (const f of files) {
       const src = readFileSync(new URL(f, REPO), "utf8");

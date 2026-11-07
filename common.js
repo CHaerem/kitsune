@@ -17,7 +17,12 @@ function serial(fn) {
       return await Promise.race([fn(), new Promise((_, reject) => {
         limit = setTimeout(() => reject(new Error("a job did not finish within the time limit")), JOB_LIMIT_MS);
       })]);
-    } finally { clearTimeout(limit); work.queueMs += performance.now() - t0; }
+    } finally {
+      clearTimeout(limit);
+      const ms = performance.now() - t0;
+      work.queueMs += ms;
+      work.longestJobMs = Math.max(work.longestJobMs, ms);
+    }
   });
   queue = run.catch(noteError);
   return run;
@@ -37,9 +42,10 @@ globalThis.addEventListener?.("unhandledrejection", event => noteError(event.rea
 
 // How much Tidier does, for the smoke test (the "stats" message, tabsync.js):
 // jobs run in the queue and how long they held it (waits for Sidebery
-// included), tab lookups made outside it (noteOrder, tabsync.js), and the
-// timed checks (archiving, live folders), the only work with nothing happening.
-const work = { jobs: 0, queueMs: 0, lookups: 0, alarms: 0, errors: 0, views: 0 };
+// included), tab lookups made outside it (noteOrder, tabsync.js), the timed
+// checks (archiving, live folders), the only work with nothing happening, and
+// the sidebar's views: how many were built and how long that took.
+const work = { jobs: 0, queueMs: 0, longestJobMs: 0, lookups: 0, alarms: 0, errors: 0, views: 0, viewMs: 0, longestViewMs: 0 };
 browser.alarms.onAlarm.addListener(() => { work.alarms++; });
 
 // Tidier alone: Tidier's own sidebar, spaces and folders, with no Sidebery. Off by
@@ -80,9 +86,11 @@ const sameSite = (a, b) => {
 // Sidebery folders are "group" pages served by Sidebery itself.
 const isSideberyGroup = url => /^moz-extension:\/\/[^/]+\/sidebery\/group\.html/.test(url || "");
 
-// Placeholder page for ghosts and essential copies (see ghost.js).
-const ghostUrl = (kind, key) => browser.runtime.getURL(`ghost.html?kind=${kind}&key=${encodeURIComponent(key)}`);
-const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.html"));
+// Placeholder page for ghosts and essential copies (see ghost.js). Asked for once:
+// it never changes while Tidier runs, and this is looked at for every tab in a view.
+const GHOST_PAGE = browser.runtime.getURL("ghost.html");
+const ghostUrl = (kind, key) => `${GHOST_PAGE}?kind=${kind}&key=${encodeURIComponent(key)}`;
+const isGhostUrl = url => (url || "").startsWith(GHOST_PAGE);
 
 // Placeholders we close ourselves would show up in Recently Closed Tabs, and
 // ⌘⇧T would bring one back instead of the tab you closed. Only real pages
@@ -90,20 +98,43 @@ const isGhostUrl = url => (url || "").startsWith(browser.runtime.getURL("ghost.h
 // a moment after it is closed (Firefox saves its state first), so each is
 // looked for again whenever that list changes, for FORGET_MS. (An essential
 // copy's address may end in "&placed=N", see essentials.js.)
-const FORGET_MS = 10000;
+//
+// Closing many tabs changes that list once per tab, and a look makes Firefox copy
+// everything in it, also a closed window with all its tabs. So nobody waits for a look,
+// one runs at a time, and if the list changed meanwhile, another follows after a rest in
+// proportion to what this one took. With a few tabs that rest is hardly anything. It has
+// a limit, well below FORGET_MS: past that a placeholder would no longer be looked for,
+// and would stay in the list, on a machine that is merely busy.
+const FORGET_MS = 10000, FORGET_REST = 9, FORGET_LONGEST_REST_MS = 1000;
 const toForget = new Map(); // placeholder URL -> until when to look for it
-async function forgetClosedPlaceholders(kind, keys) {
-  for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
-  setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
-  await forgetClosedNow();
+let forgetTimer = null, forgetBusy = false, forgetAgain = false;
+function forgetClosedPlaceholders(kind, keys) {
+  // A synced tab's placeholder is a "ghost", or "lazy" if it stands for a pull request
+  // never opened (createLiveItem); ⌘⇧T would bring that back with nothing to show.
+  const kinds = kind === "ghost" ? ["ghost", "lazy"] : [kind];
+  for (const k of keys) for (const x of kinds) toForget.set(ghostUrl(x, k), Date.now() + FORGET_MS);
+  clearTimeout(forgetTimer);
+  forgetTimer = setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
+  forgetClosedNow();
 }
 async function forgetClosedNow() {
+  if (forgetBusy) { forgetAgain = true; return; }
   for (const [url, until] of toForget) if (until < Date.now()) toForget.delete(url);
   if (!toForget.size) return;
-  const ours = url => [...toForget.keys()].some(p => url === p || url?.startsWith(p + "&"));
-  const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
-  for (const t of closed.map(item => item.tab).filter(Boolean)) {
-    if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+  forgetBusy = true;
+  const t0 = performance.now();
+  const ours = url => toForget.has(url) || toForget.has(url?.split("&placed=")[0]);
+  try {
+    const closed = await browser.sessions.getRecentlyClosed().catch(() => []);
+    for (const t of closed.map(item => item.tab).filter(Boolean)) {
+      if (ours(t.url)) await browser.sessions.forgetClosedTab(t.windowId, t.sessionId).catch(() => {});
+    }
+  } finally {
+    // The rest counts as busy, so that what changes during it waits for the look after it.
+    setTimeout(() => {
+      forgetBusy = false;
+      if (forgetAgain) { forgetAgain = false; forgetClosedNow(); }
+    }, Math.min(FORGET_REST * (performance.now() - t0), FORGET_LONGEST_REST_MS));
   }
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });
@@ -180,6 +211,15 @@ async function placeInOrder(windowId, ids, mark) {
 
 async function normalWindows() {
   return (await browser.windows.getAll({ windowTypes: ["normal"] })).filter(w => !w.incognito);
+}
+
+// A tab refused while filling a window: if the window has been closed meanwhile, that is
+// no error, and there is nothing left to do there (with many tabs, each of them would be
+// refused in turn). Returns whether to go on with the next tab.
+async function refusedInWindow(windowId, err) {
+  if (!(await browser.windows.get(windowId).catch(() => null))) return false;
+  noteError(err);
+  return true;
 }
 
 // Timing for filling a new window, measured with Sidebery 5.6 on Firefox 159:
@@ -326,8 +366,10 @@ function treeParent(tab, byId) {
   staleOpener.delete(tab.id);
   return p;
 }
-// Seen at once when a tab moves, before folders first moves its old parent up.
+// Seen at once when a tab moves, before folders first moves its old parent up. (With
+// Tidier alone there is no such tree, and this would ask for every tab at every move.)
 browser.tabs.onMoved.addListener(async (tabId, { windowId }) => {
+  if (tidierAlone) return;
   const tabs = await browser.tabs.query({ windowId }).catch(() => []);
   const byId = new Map(tabs.map(t => [t.id, t])), tab = byId.get(tabId);
   if (tab) treeParent(tab, byId);

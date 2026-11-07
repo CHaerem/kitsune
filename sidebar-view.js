@@ -11,8 +11,16 @@
 // alone (ownfolders.js), else Sidebery's folder pages, read from tab sync's record.
 
 const sidebarPorts = new Map(); // windowId -> Set of ports (a window has one sidebar; a reload may briefly add a second)
-const viewTimers = new Map(); // windowId -> timer for the next view
-const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view
+const viewTimers = new Map(); // windowId -> { timer, first }: the next view, and when it was first asked for
+const viewsBuilding = new Map(); // windowId -> { since, changed }: the view being built, and whether something changed meanwhile
+const viewRest = new Map(); // windowId -> not before when its next view is built
+const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view...
+const VIEW_LONGEST_WAIT_MS = 250; // ... and a long burst still shows, every so often
+// Times what the last view took, so that views never take most of the time, however
+// many tabs. With a limit: a view is slow when Firefox is busy, and what you just did
+// must still show soon after.
+const VIEW_REST = 3, VIEW_LONGEST_REST_MS = 1000;
+const VIEW_STUCK_MS = 15000; // a view Firefox never answers for must not leave a sidebar frozen
 
 // What a tab's tooltip says: its title, then its address without the query part, which
 // is seldom readable and may hold a token. A placeholder's own address is ghost.html and
@@ -34,8 +42,9 @@ const tabIsLoading = t => t.status === "loading" && !t.discarded && !isGhostUrl(
 
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
 // page's (see ghost.js); an essential or a saved tab shows its name if it has one (tabnames.js).
-// Firefox drops a tab's icon when a new page comes in, and a placeholder may not have one
-// yet, so the record's comes next, before a letter.
+// With Tidier alone a placeholder has no page (createRep, tabsync.js), and Firefox drops a
+// tab's icon when a new page comes in, so the record's comes next, before a letter
+// (iconForView, isolation.js; recordIcon below).
 const tabItem = (t, title, entry) => ({
   id: t.id, title: title || t.title || t.url,
   icon: iconForView(t, entry), // isolation.js
@@ -47,25 +56,44 @@ const tabItem = (t, title, entry) => ({
   note: forYouNotes.get(syncKeyByTab.get(t.id)), // bridge.js
 });
 
+// The icon in the record, for a placeholder that has none of its own (createRep,
+// tabsync.js). One from Firefox's own icon cache (page-icon:) cannot be shown in an
+// extension's page, so then the site's, which is what ghost.js would look for. (By
+// its origin: this is asked for outside the tab's container, and a login in the address
+// must not go along. A record taken in from a copy can hold any address, and one
+// that cannot be read must not stop the whole sidebar from drawing.)
+const viewableIcon = icon => /^(https?:|data:|moz-extension:)/.test(icon || "") ? icon : null;
+function recordIcon(entry) {
+  if (!entry) return null;
+  if (viewableIcon(entry.icon)) return entry.icon;
+  try { return isWeb(entry.url) ? new URL(entry.url).origin + "/favicon.ico" : null; } catch { return null; }
+}
+
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
 
 async function viewFor(windowId) {
   await aloneRead;
-  const tabs = (await browser.tabs.query({ windowId })).sort((a, b) => a.index - b.index);
+  const list = await getList();
+  // Firefox builds a full description of every tab it is asked for, so a view asks only
+  // for the space it shows, unless the bar itself depends on the other tabs (spaceList).
+  const whole = !tidierAlone || Array.isArray(await declaredSpaces()) ? await browser.tabs.query({ windowId }) : null;
+  // Spaces in use: a container with essentials or tabs (with Tidier alone, also the empty ones).
+  const used = new Set(whole ? [...list.map(e => e.cookieStoreId), ...whole.map(t => t.cookieStoreId)] : []);
+  const spaces = await spaceList(used);
+  const space = await spaceOf(windowId, whole, spaces);
+  for (const s of spaces) s.news = s.id !== space && spaceHasNews(s.id); // the space you are in shows it in its list
+  // Of the space shown: its own tabs, those without a container, and a hidden space's
+  // (shownInSpace, hiddenspaces.js), which show wherever you are.
+  const tabs = (whole ?? await browser.tabs.query({ windowId, cookieStoreId: [...(space ? [space] : []), NO_CONTAINER, ...hiddenSpaceIds] })).sort((a, b) => a.index - b.index);
   // Asked now, of the same moment as `tabs`: once the tab is gone it is no longer in newTabs,
   // and by the line that uses this it may be, while `tabs` still has it.
   const reopening = new Set(tabs.filter(reopensSoon).map(t => t.id));
-  const list = await getList();
-  // Spaces in use: a container with essentials or tabs (with Tidier alone, also the empty ones).
-  const used = new Set([...list.map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
-  const spaces = await spaceList(used);
-  const space = await spaceOf(windowId, tabs, spaces);
-  for (const s of spaces) s.news = s.id !== space && spaceHasNews(s.id); // the space you are in shows it in its list
 
   const rank = new Map(list.map((e, i) => [e.key, i]));
+  const byEssentialKey = new Map(list.map(e => [e.key, e]));
   const pinned = tabs.filter(t => t.pinned && shownInSpace(t, space));
   const keys = await Promise.all(pinned.map(keyOf));
-  const essentials = pinned.map((t, i) => ({ t, entry: list.find(e => e.key === keys[i]) }))
+  const essentials = pinned.map((t, i) => ({ t, entry: byEssentialKey.get(keys[i]) }))
     .sort((a, b) => (rank.get(a.entry?.key) ?? Infinity) - (rank.get(b.entry?.key) ?? Infinity))
     .map(({ t, entry }) => tabItem(t, entry?.name || entry?.title, entry));
 
@@ -105,17 +133,40 @@ async function rowKeys(tabs) {
   return earlyKeys;
 }
 
+// A window without a sidebar costs nothing here. The next view comes once tab events
+// have paused for VIEW_DEBOUNCE_MS, at the latest VIEW_LONGEST_WAIT_MS after the first
+// of them, and one at a time: a view started while another is being built could
+// otherwise overtake it, and the sidebar would end up showing the older one.
 function viewSoon(windowId) {
   if (!sidebarPorts.get(windowId)?.size) return;
-  clearTimeout(viewTimers.get(windowId));
-  viewTimers.set(windowId, setTimeout(async () => {
-    viewTimers.delete(windowId);
-    work.views++;
-    const view = await viewFor(windowId).catch(err => (console.error("Tidier: sidebar", err), null));
-    if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
-  }, VIEW_DEBOUNCE_MS));
+  const now = performance.now(), building = viewsBuilding.get(windowId);
+  if (building && now - building.since < VIEW_STUCK_MS) { building.changed = true; return; }
+  const waiting = viewTimers.get(windowId), first = waiting?.first ?? now;
+  if (waiting && now - first >= VIEW_LONGEST_WAIT_MS) return; // it is due: events that keep coming must not put it off again
+  clearTimeout(waiting?.timer);
+  viewTimers.set(windowId, { first, timer: setTimeout(() => buildView(windowId), viewWait(now, first, viewRest.get(windowId) ?? 0)) });
+}
+const viewWait = (now, first, restUntil) => Math.max(Math.min(VIEW_DEBOUNCE_MS, first + VIEW_LONGEST_WAIT_MS - now), restUntil - now, 0);
+async function buildView(windowId) {
+  viewTimers.delete(windowId);
+  const t0 = performance.now(), building = { since: t0, changed: false };
+  viewsBuilding.set(windowId, building);
+  work.views++;
+  const view = await viewFor(windowId).catch(err => (console.error("Tidier: sidebar", err), null));
+  const ms = performance.now() - t0;
+  work.viewMs += ms;
+  work.longestViewMs = Math.max(work.longestViewMs, ms);
+  if (viewsBuilding.get(windowId) !== building) return; // given up on: a newer one is on its way
+  viewsBuilding.delete(windowId);
+  if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
+  if (sidebarPorts.has(windowId)) viewRest.set(windowId, performance.now() + Math.min(VIEW_REST * ms, VIEW_LONGEST_REST_MS));
+  if (building.changed) viewSoon(windowId);
 }
 const viewAllSoon = () => { for (const windowId of sidebarPorts.keys()) viewSoon(windowId); };
+// Only the sidebars that show tabs of this space: a page in another space can change
+// its title all day without any sidebar having anything to draw.
+const showsSpace = (windowId, space) => { const shown = activeSpace.get(windowId); return !shown || space === shown || space === NO_CONTAINER || isHiddenSpace(space); }; // hiddenspaces.js: shown wherever you are
+const viewSpaceSoon = space => { for (const windowId of sidebarPorts.keys()) if (showsSpace(windowId, space)) viewSoon(windowId); };
 
 browser.runtime.onConnect.addListener(port => {
   if (port.name !== "sidebar" || port.sender?.id !== browser.runtime.id) return;
@@ -156,7 +207,7 @@ browser.runtime.onConnect.addListener(port => {
     const set = sidebarPorts.get(windowId);
     if (!set) return;
     set.delete(port);
-    if (!set.size) { sidebarPorts.delete(windowId); clearTimeout(viewTimers.get(windowId)); viewTimers.delete(windowId); }
+    if (!set.size) { sidebarPorts.delete(windowId); clearTimeout(viewTimers.get(windowId)?.timer); viewTimers.delete(windowId); viewRest.delete(windowId); viewsBuilding.delete(windowId); }
   });
 });
 
@@ -214,6 +265,6 @@ for (const event of ["onCreated", "onMoved", "onAttached", "onDetached"]) {
   browser.tabs[event].addListener((tabOrId, info) => viewSoon(tabOrId.windowId ?? info?.windowId ?? info?.newWindowId ?? info?.oldWindowId));
 }
 browser.tabs.onRemoved.addListener((tabId, info) => viewSoon(info.windowId));
-browser.tabs.onUpdated.addListener((tabId, change, tab) => viewSoon(tab.windowId),
-  { properties: ["title", "favIconUrl", "status", "discarded", "audible", "mutedInfo", "pinned", "url", "hidden"] });
+browser.tabs.onUpdated.addListener((tabId, change, tab) => { if (showsSpace(tab.windowId, tab.cookieStoreId)) viewSoon(tab.windowId); },
+  { properties: ["title", "favIconUrl", "status", "discarded", "audible", "mutedInfo", "pinned", "url"] }); // not "hidden": a switch of space hides hundreds of tabs one by one
 for (const event of ["onCreated", "onUpdated", "onRemoved"]) browser.contextualIdentities[event].addListener(viewAllSoon);

@@ -475,8 +475,13 @@ function agentFor(details) {
 // show the site your own address at the moment the proxy hides it. Such a tab shows its
 // first letter instead; an icon Firefox has inline costs no request.
 // (The record's icon, for a page that has none at the moment, is as remote as the page's own.)
+// A placeholder has no page of its own with Tidier alone (createRep, tabsync.js), so it
+// takes the record's icon, else the site's (recordIcon, sidebar-view.js). A loaded page
+// takes the record's only while Firefox has dropped its own for a new page of the same site
+// (keptIcon, tabsync.js, forgets it for another site).
 const iconForView = (t, entry) => {
-  const icon = t.favIconUrl || (tidierAlone && entry?.icon) || null;
+  const record = !tidierAlone || !entry ? null : isGhostUrl(t.url) ? recordIcon(entry) : viewableIcon(entry.icon);
+  const icon = t.favIconUrl || record || null;
   return networkNow[t.cookieStoreId]?.proxy && isWeb(icon) ? null : icon;
 };
 
