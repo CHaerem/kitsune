@@ -150,7 +150,7 @@ def ask_bridge(name, args):
                 if len(data) > MAX_ANSWER:
                     return {"ok": False, "error": "The answer was too big."}
         return json.loads(data.split(b"\n", 1)[0])
-    except TimeoutError:
+    except socket.timeout:  # TimeoutError only from Python 3.10; macOS's own python3 is older
         return {"ok": False, "error": "No answer in time."}
     except (OSError, ValueError):
         return {"ok": False, "error": "The bridge was stopped."}
@@ -215,7 +215,7 @@ def main():
             message = json.loads(line)
             if not isinstance(message, dict):
                 raise ValueError
-        except ValueError:
+        except (ValueError, RecursionError):
             out.write(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}).encode() + b"\n")
             out.flush()
             continue

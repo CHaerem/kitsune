@@ -43,6 +43,7 @@ function pageHidden(el) {
   if (parseFloat(style.fontSize) < 3) return true;
   const box = el.getBoundingClientRect();
   if (box.width <= 1 && box.height <= 1 && el.childElementCount === 0) return true;
+  if ((box.width <= 1 || box.height <= 1) && style.overflow !== "visible") return true; // no room, and what does not fit is cut off
   return box.right + scrollX < 0 || box.bottom + scrollY < 0;
 }
 
@@ -58,6 +59,12 @@ function pageMarkdown(root) {
   return md(root).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 
   function kids(node) { return [...node.childNodes].map(md).join(""); }
+  // Text printed as it stands, but only what shows: a page can hide text inside code too.
+  function shown(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.data;
+    if (node.nodeType !== Node.ELEMENT_NODE || PAGE_LEFT_OUT.test(node.tagName.toUpperCase()) || pageHidden(node)) return "";
+    return [...node.childNodes].map(shown).join("");
+  }
   function wrap(mark, text) { const t = text.trim(); return t ? `${mark}${t}${mark}` : ""; }
   function md(node) {
     if (left <= 0) return "";
@@ -81,8 +88,8 @@ function pageMarkdown(root) {
       }
       case "STRONG": case "B": return wrap("**", kids(node));
       case "EM": case "I": return wrap("*", kids(node));
-      case "CODE": case "KBD": case "SAMP": return wrap("`", node.textContent.replace(/\s+/g, " "));
-      case "PRE": { left -= node.textContent.length; return `\n\n\`\`\`\n${node.textContent.replace(/\n$/, "")}\n\`\`\`\n\n`; }
+      case "CODE": case "KBD": case "SAMP": return wrap("`", shown(node).replace(/\s+/g, " "));
+      case "PRE": { const code = shown(node); left -= code.length; return `\n\n\`\`\`\n${code.replace(/\n$/, "")}\n\`\`\`\n\n`; }
       case "IMG": { const alt = (node.alt ?? "").replace(/\s+/g, " ").trim(); return alt ? `![${alt}]` : ""; } // what it shows, not where it is
       case "UL": case "OL": {
         let n = Number(node.getAttribute("start")) || 1;
@@ -94,8 +101,8 @@ function pageMarkdown(root) {
       }
       case "BLOCKQUOTE": return `\n\n${kids(node).trim().replace(/\n{2,}/g, "\n").replace(/^/gm, "> ")}\n\n`;
       case "TABLE": {
-        const rows = [...node.querySelectorAll("tr")].filter(r => r.closest("table") === node).map(r =>
-          "| " + [...r.cells].map(c => kids(c).replace(/\s+/g, " ").replace(/\|/g, "\\|").trim()).join(" | ") + " |");
+        const rows = [...node.querySelectorAll("tr")].filter(r => r.closest("table") === node && !pageHidden(r)).map(r =>
+          "| " + [...r.cells].filter(c => !pageHidden(c)).map(c => kids(c).replace(/\s+/g, " ").replace(/\|/g, "\\|").trim()).join(" | ") + " |");
         if (rows.length) rows.splice(1, 0, "|" + " --- |".repeat(rows[0].split(" | ").length));
         return `\n\n${rows.join("\n")}\n\n`;
       }
@@ -136,7 +143,7 @@ function pageDescribe(el) {
   const out = { ref: pageRemember(el), tag: el.tagName.toLowerCase() };
   const add = (name, text) => { const t = pageSpaced(text); if (t) out[name] = t; };
   const button = el.tagName.toUpperCase() === "INPUT" && /^(submit|button|reset)$/i.test(el.type);
-  add("text", button ? el.value : el.innerText);
+  add("text", button ? el.value : el.tagName.toUpperCase() === "TEXTAREA" ? "" : el.innerText); // a textarea's text is what is in it
   add("label", el.getAttribute("aria-label"));
   add("role", el.getAttribute("role"));
   add("type", el.getAttribute("type"));
@@ -148,8 +155,17 @@ function pageDescribe(el) {
   return out;
 }
 
+// A selector can ask what a field's value attribute starts with, letter by letter, and
+// many pages keep that attribute equal to what is in the field, a password included. No
+// selector needs it to find a field. Comments and escapes are other ways to write the same.
+function pageSelect(selector) {
+  const plain = selector.replace(/\/\*.*?\*\//gs, "").replace(/\\([0-9a-f]{1,6})\s?|\\(.)/gis, (_, hex, one) => (hex ? String.fromCodePoint(parseInt(hex, 16)) : one));
+  if (/\[\s*(?:[^\]|]*\|)?\s*value\b/i.test(plain)) throw pageRefusal("A selector cannot look at what is in a field.");
+  return document.querySelectorAll(selector);
+}
+
 function pageMatches({ selector, text }) {
-  if (selector) return [...document.querySelectorAll(selector)];
+  if (selector) return [...pageSelect(selector)];
   if (!text) return [...document.querySelectorAll(PAGE_CLICKABLE)];
   // What can be clicked and shows the text, then the elements right around it, however
   // long the page. (Never a field's value: a button's label is the one exception.)
@@ -158,7 +174,7 @@ function pageMatches({ selector, text }) {
   const button = el => el.tagName.toUpperCase() === "INPUT" && /^(submit|button|reset)$/i.test(el.type);
   const out = new Set();
   for (const el of document.querySelectorAll(PAGE_CLICKABLE)) {
-    if (has(el.textContent) || has(el.getAttribute("aria-label")) || has(el.getAttribute("placeholder")) || (button(el) && has(el.value))) out.add(el);
+    if ((el.tagName.toUpperCase() !== "TEXTAREA" && has(el.textContent)) || has(el.getAttribute("aria-label")) || has(el.getAttribute("placeholder")) || (button(el) && has(el.value))) out.add(el);
   }
   if (!document.body) return [...out];
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -258,7 +274,7 @@ function pageType(call) {
 // Until it shows or the time is up. By the page's own changes, not by looking again and again.
 function pageWait({ selector, text, ms }) {
   const needle = text?.toLowerCase();
-  const there = () => (selector ? [...document.querySelectorAll(selector)].some(pageVisible) : (document.body?.innerText ?? "").toLowerCase().includes(needle));
+  const there = () => (selector ? [...pageSelect(selector)].some(pageVisible) : (document.body?.innerText ?? "").toLowerCase().includes(needle));
   if (there()) return { found: true };
   return new Promise(resolve => {
     let soon = null;

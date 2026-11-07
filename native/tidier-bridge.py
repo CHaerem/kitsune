@@ -153,15 +153,21 @@ def answer(conn, message):
             pass
 
 
+def not_json(constant):
+    # NaN and Infinity: Python takes them, Firefox's JSON.parse does not, and a message it
+    # cannot read makes it close the port, which would cut the bridge for everyone.
+    raise ValueError(constant)
+
+
 def handle_line(conn, serial, line):
     global next_id
     try:
-        message = json.loads(line)
+        message = json.loads(line, parse_constant=not_json)
         client_id = message["id"]
         tool, args = message["tool"], message.get("args", {})
         if not isinstance(tool, str) or not isinstance(args, dict) or not isinstance(client_id, (int, str)):
             raise TypeError
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
         answer(conn, {"id": None, "ok": False, "error": "Not a request."})
         return
     with waiting_lock:

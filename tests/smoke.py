@@ -1542,6 +1542,10 @@ def alone_bridge(m):
 
     found, is_error, _ = client.call("find", tab=tab)
     check("find lists what can be clicked, and no field's content", "Add a line" in found and "Your name" in found and "SECRET-" not in found, found)
+    check("a table's shown rows are read", "| Shown cell |" in inside and "| Other cell |" in inside, page[:900])
+    check("code shows, without what is hidden in it", "shown code" in inside and "`shown`" in inside, page[:900])
+    text, is_error, _ = client.call("find", tab=tab, text="SECRET-IN")
+    check("find by text does not look in a field either", '"found":0' in text, text)
     button = json.loads(re.search(r"\n(\{.*\})\n", found, re.S).group(1))
     ref = next(e["ref"] for e in button["elements"] if e.get("text") == "Add a line")
 
@@ -1592,6 +1596,13 @@ def alone_bridge(m):
     check("nor send the form", is_error and "left to the person" in text, text)
     title = json.loads(re.search(r"\n(\[.*\])\n", client.call("list_tabs")[0], re.S).group(1))
     check("so nothing was sent", not any(t["title"] == "Signed in" for t in title), str(title))
+    # A selector can spell out a field's value attribute letter by letter, and many pages keep
+    # that equal to what is in the field. Asked every way a selector can write it.
+    for selector in ('input[value^="S"]', "input[type=password][VALUE]", "body:has(input[value^='S'])", 'input[\\76 alue^="S"]', 'input[val\\ue^="S"]', 'input[/* */value^="S"]', 'input[*|value^="S"]'):
+        text, is_error, _ = client.call("find", tab=signin, selector=selector)
+        check(f"find cannot look at what is in a field by {selector}", is_error and "what is in a field" in text, text)
+    text, is_error, _ = client.call("wait_for", tab=signin, selector='input[value^="S"]', timeout_s=1)
+    check("nor can wait_for", is_error and "what is in a field" in text, text)
     client.call("close_tab", tab=signin)
     text, _, _ = client.call("open_tab", url=m.pages + "/agent-shadow")
     signin = json.loads(text)["tab"]
@@ -1620,8 +1631,9 @@ def alone_bridge(m):
     check("and nothing was allowed by it", len(json.loads(client.call("list_spaces")[0])) == 1)
 
     # A space you open: read-only, then more, then closed again. On the settings page, with its own control.
-    open_as = lambda mode: ext_page(m, "/settings/settings.html", """const s = doc.querySelector(`#bridge-spaces select[data-space="${args[0]}"]`); s.value = args[1];
-      s.dispatchEvent(new page.Event("change", {bubbles: true})); await wait(600); return doc.querySelectorAll("#bridge-spaces select").length;""", f"firefox-container-{mine['context']}", mode)
+    open_space = lambda space, mode: ext_page(m, "/settings/settings.html", """const s = doc.querySelector(`#bridge-spaces select[data-space="${args[0]}"]`); s.value = args[1];
+      s.dispatchEvent(new page.Event("change", {bubbles: true})); await wait(600); return doc.querySelectorAll("#bridge-spaces select").length;""", space, mode)
+    open_as = lambda mode: open_space(f"firefox-container-{mine['context']}", mode)
     check("the settings page lists the other spaces", open_as("read") >= 3 - 1)
     text, is_error, _ = client.call("read_page", tab=other_tab)
     check("a space you open read-only can be read", not is_error and "<untrusted" in text, text[:200])
@@ -1643,6 +1655,16 @@ def alone_bridge(m):
     client.call("wait_for", tab=second, selector="h1")
     r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?second-again")).map(t => t.userContextId);""")
     check("nor when it goes to an address that matches", r == [context], str(r))
+    # In a space you opened to it too: a rule must not carry what it opens on into a closed one.
+    third = ext_page(m, "/settings/settings.html", """return [...doc.querySelectorAll("#bridge-spaces select")].map(s => s.dataset.space).find(s => s !== args[0]);""", f"firefox-container-{mine['context']}")
+    open_space(third, "write")
+    text, is_error, _ = client.call("open_tab", url=m.pages + "/agent?third", space=third)
+    third_tab = json.loads(text)["tab"]
+    client.call("wait_for", tab=third_tab, selector="h1")
+    r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?third")).map(t => t.userContextId);""")
+    check("nor one it opens in a space you opened to it, into one you did not", r == [int(third.split("-")[-1])], str(r))
+    client.call("close_tab", tab=third_tab)
+    open_space(third, "")
     # By dragging it to the space's dot, with real drag events on the real sidebar.
     handed = sidebar_page(m, """const t = plainTabs()[0], id = Number(t.dataset.tab), title = t.querySelector(".title").textContent;
       const dot = doc.querySelector(`#spaces .space[data-space="${args[0]}"]`), box = dot.getBoundingClientRect(), data = new page.DataTransfer();
@@ -1761,18 +1783,26 @@ def raw_bridge(sock, tool, args):
 
 
 def bridge_shot(m, name, path="/sidebar/sidebar.html"):
-    """A picture of one of Tidier's pages, a sidebar at a sidebar's width, to look at, with TIDIER_SHOTS set."""
+    """A picture of one of Tidier's pages, a sidebar at a sidebar's width, to look at, with TIDIER_SHOTS set: as it is, and in a light theme."""
     folder = os.environ.get("TIDIER_SHOTS")
     if not folder:
         return
     ext_page(m, path, """if (doc.getElementById("spaces").tagName === "NAV") doc.body.style.maxWidth = "300px"; await wait(100); return 1;""")
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if path in m.cmd("WebDriver:GetCurrentURL"):
-            break
-    open(os.path.join(folder, name + ".png"), "wb").write(base64.b64decode(m.cmd("WebDriver:TakeScreenshot", {"full": "settings" in path})))
-    m.chrome()
+
+    def shoot(suffix):
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if path in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        open(os.path.join(folder, name + suffix + ".png"), "wb").write(base64.b64decode(m.cmd("WebDriver:TakeScreenshot", {"full": "settings" in path})))
+        m.chrome()
+
+    shoot("")
+    m.js("Services.prefs.setIntPref('layout.css.prefers-color-scheme.content-override', 1); return 1;")
+    time.sleep(0.5)
+    shoot("-light")
+    m.js("Services.prefs.clearUserPref('layout.css.prefers-color-scheme.content-override'); return 1;")
 
 
 def copy_for_claude(m, tab):

@@ -11,7 +11,7 @@ const COPY_EVERY_MS = 24 * 3600e3, COPY_CHECK_MINUTES = 6 * 60;
 
 async function theCopy() {
   await flushWrites();
-  return { tidier: browser.runtime.getManifest().version, when: Date.now(), data: await browser.storage.local.get(COPY_KEYS) };
+  return { tidier: browser.runtime.getManifest().version, when: Date.now(), data: bridgeOutOfCopy(await browser.storage.local.get(COPY_KEYS)) };
 }
 
 async function makeCopy() {

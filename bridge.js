@@ -176,10 +176,17 @@ async function bridgeOpenTab(ctx) {
   const url = bridgeWebUrl(ctx.args.url);
   const space = ctx.args.space ?? ctx.settings.agentSpace;
   if (!bridgeAllows("open_tab", space, ctx.settings)) throw bridgeRefusal("That space is not open to agents for changes.");
+  ctx.space = space;
   const props = { windowId: await bridgeWindow(), cookieStoreId: space, url, active: false };
   if ((await browser.tabs.query({ windowId: props.windowId, cookieStoreId: space })).length >= OPEN_MOST) throw bridgeRefusal(`There are ${OPEN_MOST} tabs in that space already: close some first.`);
-  bridgeAlive(ctx);
-  const tab = await (globalThis.openUnruled?.(props) ?? browser.tabs.create(props));
+  // In the queue: the first page's look at the rules (byRule, spaces.js) is queued behind
+  // this, so by then the tab is marked, whichever way round the events and this answer come.
+  const tab = await bridgeInQueue(async () => {
+    bridgeAlive(ctx);
+    const opened = await (globalThis.openUnruled?.(props) ?? browser.tabs.create(props));
+    bridgeDriven.add(opened.id);
+    return opened;
+  });
   bridgeCurrent = tab.id;
   return { text: JSON.stringify({ tab: tab.id }) };
 }
@@ -187,13 +194,21 @@ async function bridgeOpenTab(ctx) {
 async function bridgeNavigate(ctx) {
   const url = bridgeWebUrl(ctx.args.url);
   if (ctx.tab.pinned) throw bridgeRefusal("An essential keeps its address.");
-  const key = syncKeyByTab.get(ctx.tab.id);
-  // A placeholder with no loaded page anywhere becomes the tab that holds it, as when you select it.
-  if (key && syncRoleByTab.get(ctx.tab.id) !== "live") await setRole(ctx.tab.id, key, "live");
-  bridgeAlive(ctx);
-  await browser.tabs.update(ctx.tab.id, { url });
-  bridgeCurrent = ctx.tab.id;
-  return { text: JSON.stringify({ tab: ctx.tab.id }) };
+  // In the queue, and looked up again: you may have selected its placeholder elsewhere
+  // meanwhile, and two tabs must not end up holding the page.
+  const id = await bridgeInQueue(async () => {
+    bridgeAlive(ctx);
+    const tab = await bridgeRealTab(ctx.tab.id);
+    if (!tab) throw bridgeRefusal(NO_SUCH_TAB);
+    const key = syncKeyByTab.get(tab.id);
+    // A placeholder with no loaded page anywhere becomes the tab that holds it, as when you select it.
+    if (key && syncRoleByTab.get(tab.id) !== "live") await setRole(tab.id, key, "live");
+    bridgeDriven.add(tab.id);
+    return tab.id;
+  });
+  await browser.tabs.update(id, { url });
+  bridgeCurrent = id;
+  return { text: JSON.stringify({ tab: id }) };
 }
 
 // The tab the next tools work on. It comes to the front only where you are looking at
@@ -217,11 +232,14 @@ async function bridgeSelectTab(ctx) {
 
 async function bridgeCloseTab(ctx) {
   if (ctx.tab.pinned) throw bridgeRefusal("An essential stays.");
-  if (ctx.tab.active) throw bridgeRefusal("The person has this tab selected, so it stays.");
-  const key = syncKeyByTab.get(ctx.tab.id);
-  await serial(async () => {
+  // Decided in the queue, on what is true by then: you may have selected it while this waited.
+  await bridgeInQueue(async () => {
     bridgeAlive(ctx);
-    if (!key) return browser.tabs.remove(ctx.tab.id);
+    const tab = await bridgeRealTab(ctx.tab.id);
+    if (!tab) return;
+    if (tab.active) throw bridgeRefusal("The person has this tab selected, so it stays.");
+    const key = syncKeyByTab.get(tab.id);
+    if (!key) return browser.tabs.remove(tab.id);
     if (!(await closesQuietly(key))) throw bridgeRefusal("This page holds unsaved input, so it stays."); // never a question at a moment you did not choose
     await closeEverywhere(key, { dismiss: false });
   });
@@ -302,16 +320,17 @@ async function bridgeOnPage(ctx, call, ms = PAGE_CALL_MS) {
   const tab = await bridgeLoaded(ctx);
   await bridgeCanRead(tab);
   bridgeAlive(ctx);
-  const result = await bridgeInPage(tab.id, call, ms);
+  const result = await bridgeInPage(tab.id, call, ms, () => bridgeAlive(ctx));
   if (result?.error) throw bridgeRefusal(result.error);
   return result;
 }
 
-async function bridgeInPage(tabId, call, ms) {
+async function bridgeInPage(tabId, call, ms, stillWanted = () => {}) {
   let limit;
   const late = new Promise((_, reject) => { limit = setTimeout(() => reject(new Error("The page did not answer in time.")), ms); });
   const run = async () => {
     await browser.tabs.executeScript(tabId, { file: BRIDGE_PAGE_SCRIPT, runAt: "document_end" });
+    stillWanted(); // a click must not happen after Stop, or after you closed its space, because the page was slow
     const [result] = await browser.tabs.executeScript(tabId, { code: `bridgePage(${JSON.stringify(call)})`, runAt: "document_end" });
     return result;
   };
@@ -328,12 +347,13 @@ let forYouTimer = null;
 
 async function bridgeLeaveForYou(ctx) {
   const note = typeof ctx.args.note === "string" ? ctx.args.note.trim().slice(0, NOTE_MOST) : "";
-  await serial(async () => {
+  await bridgeInQueue(async () => {
     bridgeAlive(ctx);
     await register(ctx.tab.id); // a tab just opened may not be in the record yet
     const key = syncKeyByTab.get(ctx.tab.id);
-    if (!key || ctx.tab.pinned) throw bridgeRefusal("Only an ordinary tab with a web page can be left.");
     const all = await getSynced();
+    // (A live folder's tabs stay where the search puts them, so moveTab would leave it where it is.)
+    if (!key || !all[key] || all[key].liveFolder || ctx.tab.pinned) throw bridgeRefusal("Only an ordinary tab with a web page can be left.");
     let folder = foldersOf(all, ctx.tab.cookieStoreId).find(f => f.forYou)?.key;
     if (!folder) {
       folder = await createFolder("For you", ctx.tab.cookieStoreId);
@@ -401,9 +421,12 @@ async function forYouLoad() {
 }
 
 // A rule is for your own browsing: it never sends a tab out of the Agent space, not one
-// an agent opened, and not one you handed over. (A rule sending an agent's tab to a
-// workplace's space would put the agent among its logins.)
-const bridgeKeeps = tab => !!agentSpaceId && tab.cookieStoreId === agentSpaceId;
+// an agent opened, and not one you handed over. Nor a tab an agent opened or sent somewhere
+// in a space you opened to it: a rule sending that on to a closed space would load the
+// agent's address there, among that space's logins, where it could not even see it.
+const bridgeDriven = new Set(); // tabs an agent opened or navigated; in memory, since a rule looks at new tabs only
+browser.tabs.onRemoved.addListener(id => bridgeDriven.delete(id));
+const bridgeKeeps = tab => bridgeDriven.has(tab.id) || (!!agentSpaceId && tab.cookieStoreId === agentSpaceId);
 
 // With the bridge off and nothing in it, the Agent space rests: no dot on the bar for
 // something you tried once. Its logins stay, for when it is turned on again.
@@ -417,12 +440,32 @@ let bridgeEpoch = 0; // grows at every stop: what an agent had under way goes no
 let bridgeHalt = null; // rejected at a stop, so a call that is waiting ends at once
 let bridgeTries = 0, bridgeRetry = null;
 let bridgeServer = null; // where the MCP server is, for the settings page
+// The line to give to Claude Code. Quoted when it has to be: this folder can have a space in it.
+const bridgeAddCommand = server => (server ? `claude mcp add tidier -- python3 -I ${/^[\w@%+=:,./-]+$/.test(server) ? server : `'${server.replace(/'/g, "'\\''")}'`}` : null);
 let bridgeProblem = null;
 let bridgeCurrent = null; // the tab the agent works on when it names none
 let bridgeBusy = 0;
 
+// Asked before anything is done and before anything goes back: a call can take half a
+// minute (a slow page, wait_for), and Stop or closing a space counts at once, not for the
+// next call. ctx.settings is the stored object itself, so it shows what you changed.
 function bridgeAlive(ctx) {
   if (ctx.epoch !== bridgeEpoch) throw bridgeRefusal("The bridge was stopped.");
+  const space = ctx.tab?.cookieStoreId ?? ctx.space;
+  if (space && !bridgeAllows(ctx.name, space, ctx.settings)) throw bridgeRefusal(NO_SUCH_TAB);
+}
+
+// A job in the queue. A refusal is an answer to an agent, not something wrong in Tidier,
+// and what fails in serial() counts as an error (noteError), so it travels around that.
+async function bridgeInQueue(job) {
+  const done = await serial(async () => {
+    try { return { value: await job() }; } catch (err) {
+      if (err?.refused) return { refusal: err };
+      throw err;
+    }
+  });
+  if (done.refusal) throw done.refusal;
+  return done.value;
 }
 
 function bridgeConnect() {
@@ -490,7 +533,7 @@ function bridgeCut() {
 
 async function bridgeAnswer(port, msg) {
   const name = typeof msg.tool === "string" ? msg.tool : "";
-  const ctx = { epoch: bridgeEpoch, args: msg.args && typeof msg.args === "object" && !Array.isArray(msg.args) ? msg.args : {}, settings: null, tab: null };
+  const ctx = { name, epoch: bridgeEpoch, args: msg.args && typeof msg.args === "object" && !Array.isArray(msg.args) ? msg.args : {}, settings: null, tab: null };
   bridgeBusy++;
   let reply;
   try {
@@ -502,7 +545,8 @@ async function bridgeAnswer(port, msg) {
     agentDid(name, ctx, err?.message);
   } finally {
     bridgeBusy--;
-    if (port === bridgePort) agentIdleSoon();
+    // Not only on this port: with a host that died during a call, the line must still go.
+    if (agentLine !== null) agentIdleSoon();
   }
   if (port !== bridgePort) return;
   try { port.postMessage({ id: msg.id, ...reply }); } catch (err) { /* the port just went */ }
@@ -538,11 +582,13 @@ function agentDid(name, ctx, refused) {
   const tool = Object.hasOwn(BRIDGE_TOOLS, name) ? BRIDGE_TOOLS[name] : null;
   // Only the name of a site: nothing a page wrote gets here.
   if (!tool) return;
-  const where = bridgeHost(ctx.args.url ?? ctx.tab?.url);
+  const where = bridgeHost(ctx.args.url ?? ctx.tab?.url).slice(0, 100); // an agent chooses what it passes as an address
   // (A tab just opened has no address yet.)
   const text = refused ? `refused: ${name}${where ? " on " + where : ""}` : `${tool.says} ${where || (tool.on === "tab" ? "a page" : "")}`.trim();
   agentLine = text;
-  agentLastSpace = ctx.tab?.cookieStoreId ?? ctx.settings?.agentSpace ?? agentLastSpace;
+  // The space it works in: one it names only if it may (else that is refused, and shows on its own).
+  const named = ctx.settings && bridgeAccess(ctx.args.space, ctx.settings) ? ctx.args.space : null;
+  agentLastSpace = ctx.tab?.cookieStoreId ?? named ?? ctx.settings?.agentSpace ?? agentLastSpace;
   agentLog.push({ when: Date.now(), text, refused: !!refused });
   if (agentLog.length > AGENT_LOG) agentLog.shift();
   clearTimeout(agentTimer);
@@ -568,7 +614,7 @@ function agentStateFor(port) {
   const state = {
     copy: claudeCopyOn, active: agentLine !== null, line: agentLine, space: agentLastSpace, forYou: forYouWaiting,
   };
-  return port.name === "agent-settings" ? { ...state, wanted: bridgeWanted, ready: bridgeReady, log: agentLog, server: bridgeServer, problem: bridgeProblem } : state;
+  return port.name === "agent-settings" ? { ...state, wanted: bridgeWanted, ready: bridgeReady, log: agentLog, how: bridgeAddCommand(bridgeServer), problem: bridgeProblem } : state;
 }
 
 function pushAgentState() {
@@ -695,14 +741,27 @@ async function bridgePrune(settings) {
   }
 }
 
-async function bridgeSet(on) {
+// One at a time, in the order asked: turning it on takes a few steps with Firefox, and two
+// clicks at once must not make two Agent spaces, nor a Stop be undone by the on before it.
+// What is off is off at once, without waiting for its turn.
+let bridgeWish = false, bridgeTurning = Promise.resolve();
+function bridgeSet(on) {
+  bridgeWish = on;
+  if (!on) { bridgeCut(); bridgeWanted = false; }
+  const turn = bridgeTurning.then(() => bridgeTurn(on));
+  bridgeTurning = turn.catch(() => {});
+  return turn;
+}
+
+async function bridgeTurn(on) {
   const settings = await claudeSettings.get();
   if (on && tidierAlone) {
     settings.agentSpace = await agentSpaceEnsure(settings);
     agentSpaceId = settings.agentSpace;
     await bridgePrune(settings);
-    settings.bridge = bridgeWanted = true;
+    settings.bridge = bridgeWanted = bridgeWish;
     claudeSettings.set(settings);
+    if (!bridgeWish) return; // turned off meanwhile; that turn is next
     bridgeTries = 0;
     if (!bridgePort) bridgeConnect();
     viewAllSoon(); // the new dot
@@ -723,6 +782,7 @@ async function bridgeAllowSpace(space, mode) {
   if (mode === "read" || mode === "write") settings.allowed[space] = { mode, name: container.name };
   else delete settings.allowed[space];
   claudeSettings.set(settings);
+  await flushWrites(); // closing a space must last, also if Firefox goes down right after it
 }
 
 // A space that is removed takes what was said about it along, and the Agent space the bridge.
@@ -773,6 +833,17 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   })();
 });
 
+// What goes in a copy of Tidier's data (copies.js), which can bring a machine's spaces to
+// another: nothing an agent did, since nothing here may reach a machine that has not turned
+// it on. That is the Agent space, and a For you folder elsewhere with what is in it.
+function bridgeOutOfCopy(data) {
+  const all = data.syncedTabs ?? {};
+  const agents = e => e.cookieStoreId === agentSpaceId || e.forYou || all[e.parentKey]?.forYou;
+  if (data.essentials) data.essentials = data.essentials.filter(e => e.cookieStoreId !== agentSpaceId);
+  if (data.syncedTabs) data.syncedTabs = Object.fromEntries(Object.entries(all).filter(([, e]) => !agents(e)));
+  return data;
+}
+
 // With Tidier started (tabsync.js). On every other machine this reads one value and is done.
 async function startBridge() {
   if (!tidierAlone) return;
@@ -780,7 +851,10 @@ async function startBridge() {
   agentSpaceId = settings.agentSpace ?? null;
   claudeCopyOn = !!settings.copy;
   if (typeof BAR_COMMANDS !== "undefined" && !BAR_COMMANDS.includes(CLAUDE_BAR_COMMANDS[0])) BAR_COMMANDS.push(...CLAUDE_BAR_COMMANDS);
-  if (agentSpaceId) await forYouLoad();
+  if (agentSpaceId) {
+    await forYouLoad();
+    viewAllSoon(); // a sidebar drawn before now did not know this space may be resting (bridgeRests)
+  }
   pushAgentState();
   if (settings.bridge) await bridgeSet(true);
 }

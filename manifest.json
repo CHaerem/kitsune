@@ -48,6 +48,7 @@
   "background": {
     "scripts": [
       "common.js",
+      "bridge.js",
       "essentials.js",
       "tabsync.js",
       "folders.js",
@@ -58,8 +59,7 @@
       "moveover.js",
       "sidebar-view.js",
       "archive.js",
-      "shortcuts.js",
-      "bridge.js"
+      "shortcuts.js"
     ],
     "persistent": true
   },

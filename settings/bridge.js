@@ -56,8 +56,8 @@ function bridgeDrawLive(live) {
   bridgeSwitch.checked = live.wanted;
   bridgeDetails.hidden = !live.wanted;
   bridgeStatus.textContent = live.ready ? "Ready for an agent." : live.problem ? `Agents cannot connect: ${live.problem}` : "Starting…";
-  bridgeHowTo.hidden = !live.ready || !live.server;
-  bridgeHowTo.textContent = live.server ? `claude mcp add tidier -- python3 -I ${live.server}` : "";
+  bridgeHowTo.hidden = !live.ready || !live.how;
+  bridgeHowTo.textContent = live.how ?? "";
   const format = new Intl.DateTimeFormat(undefined, { timeStyle: "medium" });
   bridgeLogBox.replaceChildren(...[...(live.log ?? [])].reverse().map(entry => bridgeEl("li", { className: entry.refused ? "refused" : "", textContent: `${format.format(entry.when)}  ${entry.text}` })));
 }

@@ -166,7 +166,8 @@ part of the signed extension.
 ## Working with Claude and other agents
 
 Two things, each off until you turn it on under *Claude and other agents* on the settings
-page, on this machine only, and only with Tidier alone. Neither setting is part of a copy.
+page, on this machine only, and only with Tidier alone. Neither setting, nor what an agent
+did in its space or left you, is part of a copy.
 
 **Copy for Claude.** A tab's menu and the command bar get *Copy page for Claude* (title,
 address and the page as clean Markdown; with several tabs selected, a list), *Copy these
@@ -195,17 +196,20 @@ agent <-stdio-> native/tidier-mcp.py <-Unix socket-> native/tidier-bridge.py <-n
 
 - **Agents have a space of their own.** Turning the bridge on makes a space named Agent,
   with its own container and so its own logins. By default an agent can see and touch only
-  that. It does not learn your other spaces or tabs exist. A rule never sends a tab out of it.
+  that. It does not learn your other spaces or tabs exist. A rule never sends a tab out of it,
+  nor a tab an agent opened in a space you opened to it on into a closed one.
 - **Another space is your decision,** per space, on the settings page: closed unless you
   say otherwise, and *Can read* before *Can read and act*. A space you open is open with
-  the logins in it, so a workplace's space is never opened by itself.
+  the logins in it, so a workplace's space is never opened by itself. Closing one counts at
+  once, also for what an agent has under way there.
 - **The decision is made in the extension,** in one place (`bridgeAllows`, `bridge.js`), on
   every call. The two scripts in `native/` only carry messages; anything you run could talk
   to the socket directly, and gets the same answers. No tool can change a setting or open
   a space: those messages are taken only from the settings page.
 - **Never reachable, since no tool does it:** cookies, passwords, storage, downloads,
   files, Firefox's or Tidier's settings. Agents go to `http:` and `https:` only, never
-  `file:`, `about:` or an extension's pages. What is in a form field is never read. A password
+  `file:`, `about:` or an extension's pages. What is in a form field is never read, not even
+  by asking a selector about it letter by letter. A password
   or card field is left to you. Firefox fills in saved passwords in any container, and an
   extension cannot stop that, so on a page with a password filled in an agent cannot click
   or send a form: it could otherwise sign in to your account without knowing the password.
@@ -234,7 +238,8 @@ an add-on), it does not hide a space you opened from it, and it does not protect
 from what you run yourself: anything running under your account can reach the socket while
 it is on, and could read your Firefox profile anyway. Keep it off when you are not
 using it. A note an agent leaves you can have been steered by a page as well. A
-screenshot shows what the page shows, also a name typed in a field.
+screenshot shows what the page shows, also a name typed in a field, and a rich text box
+that is part of a page (not a form field) is read as the page's text.
 
 Reading pages and screenshots need access to all websites, which is optional and asked
 for in the click that turns these on. Without it an agent can still see tabs and addresses,

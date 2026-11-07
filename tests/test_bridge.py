@@ -5,6 +5,7 @@ Standard library only; `node --test` runs it too (tests/bridge.test.mjs).
 
     python3 -I tests/test_bridge.py
 """
+import importlib.util
 import json
 import os
 import re
@@ -142,6 +143,10 @@ class Protocol(Base):
         client.proc.stdin.flush()
         self.assertEqual(client.receive()["error"]["code"], -32700)
         self.assertEqual(client.request("ping")["result"], {}, "and it goes on")
+        client.proc.stdin.write(b"[" * 200_000 + b"\n")  # too deep for any parser
+        client.proc.stdin.flush()
+        self.assertEqual(client.receive()["error"]["code"], -32700)
+        self.assertEqual(client.request("ping")["result"], {}, "and that too")
 
 
 class Refusals(Base):
@@ -338,6 +343,24 @@ class Messages(Base):
         conn.close()
         self.assertEqual(ff.asked, [], "none of it reaches Firefox")
 
+    def test_what_firefox_could_not_read_stays_here(self):
+        # Python's JSON takes these, Firefox's does not, and it closes the port at a message it
+        # cannot read: anything on the socket could cut the bridge for everyone.
+        ff = self.firefox()
+        ff.answer_calls(lambda m: {"ok": True, "text": "fine"})
+        cwd = os.getcwd()
+        os.chdir(os.path.dirname(self.socket))
+        conn = socket.socket(socket.AF_UNIX)
+        conn.connect("bridge.sock")
+        os.chdir(cwd)
+        conn.settimeout(5)
+        for rubbish in (b'{"id": 1, "tool": "x", "args": {"a": NaN}}\n', b'{"id": 1, "tool": "x", "args": {"a": -Infinity}}\n', b'{"id": 1, "tool": "x", "args": ' + b"[" * 100_000 + b"]" * 100_000 + b"}\n"):
+            conn.sendall(rubbish)
+            self.assertIn(b"Not a request", conn.recv(65536))
+        conn.close()
+        self.assertEqual(ff.asked, [])
+        self.assertFalse(self.mcp().call("list_spaces")[1], "and the bridge stays up")
+
     def test_an_answer_goes_to_the_one_who_asked(self):
         ff = self.firefox()
         ff.answer_calls(lambda m: {"ok": True, "text": m["args"]["who"]})
@@ -354,6 +377,17 @@ class Messages(Base):
         for t in threads:
             t.join()
         self.assertEqual(results, {f"agent{i}": f"agent{i}" for i in range(4)})
+
+    def test_no_answer_in_time_says_so(self):
+        # On any Python: macOS's own is older than the one socket.timeout became TimeoutError in.
+        spec = importlib.util.spec_from_file_location("tidier_mcp", SERVER)
+        server = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(server)
+        server.HOME = os.path.dirname(self.socket)
+        server.ANSWER_TIMEOUT_S = 0.2
+        self.firefox()  # never answers
+        self.addCleanup(os.chdir, os.getcwd())
+        self.assertEqual(server.ask_bridge("list_spaces", {}), {"ok": False, "error": "No answer in time."})
 
     def test_stop_while_a_call_waits(self):
         ff = self.firefox()  # never answers
