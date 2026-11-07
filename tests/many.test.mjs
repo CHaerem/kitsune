@@ -648,6 +648,31 @@ test("the order of a window is looked at in bursts, and is right after them", as
   x.kill();
 });
 
+test("a rest follows every look at a window's order, also if nothing changed during the look", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2);
+  const x = await alone(ff);
+  await until(() => !x.js("orderQueries").size);
+  // The order's rests wait for this test; other timers run as usual.
+  const rests = [], set = x.ctx.setTimeout;
+  x.ctx.setTimeout = (f, ms, ...a) => (String(f).includes("orderQueries") ? rests.push(f) : set(f, ms, ...a));
+  const looks = () => x.js("work.lookups"), first = looks(), noteOrder = x.js("noteOrder");
+  noteOrder(w.id);
+  await until(() => rests.length);
+  assert.equal(rests.length, 1, "the look is over, and nothing changed during it: a rest all the same");
+  assert.equal(looks(), first + 1);
+  noteOrder(w.id);
+  noteOrder(w.id);
+  assert.equal(looks(), first + 1, "what changes during the rest waits for it");
+  rests.shift()();
+  assert.equal(looks(), first + 2, "and is looked at after it, once");
+  await until(() => rests.length);
+  rests.shift()();
+  assert.equal(looks(), first + 2, "with nothing changed since, nothing more");
+  assert.equal(x.js("orderQueries").size, 0);
+  x.kill();
+});
+
 test("a window that has gone is not kept in the order, also if a look comes late", async () => {
   const ff = new FakeFirefox();
   const w = manyTabs(ff, 2), other = ff.addWindow();

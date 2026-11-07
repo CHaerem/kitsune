@@ -898,11 +898,13 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
 // Each window's tabs as last seen, in order, so that a tab you close can be
 // put back where it was: Firefox reports a closed tab by its ID only.
 //
-// One look at a time, and if tabs changed meanwhile, another after a rest in proportion
-// to what this one took: a burst of events in a window of a thousand tabs would otherwise
-// keep Firefox busy describing tabs to no one, the whole time. (With 50 tabs the rest is
-// a few milliseconds.) It has a limit: this order says whether a tab you close was
-// loaded, and for a saved tab that decides between unloading it and closing it.
+// One look at a time, followed by a rest in proportion to what it took, and another
+// look only if tabs changed since. The rest comes after every look, also if nothing
+// changed during it: a look often ends before the next event, and with a look per event
+// a burst in a window of a thousand tabs keeps Firefox busy describing tabs to no one,
+// and a new window takes time by the square of its tabs. (With 50 tabs the rest is a few
+// milliseconds.) It has a limit: this order says whether a tab you close was loaded,
+// and for a saved tab that decides between unloading it and closing it.
 const ORDER_REST = 9, ORDER_LONGEST_REST_MS = 1000;
 const lastOrder = new Map(); // windowId -> [{ id, cookieStoreId, unloaded }]
 const orderQueries = new Map(); // windowId -> whether to look again when the query in progress is done
@@ -916,8 +918,11 @@ function noteOrder(windowId) {
     lastOrder.set(windowId, tabs.sort((a, b) => a.index - b.index)
       .map(t => ({ id: t.id, cookieStoreId: t.cookieStoreId, unloaded: t.discarded || isGhostUrl(t.url) })));
   }, () => lastOrder.delete(windowId)).finally(() => {
-    if (!orderQueries.get(windowId)) { orderQueries.delete(windowId); return; }
-    setTimeout(() => { orderQueries.delete(windowId); noteOrder(windowId); }, Math.min(ORDER_REST * (performance.now() - t0), ORDER_LONGEST_REST_MS));
+    setTimeout(() => {
+      const again = orderQueries.get(windowId);
+      orderQueries.delete(windowId);
+      if (again) noteOrder(windowId);
+    }, Math.min(ORDER_REST * (performance.now() - t0), ORDER_LONGEST_REST_MS));
   });
 }
 browser.tabs.onCreated.addListener(tab => noteOrder(tab.windowId));
