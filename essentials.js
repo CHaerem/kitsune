@@ -370,7 +370,10 @@ async function sortEssentials(windowId, list) {
     const tab = await browser.tabs.get(tabId).catch(() => null);
     if (!tab || tab.index === index) continue;
     ownMoves.add(tabId);
-    await browser.tabs.move(tabId, { index }).catch(() => ownMoves.delete(tabId));
+    // (Unmarked here too: Firefox ignores a move out of the pinned part without a word, and
+    // the next move you make of this tab would then not count.)
+    await browser.tabs.move(tabId, { index }).catch(() => {});
+    ownMoves.delete(tabId);
   }
 }
 

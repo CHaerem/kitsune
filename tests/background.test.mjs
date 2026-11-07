@@ -1450,3 +1450,19 @@ test("a placeholder you are looking at opens when the window with its page close
   assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
   x.kill();
 });
+
+test("a move Firefox ignores does not make the next one you make not count", async () => {
+  const { ff, x, windows: [a] } = await chaosStart({ windows: 1 });
+  const one = ff.openTab(a.id, { url: "https://one.example/", cookieStoreId: "firefox-container-1" });
+  const two = ff.openTab(a.id, { url: "https://two.example/", cookieStoreId: "firefox-container-1" });
+  await ff.clock.run(3000);
+  ff.pinTab(one);
+  ff.pinTab(two);
+  await ff.clock.idle(60000);
+  const stale = ff.list(a.id).filter(y => y.pinned).map(y => y.id);
+  await ff.clock.settled(x.js("sortEssentials")(a.id, [...ff.store.essentials].reverse())); // moved, as if in another order
+  await ff.clock.settled(x.js("sortEssentials")(a.id, ff.store.essentials));
+  assert.equal(x.js("ownMoves").size, 0);
+  assert.equal(stale.length, 2);
+  x.kill();
+});

@@ -73,6 +73,18 @@ class World {
     for (const e of list) this.essentials.set(e.key, e.url);
     return all;
   }
+  isLastShown(w, t) { return !this.tabsOf(w).some(x => x !== t && !x.hidden); }
+  // In the moment before Tidier has started, a window closing cannot hand anything over,
+  // and a tab that is just being registered there has nothing to hand over to.
+  windowClosing(w) {
+    for (const t of this.tabsOf(w)) {
+      if (!this.x.js("started") && this.value(t, "syncKey")) this.excused.add(this.value(t, "syncKey"));
+      if (!this.value(t, "syncRole")) {
+        this.closedAddresses.add(t.url);
+        if (this.ff.pages.get(t)?.url) this.closedAddresses.add(this.ff.pages.get(t).url);
+      }
+    }
+  }
   // The page stops without a word. What was made a moment ago is not written yet. A tab is
   // known again by its address; a folder has none, and is then gone with that moment.
   async hardStop() {
@@ -162,18 +174,14 @@ const OPS = {
     const t = w && pick(W.tabsOf(w).filter(t => !t.hidden), b);
     if (!t) return;
     await W.closing(t);
+    if (W.isLastShown(w, t)) W.windowClosing(w);
     W.ff.closeTab(t.id);
   } },
   newWindow: { weight: 3, run(W) { W.ff.openWindow(); } },
   closeWindow: { weight: 3, run(W, { a }) {
     const w = pick(W.windows(), a);
     if (!w) return;
-    // In the moment before Tidier has started, a window closing cannot hand anything over,
-    // and a tab that is just being registered there has nothing to hand over to.
-    for (const t of W.tabsOf(w)) {
-      if (!W.x.js("started") && W.value(t, "syncKey")) W.excused.add(W.value(t, "syncKey"));
-      if (!W.value(t, "syncRole")) W.closedAddresses.add(t.url);
-    }
+    W.windowClosing(w);
     W.ff.closeWindow(w.id);
   } },
   // ⌘⇧T: the last thing closed, a tab or a whole window.
@@ -209,7 +217,9 @@ const OPS = {
     // (Not a Sidebery folder page: Sidebery does not offer it, and it is not looked after.)
     const w = pick(W.windows(), a), t = w && pick(W.tabsOf(w).filter(t => !isFolderPage(t.url)), b);
     const to = pick(W.windows().filter(x => x !== w), c);
-    if (t && to) W.ff.moveTabs([t.id], { windowId: to.id, index: t.pinned ? W.ff.pinnedCount(to) : -1 });
+    if (!t || !to) return;
+    if (W.isLastShown(w, t)) W.windowClosing(w);
+    W.ff.moveTabs([t.id], { windowId: to.id, index: t.pinned ? W.ff.pinnedCount(to) : -1 });
   } },
   // ------ Tidier alone: what the sidebar sends, from what it has drawn ------
   sidebarOpen: { weight: 3, alone: true, run(W, { a }) {
@@ -228,6 +238,7 @@ const OPS = {
     const item = rows && pick(rows.tabs, b), t = item && W.ff.tabs.get(item.id);
     if (!t) return;
     await W.closing(t);
+    if (W.isLastShown(w, t)) W.windowClosing(w);
     W.ff.sidebarSays(w.id, { type: "close", tabId: item.id });
   } },
   space: { weight: 7, alone: true, run(W, { a, b }) {
