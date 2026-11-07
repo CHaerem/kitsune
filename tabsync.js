@@ -1102,11 +1102,10 @@ async function start(delayMs) {
 // both an essential and a synced tab.
 async function seeUnseenTabs() {
   await serial(async () => {
-    for (const w of await normalWindows()) {
-      if (await adoptRestored(w.id)) await reconcileAll();
-      else await fillIfOpen(w.id);
-      if (tidierAlone) await startSpaceIn(w.id);
-    }
+    const wins = await normalWindows();
+    for (const w of wins) await adoptRestored(w.id);
+    await reconcileAll(); // also what was dragged meanwhile, and it fills every window
+    if (tidierAlone) for (const w of wins) await startSpaceIn(w.id);
   });
   for (const t of await browser.tabs.query({})) {
     const key = syncKeyByTab.get(t.id);

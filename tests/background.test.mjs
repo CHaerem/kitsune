@@ -1726,3 +1726,32 @@ test("marks on tabs being closed go also when a close is refused", async () => {
   assert.equal(x.js("syncBusy").has(t.id), false);
   x.kill();
 });
+
+test("a tab dragged in the last moment of a start is put right when it has started", async () => {
+  // When exactly it has started, from a run with nothing else in it: the same each time.
+  const session = () => {
+    const ff = new ChaosFirefox();
+    ff.store.syncedTabs = { k: entry("https://k.example/") };
+    const a = ff.addWindow({ focused: true }), b = ff.addWindow();
+    ff.addTab(a.id, { url: "about:home", active: true });
+    ff.addTab(b.id, { url: "about:home", active: true });
+    ff.addTab(a.id, { url: "https://k.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "k", syncRole: "live" });
+    const ghost = ff.addTab(b.id, { url: GHOST("ghost", "k"), discarded: true, cookieStoreId: C1 }, { syncKey: "k", syncRole: "ghost" });
+    const x = ff.boot();
+    x.b.runtime.onInstalled.fire({ reason: "update" });
+    return { ff, x, a, b, ghost };
+  };
+  const first = session();
+  while (!first.x.js("started")) await first.ff.clock.step();
+  const startedAt = first.ff.clock.now;
+  first.x.kill();
+  for (let before = 1; before <= 40; before++) {
+    const { ff, x, a, b, ghost } = session();
+    await ff.clock.run(startedAt - ff.clock.now - before);
+    ff.moveTabs([ghost.id], { windowId: a.id, index: -1 });
+    await ff.clock.idle(60000);
+    const reps = w => ff.list(w.id).filter(t => ff.values.get(t.id)?.syncKey === "k").length;
+    assert.deepEqual([reps(a), reps(b)], [1, 1], `dragged ${before} ms before it had started`);
+    x.kill();
+  }
+});
