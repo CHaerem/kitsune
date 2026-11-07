@@ -370,6 +370,17 @@ async function reconcileAll() {
   // A window closed meanwhile must not keep the others from being filled.
   for (const w of wins) await fillWindow(w.id).catch(noteError);
   await openIfBlank(focusedWindowId);
+  await titlesBack();
+}
+
+// Firefox moves an unloaded tab to another window without its title, and may bring one back
+// so with a reopened window, and then shows its address (the placeholder's, a long
+// moz-extension address), in the tab strip, ⌃Tab and Sidebery. Its placeholder is loaded once
+// more to set the title, and unloads itself again.
+async function titlesBack() {
+  for (const t of await browser.tabs.query({ discarded: true }).catch(() => [])) {
+    if (isGhostUrl(t.url) && (!t.title || t.title.includes("ghost.html"))) await browser.tabs.update(t.id, { url: t.url }).catch(() => {});
+  }
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -935,12 +946,8 @@ browser.tabs.onAttached.addListener((tabId, { newWindowId }) => {
     await movedAway(tabId, t => t.windowId !== newWindowId);
     // Firefox loses the sessions values of an unloaded tab moved to another window;
     // after a restart it would be a stranger, and a duplicate of itself.
-    await setRole(tabId, key, role).catch(() => {});
+    await setRole(tabId, key, role);
     await reconcileAll();
-    // An unloaded tab arrives without its title, and Firefox shows its address. Its
-    // placeholder is loaded once more to set it, and unloads itself again.
-    const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (tab?.discarded && isGhostUrl(tab.url) && syncKeyByTab.get(tabId) === key) await browser.tabs.update(tabId, { url: tab.url }).catch(() => {});
   });
 });
 

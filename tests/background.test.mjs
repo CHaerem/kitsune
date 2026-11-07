@@ -889,21 +889,27 @@ test("a tab moved to a new window leaves its copy in the window it came from, th
   x.kill();
 });
 
-test("an unloaded tab moved to another window gets its title back", async () => {
+test("an unloaded tab that has lost its title gets it back, and one that has not is left alone", async () => {
   const ff = new FakeFirefox();
   ff.store.syncedTabs = { a: entry("https://a.example/") };
   const home = ff.addWindow({ focused: true });
   ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
   const from = ff.addWindow();
   ff.addTab(from.id, { url: "about:blank", active: true });
-  const ghost = ff.addTab(from.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const ghost = ff.addTab(from.id, { url: GHOST("ghost", "a"), discarded: true, title: "A", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
   const to = ff.addWindow();
   ff.addTab(to.id, { url: "about:blank", active: true });
   const x = await run(ff);
   ff.log.length = 0;
+  ff.tabs.get(ghost.id).title = "tidier/ghost.html?kind=ghost&key=a"; // as Firefox moves it
   await x.b.tabs.move(ghost.id, { windowId: to.id, index: 1 });
   await wait(1500);
   assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === ghost.id), "its placeholder is loaded again");
+  const entries = ff.log.length;
+  ff.tabs.get(ghost.id).title = "A";
+  ff.tabs.get(ghost.id).discarded = true;
+  await x.js("reconcileAll()");
+  assert.ok(!ff.log.slice(entries).some(([what, id]) => what === "update-url" && id === ghost.id), "one with its title is left alone");
   x.kill();
 });
 
