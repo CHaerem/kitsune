@@ -169,12 +169,17 @@ def fire_message(m, msg):
 
 
 def into_page(m, part):
-    """Run the next scripts in the page of main()'s tab with `part` in its address. Its handle is
-    asked for, since switching through the tabs until the right one loads every unloaded tab on
-    the way (Marionette reads each one's message manager), and then a tab that should stay
-    unloaded no longer is, because of the test itself."""
+    """Run the next scripts in the page of the tab with `part` in its address, main()'s first. Its
+    handle is asked for, since switching through the tabs until the right one loads every unloaded
+    tab on the way (Marionette reads each one's message manager), and then a tab that should stay
+    unloaded no longer is, because of the test itself. That page would even say something new, as
+    it loads in the background, and get a dot."""
+    m.chrome()
     handle = m.js(H + """const {NavigableManager} = ChromeUtils.importESModule("chrome://remote/content/shared/NavigableManager.sys.mjs");
-      return NavigableManager.getIdForBrowser(main().gBrowser.tabs.find(t => url(t).includes(args[0])).linkedBrowser);""", part)
+      const t = [main(), ...wins()].flatMap(w => w.gBrowser.tabs).find(t => url(t).includes(args[0]));
+      return t ? NavigableManager.getIdForBrowser(t.linkedBrowser) : null;""", part)
+    if not handle:
+        raise RuntimeError(f"no tab with {part}")
     m.cmd("Marionette:SetContext", {"value": "content"})
     m.cmd("WebDriver:SwitchToWindow", {"handle": handle, "focus": False})
 
@@ -1533,11 +1538,7 @@ def alone_safe_moves(m):
 
     def in_page(text, script):
         """Run `script` in the web page whose address has this text."""
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if text in m.cmd("WebDriver:GetCurrentURL"):
-                break
+        into_page(m, text)
         reply = m.cmd("WebDriver:ExecuteScript", {"script": script, "args": []})
         m.chrome()
         return reply
@@ -2096,11 +2097,7 @@ def quiet_off(m):
 
 def real_click(m, path, x, y, button=0):
     """A real click, through Marionette's actions, in one of Tidier's own pages in front."""
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if path in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    into_page(m, path)
     m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
         {"type": "pointerMove", "x": int(x), "y": int(y), "duration": 0},
         {"type": "pointerDown", "button": button}, {"type": "pointerUp", "button": button}]}]})
@@ -2691,12 +2688,10 @@ def alone_new_tab(m):
     before = sidebar_page(m, rows + "return ids();")
     for _ in range(3):
         m.js(H + """const w = main(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
-                break
+        into_page(m, "/sidebar/sidebar.html")
+        # (A list longer than the sidebar has no empty part in view, so for the test it gets one at its end.)
         spot = m.cmd("WebDriver:ExecuteScript", {"args": [], "script": """const l = document.getElementById("tabs"), box = l.getBoundingClientRect(), x = Math.round(box.left + box.width / 2), y = Math.round(box.bottom - 4);
+          if (l.lastElementChild.getBoundingClientRect().bottom + 16 > box.bottom) { l.style.paddingBottom = "24px"; l.scrollTop = l.scrollHeight; }
           return {x, y, empty: document.elementFromPoint(x, y) === l};"""})
         m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
             {"type": "pointerMove", "x": spot["x"], "y": spot["y"], "duration": 0},
@@ -2706,6 +2701,7 @@ def alone_new_tab(m):
         r = sidebar_page(m, new_first, before)
         if r["after"][1:] == r["before"]:
             break
+    sidebar_page(m, """doc.getElementById("tabs").style.paddingBottom = ""; return 1;""")
     check("a double click on the empty part of the list opens a tab first among today's, selected", spot["empty"] and r["after"][1:] == r["before"] and r["active"], str((spot, r)))
 
     # What this group added goes again. The tabs are live in this window, so the other follows.
@@ -2721,12 +2717,16 @@ def alone_new_tab(m):
 
 def sidebar_press(m, find):
     """Press the real mouse button on what the expression `find` gives in the sidebar page, and leave it down. Returns how to let go: there, or at x, y. Let go before doing anything else with Marionette: its mouse belongs to this page's context."""
+    # In this order: the page is a row too, and selecting it can scroll the list. A row below
+    # the window, in a long list, is out of reach of a pointer until it is brought into view.
+    sidebar_page(m, "return 1;")
+    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("/sidebar/sidebar.html")); w.focus();
+      if (w.gBrowser.selectedTab !== t) { w.gBrowser.selectedTab = t; await wait(500); } return 1;""")
     at = sidebar_page(m, f"""const e = {find}; if (!e) return null;
+      e.scrollIntoView({{block: "center"}});
       const box = e.getBoundingClientRect(); return {{x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2)}};""")
     if not at:
         return None
-    m.js(H + """const w = main(), t = w.gBrowser.tabs.find(x => url(x).includes("/sidebar/sidebar.html")); w.focus();
-      if (w.gBrowser.selectedTab !== t) { w.gBrowser.selectedTab = t; await wait(500); } return 1;""")
     into_page(m, "/sidebar/sidebar.html")
     mouse = lambda *actions: m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": list(actions)}]})
     mouse({"type": "pointerMove", "duration": 0, "x": at["x"], "y": at["y"]}, {"type": "pointerDown", "button": 0})
@@ -3200,12 +3200,8 @@ def alone_touches(m):
       const warm = await until(() => rowOf("/icon?warm"));
       const at = e => { const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; };
       out.warmId = Number(warm.dataset.tab);
-      const closeBox = warm.getBoundingClientRect();
       const tile = await until(async () => { const t = (await page.browser.tabs.query({windowId: here.id, pinned: true})).find(x => x.url.includes("/icon?tile"));
         const e = t && doc.querySelector(`#essentials .tile[data-tab="${t.id}"]`); return e?.querySelector(icon) && !e.matches(".unloaded") && e; });
-      out.points = {title: at(warm.querySelector(".title")), close: [closeBox.right - 18, closeBox.top + closeBox.height / 2], ghost: at(ghost),
-                    showing: at(doc.querySelector("#tabs .tab.active, #essentials .tile.active")), nothing: at(doc.getElementById("space-name")),
-                    tile: tile && at(tile), ghostTile: tile && at(doc.querySelector("#essentials .tile"))};
 
       // The record's icon: a page without one keeps what the tab had, rather than a letter.
       const record = await until(async () => { const r = await rowOf("/icon?record"); return r?.querySelector(icon) && r; });
@@ -3296,14 +3292,23 @@ def alone_touches(m):
 
     # A real pointer. On the same row twice, then away and back each time: to a placeholder,
     # to the tab that is showing, and to nothing. Then to a tile, loaded and not.
-    p = r.get("points")
     # An essential unloaded, as in every window but the one it was used in. Only now: looking
     # through the tabs to find the sidebar page, as sidebar_page does, makes Firefox load it again.
     sidebar_page(m, until + """
       const home = doc.querySelector("#essentials .tile");
       await page.browser.tabs.discard(Number(home.dataset.tab));
       await until(() => home.matches(".unloaded"));""")
+    # A long list has rows below the window, out of reach of a pointer: for this moment the others make way.
+    p = sidebar_page(m, until + """
+      const warm = await rowOf("/icon?warm"), ghost = doc.querySelector("#tabs .tab.unloaded[title*='/icon']"), showing = doc.querySelector("#tabs .tab.active, #essentials .tile.active");
+      const tile = doc.querySelector(`#essentials .tile[data-tab="${(await page.browser.tabs.query({windowId: here.id, pinned: true})).find(x => x.url.includes("/icon?tile")).id}"]`);
+      for (const e of doc.querySelectorAll("#tabs > *")) if (![warm, ghost, showing].some(x => e === x || e.contains(x))) e.style.display = "none";
+      doc.getElementById("tabs").scrollTop = 0;
+      await wait(100);
+      const at = e => { const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; }, box = warm.getBoundingClientRect();
+      return {title: at(warm.querySelector(".title")), close: [box.right - 18, box.top + box.height / 2], ghost: at(ghost), showing: at(showing), nothing: at(doc.getElementById("space-name")), tile: at(tile), ghostTile: at(doc.querySelector("#essentials .tile"))};""")
     pointer_over(m, p["title"], p["close"], p["ghost"], p["title"], p["showing"], p["close"], p["nothing"], p["title"], p["ghostTile"], p["tile"], p["tile"])
+    sidebar_page(m, """for (const e of doc.querySelectorAll("#tabs > *")) e.style.display = ""; return 1;""")
     warmed = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 5; i++) await wait(50); await wait(200); return main().__warmed;")
     check("a tab is warmed once for each time the pointer comes to it, and only a loaded one", len(warmed) == 5 and all("/icon?warm" in u for u in warmed[:4]) and "?tile" in warmed[4], str(warmed))
 
@@ -3502,7 +3507,6 @@ def alone_tab_names(m):
     # menu's Rename calls; everything after that is what you do in the box.
     ENTER, ESC, BACKSPACE = "\ue007", "\ue00c", "\ue003"
     PAGE = "/sidebar/sidebar.html"
-    pages = {}
     # By the clock: a page in a background tab has its timers slowed to one a second or less.
     UNTIL = """const until = async (f, ms = 10000) => { for (const end = Date.now() + ms; Date.now() < end; await wait(50)) { const v = f(); if (v) return v; } return f(); };
       const row = id => doc.querySelector(`#tabs .tab[data-tab="${id}"]`), tile = id => doc.querySelector(`#essentials .tile[data-tab="${id}"]`);
@@ -3531,23 +3535,13 @@ def alone_tab_names(m):
           (async () => { """ + script + """ })().then(r => done(JSON.parse(JSON.stringify(r ?? null))), e => done({error: String(e)}));""", "args": list(args)})
 
     def switch_to(text):
-        """To the tab with `text` in its address. Switching to a tab loads it, so a walk through
-        placeholders leaves them loaded for the groups after this one: only once. A tab can close
-        during the walk."""
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        if text in pages:
-            m.cmd("WebDriver:SwitchToWindow", {"handle": pages[text], "focus": False})
-            return
+        """To the tab with `text` in its address, once it is there."""
         for _ in range(100):
-            for h in m.cmd("WebDriver:GetWindowHandles"):
-                try:
-                    m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-                    if text in m.cmd("WebDriver:GetCurrentURL"):
-                        pages[text] = h
-                        return
-                except RuntimeError as e:
-                    if "no such window" not in str(e):
-                        raise
+            try:
+                return into_page(m, text)
+            except RuntimeError as e:
+                if "no tab with" not in str(e) and "no such window" not in str(e):
+                    raise
             time.sleep(0.1)
         raise RuntimeError(f"no tab with {text}")
 
@@ -3886,9 +3880,9 @@ PICKING = """
       const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
       const select = async e => { const id = idOf(e); press(e); await until(() => (row(id) || tile(id))?.classList.contains("active")); };
       const keysOf = list => Promise.all(list.map(id => page.browser.sessions.getTabValue(id, "syncKey")));
-      const drag = (from, to, below = false) => {
+      const drag = (from, to, below = false, right = false) => {
         const data = new page.DataTransfer(), box = to.getBoundingClientRect();
-        const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + (below ? box.height - 1 : 1), dataTransfer: data};
+        const at = {bubbles: true, cancelable: true, clientX: right ? box.right - 2 : box.left + 5, clientY: box.top + (below ? box.height - 1 : 1), dataTransfer: data};
         from.dispatchEvent(new page.DragEvent("dragstart", at));
         to.dispatchEvent(new page.DragEvent("dragover", at));
         to.dispatchEvent(new page.DragEvent("drop", at));
@@ -4232,7 +4226,7 @@ def alone_selection(m):
       out.keys = await keysOf([y1, y2]);
       // Carried, and at once on to the essentials: the selection stays after a drop for this.
       drag(row(y1), doc.getElementById("tabs"));
-      drag(row(y1), doc.getElementById("essentials"));
+      drag(row(y1), tile(tiles0.at(-1)), false, true);  // on the right of the last tile: after it
       await until(() => tileIds().length === tiles0.length + 2);
       out.pinned = same(tileIds(), [...tiles0, y1, y2]);
       out.pinnedLeft = picks().length === 0;
@@ -4600,11 +4594,7 @@ def alone_drag_details(m):
     # real mouse events, a real drag session, and what Firefox itself does with them.
     m.js(H + """const w = main(); w.__beforeDrag = w.gBrowser.selectedTab;
       w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html")); await wait(500); return 1;""")
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    into_page(m, "/sidebar/sidebar.html")
 
     def here(script):
         return m.cmd("WebDriver:ExecuteAsyncScript", {"sandbox": "system", "script": """
@@ -4639,11 +4629,7 @@ def alone_drag_details(m):
           for (let i = 0; i < 40; i++) w.gBrowser.addTrustedTab("https://example.org/?smoke-long-" + i, {userContextId: ctx, inBackground: true});
           for (let i = 0; i < 200 && w.gBrowser.tabs.filter(t => url(t).includes("smoke-long")).length < 40; i++) await wait(100);
           return 1;""", space)
-        m.cmd("Marionette:SetContext", {"value": "content"})
-        for h in m.cmd("WebDriver:GetWindowHandles"):
-            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-            if "/sidebar/sidebar.html" in m.cmd("WebDriver:GetCurrentURL"):
-                break
+        into_page(m, "/sidebar/sidebar.html")
         at = here("""await until(() => list.scrollHeight > list.clientHeight + 200);
           list.scrollTop = 0; await wait(100);
           const box = list.getBoundingClientRect(), b = rows()[1].getBoundingClientRect();
@@ -5129,10 +5115,13 @@ def sidebar_setting_off(m):
 def alone_stay_put(m):
     m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t);
       await wait(300); return 1;""")
-    home, second, short = sidebar_page(m, STAY_PUT + """await wait(300);
+    home, second = sidebar_page(m, STAY_PUT + """await wait(300);
       side.dispatchEvent(new side.Event("blur"));
       const a = spaces().find(s => s.active).id, others = spaces().filter(s => !s.active).map(s => s.id);
-      return [a, ...others];""")[:3]
+      return [a, ...others];""")[:2]
+    # A space of its own, which is sure to be short: the groups before this one can have filled the others.
+    short = sidebar_page(m, """const id = (await page.browser.contextualIdentities.create(page.JSON.parse(JSON.stringify({name: "smoke-short", color: "pink", icon: "circle"})))).cookieStoreId;
+      await wait(500); return id;""")
     m.js(H + """const w = main(); for (const ctx of args) { for (let i = 0; i < 8; i++) { w.gBrowser.addTrustedTab("https://example.org/?smoke-stay-" + ctx + "-" + i, {userContextId: ctx, inBackground: true}); await wait(60); } }
       return 1;""", int(home.split("-")[-1]), int(second.split("-")[-1]))
 
@@ -5177,6 +5166,7 @@ def alone_stay_put(m):
       await switchTo(home);
       out.restoredThenShown = {top: fromTop(activeRow()), bottom: fromBottom(activeRow())};
       return out;""", home, second, short)
+    sidebar_page(m, STAY_PUT + """await switchTo(args[0]); await page.browser.contextualIdentities.remove(args[1]); await wait(600); return 1;""", home, short)
     check("each space keeps its place in the list", r.get("home") and r["homeBack"] == r["home"] and r["homeAgain"] == r["home"] and r["secondBack"] == r["second"], str(r))
     check("a space too short to scroll does not change another's place", r.get("short") == 0 and r["home"] != r["second"], str(r))
     check("switching back and forth quickly mixes up no place", r.get("homeQuick") == r.get("home") and r.get("secondQuick") == r.get("second"), str(r))
@@ -5308,6 +5298,7 @@ def alone_stay_put(m):
       await tabs.remove(keptId);
       await until(() => activeRow() && activeRow().dataset.tab !== String(keptId) && inFolder().length === count && !inFolder().some(r => id(r) === keptId));
       await wait(200);
+      out.counted = [count, inFolder().length];
       out.closedInside = {landedOutside: !folder.contains(activeRow()), kept: inFolder().length === count, hidden: inFolder().every(r => r.offsetParent === null), closed: folder.classList.contains("collapsed")};
       // Put into the closed folder with no move for Firefox to report: the window's last
       // tab, used just before this one, once Tidier has it in its record.
