@@ -334,10 +334,13 @@ async function barSnapshot(bar) {
   ]);
   const shortcuts = new Map(commands.map(c => [c.name, c.shortcut]));
   const space = ctx.spaces.find(s => s.id === ctx.space);
+  // A tab you closed is in Firefox's list and in Tidier's archive list (archivelist.js) at
+  // once. Firefox's brings it back with its history, as ⌘⇧T does: that one is shown.
+  const closed = barClosedItems(ctx), closedUrls = new Set(closed.map(c => c.url));
   return {
     pressedAt: bar.pressedAt, space: ctx.space, color: space?.color ?? null, mac: os === "mac", asked: !!stored[BAR_ASKED],
     spaces: ctx.spaces.map(s => ({ id: s.id, name: s.name, color: s.color })),
-    items: [...tabs, ...barClosedItems(ctx), ...archived, ...barCommandRows(ctx, uses, shortcuts)],
+    items: [...tabs, ...closed, ...archived.filter(a => !closedUrls.has(a.url)), ...barCommandRows(ctx, uses, shortcuts)],
   };
 }
 

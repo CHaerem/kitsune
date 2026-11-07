@@ -665,13 +665,15 @@ test("what archiving closed and what was closed can be found, and come back", as
     { lastModified: 5, tab: { sessionId: "s1", url: "https://closed.example/", title: "Closed one", windowId: w.id } },
     { lastModified: 4, tab: { sessionId: "s2", url: GHOST("ghost", "x"), title: "A placeholder", windowId: w.id } },
   ];
-  x.js(`globalThis.archivedTabs = async () => [{ url: "https://old.example/", title: "Archived one", icon: null, when: 3, space: "${C2}" }];`);
+  x.js(`globalThis.archivedTabs = async () => [{ url: "https://old.example/", title: "Archived one", icon: null, when: 3, space: "${C2}" },
+    { url: "https://closed.example/", title: "Closed one", icon: null, when: 6, space: "${C2}" }];`); // also in Firefox's list
   let restored = null;
   x.b.sessions.restore = async id => { restored = id; };
   let page = await openBar(ff, x, w.id);
   const items = page.sent[0].items;
   assert.equal(items.filter(i => i.kind === "closed").length, 1, "never a placeholder");
   assert.equal(items.find(i => i.kind === "closed").title, "Closed one");
+  assert.equal(items.filter(i => i.url === "https://closed.example/").length, 1, "a tab in both lists is shown once, as Firefox's");
   const archived = items.find(i => i.kind === "archived");
   assert.equal(archived.space, C2);
   assert.ok(items.some(i => i.name === "reopen-closed"));
