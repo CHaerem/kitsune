@@ -2950,7 +2950,7 @@ def alone_sound(m):
 
 def alone_news(m):
     # Pages in the background, each named by its address so that its row can be found:
-    # one in the list, one in a closed folder, one as an essential, one in another space.
+    # one in the list, one in a folder that closes, one as an essential, one in another space.
     name = "smoke-news-"
     page = lambda which: f"{m.pages}/titled?{name}{which}"
     spaces = sidebar_page(m, "return spaces();")
@@ -2999,8 +2999,6 @@ def alone_news(m):
       for (let i = 0; i < 50 && !head; i++) { await wait(100); head = [...doc.querySelectorAll(".folder .head")].find(h => h.title === args[0] + "kept"); }
       send({type: "moveTab", tabId: Number(named("folder").dataset.tab), folder: head.dataset.folderHead, before: null});
       for (let i = 0; i < 50 && !head.parentElement.querySelector(".tab"); i++) await wait(100);
-      head.click();
-      await when(() => head.parentElement.classList.contains("collapsed"));
       // The other space's last used tab is another one, so that going there does not select this page.
       bar(args[2]).click();
       await inSpace(args[2]);
@@ -3009,8 +3007,8 @@ def alone_news(m):
       await when(() => other.classList.contains("active"));
       bar(args[1]).click();
       await inSpace(args[1]);
-      return {key: head.dataset.folderHead, collapsed: head.parentElement.classList.contains("collapsed"), back: spaces().find(s => s.active).id};""", name, here, there)
-    check("a folder with one of them in it is closed", r["collapsed"] and r["back"] == here, str(r))
+      return {key: head.dataset.folderHead, filled: !!head.parentElement.querySelector(".tab"), back: spaces().find(s => s.active).id};""", name, here, there)
+    check("a folder has one of them in it", r["filled"] and r["back"] == here, str(r))
     folder_key = r["key"]
     # Past the quiet after loading. A title that only ticks says nothing, however long it does.
     time.sleep(6)
@@ -3037,11 +3035,15 @@ def alone_news(m):
     set_title(m, page("tile"), f"{name}tile (1) unread")
     set_title(m, page("there"), f"{name}there (1) unread")
     r = sidebar_page(m, marked + """
-      const got = await until(h => h.heads.length && h.tiles.length && h.spaces.length);
-      const seen = selector => doc.querySelector(selector);
-      return {...got, accent: accent(), other: colour(bar(args[1]).style.getPropertyValue("--color")),
+      await until(h => h.rows.length === 2 && h.tiles.length && h.spaces.length);
+      [...doc.querySelectorAll(".folder .head")].find(h => h.title === args[0] + "kept").click();
+      // Closed, it rests: an unloaded page says nothing more, and what it said stays.
+      await until(h => h.heads.length);
+      await when(() => named("folder").classList.contains("unloaded"));
+      const got = has(), seen = selector => doc.querySelector(selector);
+      return {...got, rested: named("folder").classList.contains("unloaded"), accent: accent(), other: colour(bar(args[1]).style.getPropertyValue("--color")),
         head: dot(seen(".folder.collapsed.news > .head"), "::before"), tile: dot(seen(".tile.news"), "::before"), space: dot(seen(".space.news"), "::after")};""", name, there)
-    check("a closed folder shows that a tab in it has news", r["heads"] == [name + "kept"] and shows(r["head"], r["accent"]), str(r))
+    check("a closed folder shows that a tab in it has news, also once the tab has unloaded", r["heads"] == [name + "kept"] and r["rested"] and shows(r["head"], r["accent"]), str(r))
     check("an essential's tile shows it", len(r["tiles"]) == 1 and r["tiles"][0].startswith("tile") and shows(r["tile"], r["accent"]), str(r))
     check("another space's dot shows it, in that space's colour", r["spaces"] == [there] and shows(r["space"], r["other"]), str(r))
 
@@ -4400,13 +4402,14 @@ def alone_drag_details(m):
       send({type: "newTab", space});
       await until(() => plainTabs().some(r => !known.has(r.dataset.tab)));
       const bareId = plainTabs().find(r => !known.has(r.dataset.tab)).dataset.tab, bareRow = () => plainTabs().find(r => r.dataset.tab === bareId);
-      const bare = bareRow(), web = plainTabs()[0];
+      // (A new tab is the first of today's tabs, so the row after it is the next one, and right above that is no move.)
+      const bare = bareRow(), web = plainTabs().find(r => r !== bare);
       start(bare);
       out.bareTile = over(tileEls()[0], .25);
       out.bareSpace = over(doc.querySelector(".space:not(.active)"));
       out.bareFolder = over(h2);
       out.bareInFolder = over(inside, .5, .2);
-      out.bareAmong = over(web, .5, .2);
+      out.bareAmong = over(web, .5, .8);
       end(bare);
       // Pinned, as Firefox's own menu can: a tile with no essential behind it, so no place among them.
       send({type: "pin", tabId: Number(bareId), pinned: true});
@@ -5089,7 +5092,7 @@ def real_wheel(m, at, x, y, dy):
     m.cmd("WebDriver:ReleaseActions")
 
 
-def real_click(m, at, x, y):
+def click_at(m, at, x, y):
     m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
         {"type": "pointerMove", "duration": 0, "x": int(at["x"] + x), "y": int(at["y"] + y), "origin": "viewport"},
         {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
@@ -5307,7 +5310,7 @@ def alone_stay_put(m):
       out.afterFolded = {outside: !folder.contains(activeRow()), closed: folder.classList.contains("collapsed")};
       // Closing the selected tab inside a closed folder: a tab in a folder only unloads, in its
       // place, so nothing is lost; you land outside, and its row goes with the folder still closed.
-      const kept = inFolder().find(r => !r.classList.contains("unloaded")), keptId = id(kept), count = inFolder().length;
+      const kept = inFolder()[0], keptId = id(kept), count = inFolder().length; // (unloaded, as a closed folder's tabs are: selecting it loads it)
       await select(kept);
       out.toldOut = await until(async () => { const n = (await tabs.get(keptId)).successorTabId; return n !== undefined && !inFolder().some(r => id(r) === n); });
       await tabs.remove(keptId);
@@ -5458,7 +5461,7 @@ def alone_stay_put(m):
       return {list: middle(list), was: list.scrollTop};""")
     real_wheel(m, at, place_home["list"]["x"], place_home["list"]["y"], -25)
     wheeled = sidebar_page(m, STAY_PUT + centre + "await until(() => list.scrollTop !== args[1]);" + settled + "return {y: list.scrollTop, dot: dot(args[0])};", second, place_home["was"])
-    real_click(m, at, wheeled["dot"]["x"], wheeled["dot"]["y"])
+    click_at(m, at, wheeled["dot"]["x"], wheeled["dot"]["y"])
     there = sidebar_page(m, STAY_PUT + centre + """
       await until_space(args[0]);
       const rows = await mine(), r = rows()[3];
@@ -5467,7 +5470,7 @@ def alone_stay_put(m):
       return {list: middle(list), was: list.scrollTop, dot: dot(args[1])};""", second, home)
     real_wheel(m, at, there["list"]["x"], there["list"]["y"], -15)
     y2 = sidebar_page(m, STAY_PUT + "await until(() => list.scrollTop !== args[0]);" + settled + "return list.scrollTop;", there["was"])
-    real_click(m, at, there["dot"]["x"], there["dot"]["y"])
+    click_at(m, at, there["dot"]["x"], there["dot"]["y"])
     back = sidebar_page(m, STAY_PUT + centre + """
       await until_space(args[0]);
       await wait(300);
@@ -5475,7 +5478,7 @@ def alone_stay_put(m):
       return {y: list.scrollTop, row: middle(seen), tab: seen.dataset.tab, active: activeRow()?.dataset.tab};""", home)
     check("with a real wheel and real clicks on the bar, each space keeps its place",
           wheeled["y"] < place_home["was"] and y2 < there["was"] and back.get("y") == wheeled["y"], f"{place_home} {wheeled} {there} {y2} {back}")
-    real_click(m, at, back["row"]["x"], back["row"]["y"])
+    click_at(m, at, back["row"]["x"], back["row"]["y"])
     clicked = sidebar_page(m, STAY_PUT + """
       await until(() => activeRow()?.dataset.tab === args[0]);
       await wait(200);

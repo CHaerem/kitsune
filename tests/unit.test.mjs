@@ -227,3 +227,11 @@ test("the manifest asks for no new permission that would hold updates", () => {
   assert.deepEqual(manifest.permissions.filter(p => !allowed.includes(p)), []);
 });
 
+
+// Packages built side by side each add helpers to the smoke test, and in Python the later
+// `def` silently replaces the first: the first package's checks then call the wrong one.
+test("the smoke test defines no top-level function or constant twice", () => {
+  const src = readFileSync(new URL("smoke.py", import.meta.url), "utf8");
+  const names = [...src.matchAll(/^def ([A-Za-z_]\w*)\(|^([A-Z][A-Z0-9_]*) = /gm)].map(m => m[1] ?? m[2]);
+  assert.deepEqual(names.filter((name, i) => names.indexOf(name) !== i), []);
+});
