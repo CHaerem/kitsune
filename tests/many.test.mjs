@@ -435,7 +435,7 @@ test("events that keep coming do not put off a view that is due", async () => {
   const w = manyTabs(ff, 4);
   const x = await alone(ff);
   await sidebar(x, w.id);
-  await wait(300);
+  await until(() => x.js("work.views") && !x.js("viewsBuilding").size && !x.js("viewTimers").size); // the sidebar's first view is done
   const timers = x.js("viewTimers"), viewSoon = x.js("viewSoon");
   x.js("viewRest").set(w.id, x.js("performance.now()") + 1e6); // so that it is still waiting when the next event comes
   viewSoon(w.id);
@@ -707,6 +707,44 @@ test("back in a space, the tab you used there is selected, not a placeholder mad
   ff.addTab(other.id, { url: "https://since.example/", active: true, cookieStoreId: C1 }, { syncKey: "since", syncRole: "live" });
   const x = await alone(ff);
   assert.equal((await x.js("lastUsedIn")(w.id, C1)).id, used.id);
+  x.kill();
+});
+
+test("a window closed while it is filled stops the filling, and is no error", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [1, 2, 3, 4].map(n => ({ key: "e" + n, url: `https://e${n}.example/`, cookieStoreId: C1, title: "E" }));
+  const w = manyTabs(ff, 12);
+  const x = await alone(ff);
+  const errors = x.js("work.errors");
+  for (const after of [2, 7]) { // among the essentials, and among the tabs
+    const other = ff.addWindow();
+    const create = x.b.tabs.create;
+    let asked = 0;
+    x.b.tabs.create = async p => {
+      if (++asked === after) ff.wins.delete(other.id);
+      return create(p);
+    };
+    await x.js("serial")(() => x.js("fillWindow")(other.id, { fresh: true }));
+    x.b.tabs.create = create;
+    assert.ok(asked <= after + 1, `${asked} asked for after ${after} (the tabs come after the essentials, and find out once)`);
+    assert.equal(x.js("work.errors"), errors, "and it is no error");
+  }
+  assert.equal(ff.list(w.id).length, 16, "the window that is still there has all its tabs");
+  x.kill();
+});
+
+test("a tab refused in a window that is still there is an error, and the others still come", async () => {
+  const ff = new FakeFirefox();
+  manyTabs(ff, 4);
+  const x = await alone(ff);
+  const errors = x.js("work.errors"), other = ff.addWindow();
+  const create = x.b.tabs.create;
+  let asked = 0;
+  x.b.tabs.create = async p => { if (++asked === 2) throw new Error("refused"); return create(p); };
+  await x.js("serial")(() => x.js("fillWindow")(other.id));
+  x.b.tabs.create = create;
+  assert.equal(x.js("work.errors"), errors + 1);
+  assert.equal(ff.list(other.id).length, 3);
   x.kill();
 });
 

@@ -88,11 +88,15 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
     // (Without Sidebery a copy needs no page, see placeholderWithoutPage in tabsync.js.
     // Firefox refuses to create a tab both pinned and unloaded, so it is pinned next.)
     const alone = tidierAlone ? { discarded: true, title: entry.name || entry.title || entry.url } : {};
+    let refused = null;
     const tab = await browser.tabs.create({
       windowId, url: ghostUrl("essential", entry.key), active: false,
       cookieStoreId: entry.cookieStoreId, index, ...alone,
-    }).catch(err => { noteError(err); return null; });
-    if (!tab) continue;
+    }).catch(err => { refused = err; return null; });
+    if (!tab) {
+      if (await refusedInWindow(windowId, refused)) continue;
+      break;
+    }
     busy.add(tab.id);
     await tagTab(tab.id, entry.key);
     if (tidierAlone) await browser.tabs.update(tab.id, { pinned: true }).catch(() => {});

@@ -257,9 +257,13 @@ async function fillWindow(windowId, { fresh = false } = {}) {
       const entry = all[key];
       // One refused tab (its container was removed, say) must not leave the
       // window without all the tabs after it.
+      let refused = null;
       const tab = await createRep(windowId, key, entry, entry.parentKey ? reps.get(entry.parentKey) : undefined)
-        .catch(err => { noteError(err); return null; });
-      if (!tab) continue;
+        .catch(err => { refused = err; return null; });
+      if (!tab) {
+        if (await refusedInWindow(windowId, refused)) continue;
+        return;
+      }
       reps.set(key, tab.id);
       created++;
       if (!tidierAlone) await sleep(CREATE_GAP_MS); // a pause even at 0: 4 ms or more per tab, for Sidebery only

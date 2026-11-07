@@ -208,6 +208,15 @@ async function normalWindows() {
   return (await browser.windows.getAll({ windowTypes: ["normal"] })).filter(w => !w.incognito);
 }
 
+// A tab refused while filling a window: if the window has been closed meanwhile, that is
+// no error, and there is nothing left to do there (with many tabs, each of them would be
+// refused in turn). Returns whether to go on with the next tab.
+async function refusedInWindow(windowId, err) {
+  if (!(await browser.windows.get(windowId).catch(() => null))) return false;
+  noteError(err);
+  return true;
+}
+
 // Timing for filling a new window, measured with Sidebery 5.6 on Firefox 159:
 // - the window is filled shortly after it opens (tabs appear within ~0.7 s);
 // - tabs can be created back to back;
