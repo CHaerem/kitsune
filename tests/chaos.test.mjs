@@ -14,6 +14,9 @@
 //   CHAOS_FIRST=5000 ...                                    start from another seed
 //   CHAOS_REPLAY='<line from a failure>' node --test ...    one sequence again
 //   CHAOS_TRACE=1 CHAOS_REPLAY=... node --test ...          with every call and event printed
+//   CHAOS_SITES=1 CHAOS_REPLAY=... node --test ...          with the line that made a refused call
+//   CHAOS_SURVEY=on|off CHAOS_SEQUENCES=15000 CHAOS_SECONDS=0 node --test ...
+//                                                           on past failures, how many of each kind
 //
 // What a sequence can do is OPS below; what must hold is check(). A failure says which
 // check, in which phase: "settled" (after the random use), "update" or "restart".
