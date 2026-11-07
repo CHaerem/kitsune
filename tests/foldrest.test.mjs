@@ -384,7 +384,7 @@ test("Undo of deleting a closed folder rests its tabs again", async () => {
   await fold(x, s.w1.id, true);
   await act(x, s.w1.id, { type: "deleteFolder", key: "F" });
   assert.equal(s.a.hidden, false);
-  await act(x, s.w1.id, { type: "undo", note: x.js("noteFor")(s.w1.id).id });
+  await x.js("serial")(x.js("quietNotes").get(s.w1.id).undo);
   assert.equal((await x.js("getSynced")()).F.collapsed, true);
   for (const t of [s.a, s.b, s.aGhost, s.bGhost]) assert.equal(t.hidden, true);
   x.kill();
