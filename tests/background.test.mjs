@@ -1587,3 +1587,21 @@ test("a placeholder reopened and selected before Recently Closed forgets it does
   assert.equal(Object.values(ff.synced).filter(e => e.url === "https://b.example/").length, 1, "and is one tab");
   x.kill();
 });
+
+test("a ghost created a moment ago does not take over from an unloaded live tab", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const live = ff.addTab(w.id, { url: "https://a.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const v = ff.addWindow();
+  ff.addTab(v.id, { url: "about:home", active: true });
+  // Firefox says about:blank until the placeholder's address is known.
+  const fresh = ff.addTab(v.id, { url: "about:blank", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.equal(ff.values.get(live.id).syncRole, "live");
+  assert.equal(ff.values.get(fresh.id).syncRole, "ghost");
+  x.kill();
+});

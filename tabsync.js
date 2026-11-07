@@ -356,7 +356,8 @@ async function reconcileAll({ firefoxStart = false } = {}) {
       const live = reps.filter(t => syncRoleByTab.get(t.id) === "live");
       // Exactly one live tab: prefer a loaded one. A real page is yours, whatever
       // its role says: a ghost selected before the roles were read has opened it.
-      const page = t => !t.discarded && !isGhostUrl(t.url);
+      // (A ghost created a moment ago still says about:blank.)
+      const page = t => !t.discarded && isWeb(t.url);
       const keep = live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
       // Keep title and icon current (older entries have no icon).
