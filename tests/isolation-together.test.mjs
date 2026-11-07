@@ -157,3 +157,20 @@ test("with the request looked at first, a rule whose space is gone still says wh
   assert.match((await x.js("viewFor")(w.id)).problem ?? "", /work\.example/);
   x.kill();
 });
+
+test("a space removed: the window goes to another space before its tabs close, so you are on one of that space's tabs", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://home.example/", cookieStoreId: A, lastAccessed: 1000, hidden: true });
+  const b = ff.addTab(w.id, { url: "https://there.example/", active: true, cookieStoreId: B, lastAccessed: 2000 });
+  ff.addTab(w.id, { url: "moz-extension://tidier/sidebar/sidebar.html", lastAccessed: 1500 });
+  w.order.unshift(w.order.pop()); // what the fake selects once the selected tab closes
+  const x = await run(ff);
+  ff.containers.delete(B);
+  await x.js("serial")(() => x.js("forgetSpace")(B)); // the one handler: Firefox gives two listeners no order
+  await wait(500);
+  assert.ok(!ff.tabs.has(b.id));
+  assert.equal(ff.tabs.get(a.id).active, true);
+  assert.equal(x.js("activeSpace").get(w.id), A);
+  x.kill();
+});

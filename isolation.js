@@ -698,7 +698,13 @@ async function deleteSpace(id) {
 // rules and settings, and any tab still open in it. Used for a space deleted here and
 // one removed in Firefox's own settings. The record goes first, so that no tab's close
 // event brings anything back.
+//
+// Each window in it goes to another space first, before its tabs close, and then its
+// rules, folders and tabs go: spaceRemoved, safemoves.js. One handler for both, since
+// Firefox gives no order between two listeners: a tab closed first under you would leave
+// you on whatever tab Firefox picks, in no space.
 async function forgetSpace(id) {
+  await spaceRemoved(id);
   const list = await getList();
   const essentials = list.filter(e => e.cookieStoreId === id);
   if (essentials.length) {
@@ -709,12 +715,6 @@ async function forgetSpace(id) {
     await browser.tabs.remove(copies.map(t => t.id)).catch(() => {});
     await forgetClosedPlaceholders("essential", [...keys]);
   }
-  const all = await getSynced();
-  for (const key of Object.keys(all).filter(k => all[k].cookieStoreId === id && !isOwnFolder(all[k]))) await closeEverywhere(key, { dismiss: false });
-  for (const key of Object.keys(all).filter(k => all[k].cookieStoreId === id)) delete all[key];
-  saveSynced(all);
-  const rules = await rulesList.get();
-  if (rules.some(r => r.space === id)) rulesList.set(rules.filter(r => r.space !== id));
   const network = await spaceNetwork.get();
   if (network[id]) { delete network[id]; spaceNetwork.set({ ...network }); networkNow = await spaceNetwork.get(); applyNetwork(); rememberForStart(); }
   const memory = await spaceMemory.get();
@@ -724,15 +724,6 @@ async function forgetSpace(id) {
   const left = await browser.tabs.query({ cookieStoreId: id });
   left.forEach(t => { syncBusy.add(t.id); forget(t.id); busy.add(t.id); keyByTab.delete(t.id); });
   await browser.tabs.remove(left.map(t => t.id)).catch(() => {});
-  // A window that was in it (removed in Firefox's own settings: deleteSpace has moved you
-  // already) goes to one that exists, or its new tabs and links have nowhere to open.
-  for (const [windowId, space] of [...activeSpace]) {
-    if (space !== id) continue;
-    activeSpace.delete(windowId);
-    const tabs = await browser.tabs.query({ windowId }).catch(() => []);
-    const next = await spaceOf(windowId, tabs, await spaceList(new Set()));
-    if (next) await setSpace(windowId, next);
-  }
 }
 
 // --- 5. A vanished container comes back --------------------------------------------

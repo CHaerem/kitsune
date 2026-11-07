@@ -127,6 +127,4 @@ async function spaceRemoved(space) {
   const rest = await browser.tabs.query({ cookieStoreId: space }).catch(() => []);
   await Promise.all(rest.map(t => browser.tabs.remove(t.id).catch(() => {})));
 }
-browser.contextualIdentities.onRemoved.addListener(({ contextualIdentity }) => {
-  if (tidierAlone) serial(() => spaceRemoved(contextualIdentity.cookieStoreId));
-});
+// (Called by forgetSpace in isolation.js, which also forgets the space's essentials and settings.)
