@@ -269,6 +269,7 @@ async function sidebarStarted(windowId, essentials) {
 
 async function sidebarSign(windowId) {
   const tabs = await browser.tabs.query({ windowId }).catch(() => []);
+  if (!tabs.length) return "closed"; // no sidebar will start there: the queue need not wait
   if (tabs.some(t => t.hidden)) return "hidden";
   const active = tabs.find(t => t.active);
   if (active && active.successorTabId !== undefined && active.successorTabId !== browser.tabs.TAB_ID_NONE) return "successor";

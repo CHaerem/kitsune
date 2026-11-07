@@ -1674,3 +1674,19 @@ test("a link seen late with no space to go to is still synced", async () => {
   assert.ok(ff.values.get(late.id)?.syncKey);
   x.kill();
 });
+
+test("a window that closes while its sidebar is waited for does not hold everything up", async () => {
+  const { ff, x, windows: [a] } = await chaosStart();
+  // An essential, so that a new window waits for Sidebery's sidebar to start there.
+  const e = ff.openTab(a.id, { url: "https://e.example/", cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(e);
+  await ff.clock.idle(60000);
+  const { window: w } = ff.openWindow();
+  await ff.clock.run(1500);
+  const t0 = ff.clock.now;
+  ff.closeWindow(w.id);
+  await ff.clock.settled(x.js("serial(() => 1)"));
+  assert.ok(ff.clock.now - t0 < 1000, `the queue was free after ${ff.clock.now - t0} ms`);
+  x.kill();
+});
