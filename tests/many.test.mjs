@@ -282,6 +282,10 @@ test("the sidebar asks for an icon only near the view, once, and what it remembe
   assert.equal(icon({ icon: "https://a.example/i.png", title: "A" }).loading, undefined, "loaded: at once, so it does not blink");
   icon({ icon: "https://b.example/i.png", title: "B" }).onerror();
   assert.equal(icon({ icon: "https://b.example/i.png", title: "B" }).className, "letter", "failed: not asked for at every draw");
+  const now = Date.now(), clock = page("Date");
+  clock.now = () => now + 6 * 60000;
+  assert.equal(icon({ icon: "https://b.example/i.png", title: "B" }).loading, "lazy", "but asked for again at a draw after a while: it may have been the network");
+  clock.now = () => now;
 
   // A page that draws a counter as its icon, all day.
   const data = n => `data:image/png;base64,${n}`;
