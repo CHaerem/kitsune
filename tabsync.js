@@ -59,7 +59,11 @@ function setRole(tabId, key, role) {
   return Promise.all([
     browser.sessions.setTabValue(tabId, SYNC_KEY, key),
     browser.sessions.setTabValue(tabId, SYNC_ROLE, role),
-  ]).then(() => true, () => { forget(tabId); return false; });
+  ]).then(() => true, async () => {
+    if (await browser.tabs.get(tabId).catch(() => null)) return true; // still there: refused for another reason
+    forget(tabId);
+    return false;
+  });
 }
 
 function forget(tabId) {
