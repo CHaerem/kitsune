@@ -755,27 +755,28 @@ test("a helper that does not answer holds nothing up: the copy goes into Firefox
 });
 
 test("a machine that joins later finds the spaces by name, whatever its containers are numbered", async () => {
-  // Numbered the other way round, with one of its own: a space taken by place would mix logins.
-  const A = machine({ 1: "Work", 2: "Private" }), B = machine({ 5: "Private", 7: "Work", 8: "Other" }), server = {};
-  A.x = await boot(A.ff);
-  B.x = await boot(B.ff);
-  await pin(A.x, A.ff, A.w.id, "https://work.example/", c(1));
-  await pin(A.x, A.ff, A.w.id, "https://private.example/", c(2));
-  A.ff.store.rules = [];
-  await turnOn(A.x);
-  await settled(A.x);
-  firefoxSyncNow(A.ff, server);
-  firefoxSyncNow(B.ff, server); // what the others have is here before it is turned on
-  await turnOn(B.x);
-  await syncAround(server, [A, B]);
-  const on = (ff, url) => ff.store.essentials.find(e => e.url === url)?.cookieStoreId;
-  assert.equal(on(B.ff, "https://work.example/"), c(7));
-  assert.equal(on(B.ff, "https://private.example/"), c(5));
-  assert.equal(pinned(B.ff, B.w).find(t => t.url === GHOST("essential", B.ff.store.essentials.find(e => e.url === "https://work.example/").key)).cookieStoreId, c(7));
-  assert.deepEqual([...B.ff.containers].sort(), ["firefox-container-5", "firefox-container-7", "firefox-container-8", "firefox-default"], "none made here: it had them all");
-  const other = Object.values(A.ff.identities).filter(i => i.name === "Other");
-  assert.equal(other.length, 1, "and the other machine gets the one it did not have");
-  A.x.kill(); B.x.kill();
+  // Both ways round, with one of its own: one of them is not the order the shared data has them in,
+  // and a space taken by place would then mix logins.
+  for (const [work, privat] of [[5, 7], [7, 5]]) {
+    const A = machine({ 1: "Work", 2: "Private" }), B = machine({ [work]: "Work", [privat]: "Private", 8: "Other" }), server = {};
+    A.x = await boot(A.ff);
+    B.x = await boot(B.ff);
+    await pin(A.x, A.ff, A.w.id, "https://work.example/", c(1));
+    await pin(A.x, A.ff, A.w.id, "https://private.example/", c(2));
+    await turnOn(A.x);
+    await settled(A.x);
+    firefoxSyncNow(A.ff, server);
+    firefoxSyncNow(B.ff, server); // what the others have is here before it is turned on
+    await turnOn(B.x);
+    await syncAround(server, [A, B]);
+    const on = (ff, url) => ff.store.essentials.find(e => e.url === url)?.cookieStoreId;
+    assert.equal(on(B.ff, "https://work.example/"), c(work));
+    assert.equal(on(B.ff, "https://private.example/"), c(privat));
+    assert.equal(pinned(B.ff, B.w).find(t => t.url === GHOST("essential", B.ff.store.essentials.find(e => e.url === "https://work.example/").key)).cookieStoreId, c(work));
+    assert.equal(B.ff.containers.size, 4, "none made here: it had them all");
+    assert.equal(Object.values(A.ff.identities).filter(i => i.name === "Other").length, 1, "and the other machine gets the one it did not have");
+    A.x.kill(); B.x.kill();
+  }
 });
 
 test("a space renamed before another machine first sees it is found under its new name", async () => {
@@ -1547,5 +1548,27 @@ test("hiding is not closing: ⌘⇧T stays with what you closed yourself", async
   x.b.sessions.onChanged.fire();
   await wait(100);
   assert.deepEqual(ff.recentlyClosed.map(item => item.tab.sessionId), ["yours"]);
+  x.kill();
+});
+
+test("a page that stayed open and is selected is left alone when more is hidden", async () => {
+  const { ff, w, x } = await withTabs();
+  const page = ff.list(w.id).find(t => t.url === "https://saved.example/");
+  ff.refuseDiscard = new Set([page.id]);
+  const said = [];
+  x.js("globalThis").say = (windowId, text) => said.push(text);
+  await hide(x, c(2));
+  await wait(500);
+  assert.equal(said.length, 1);
+  ff.select(page.id);
+  await wait(300);
+  await x.js("switchSpace")(w.id, c(3)); // the window goes on, on a page of another space
+  ff.select(page.id);
+  await wait(300);
+  await hide(x, c(3)); // and the space it is in is hidden: it needs another, and you stay on your page
+  await wait(500);
+  assert.equal(ff.tabs.get(page.id).active, true);
+  assert.equal(x.js(`activeSpace.get(${w.id})`), c(1));
+  assert.equal(said.length, 1, "it was said once, and a selected tab that stays is no news");
   x.kill();
 });

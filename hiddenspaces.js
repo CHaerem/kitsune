@@ -112,9 +112,9 @@ async function closeHiddenTabs() {
   let stayed = 0;
   for (const t of tabs) {
     if (!known.has(t.id) || t.discarded || isGhostUrl(t.url) || NEW_TAB_PAGES.has(t.url)) continue;
-    await browser.tabs.discard(t.id).catch(() => {});
+    if (!t.active) await browser.tabs.discard(t.id).catch(() => {}); // (Firefox keeps the selected tab: that says nothing about input)
     if ((await browser.tabs.get(t.id).catch(() => null))?.discarded !== false) continue;
-    stayed++;
+    if (!t.active) stayed++;
     const key = syncKeyByTab.get(t.id);
     if (key) keepKeys.add(key);
   }
@@ -173,7 +173,8 @@ async function leaveHiddenSpaces(spaces = hiddenSpaceIds) {
     const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
     const next = isHiddenSpace(space) || !space ? (await spaceList(used))[0]?.id : space;
     if (!next) continue;
-    if (selected?.cookieStoreId === NO_CONTAINER) await setSpace(w.id, next);
+    const stays = selected?.cookieStoreId === NO_CONTAINER || (isHiddenSpace(selected?.cookieStoreId) && !spaces.has(selected.cookieStoreId));
+    if (stays) await setSpace(w.id, next);
     else await switchSpace(w.id, next);
   }
 }
