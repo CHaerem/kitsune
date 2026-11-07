@@ -215,6 +215,31 @@ test("a window whose space has not been read yet goes by its own, not by another
   x.kill();
 });
 
+test("a known tab outside any container asking while Tidier is still starting stays what it is: no page twice, no placeholder left outside", async () => {
+  const ff = new FakeFirefox(); ff.granted = new Set(GUARD); ff.managed = { tidierAlone: true };
+  ff.store.syncedTabs = {
+    f: { own: true, name: "F", group: true, cookieStoreId: B, parentKey: null, rank: 1, url: "x" },
+    k: { url: "https://old.example/", title: "Old", cookieStoreId: NONE, parentKey: "f", group: false, added: 1, saved: { url: "https://old.example/" } },
+  };
+  const { w } = aWindow(ff);
+  const t = ff.addTab(w.id, { url: "about:blank", active: true }, { syncKey: "k", syncRole: "live" });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire({ reason: "update" });
+  await wait(50);
+  assert.equal(x.started(), false);
+  assert.equal((await ff.request({ tabId: t.id, url: "https://old.example/" })).cancel, true);
+  for (let i = 0; i < 300 && !x.started(); i++) await wait(1000);
+  await wait(3000);
+  const reps = ff.list(w.id).filter(z => z.url.includes("old.example") || ff.values.get(z.id)?.syncKey === "k");
+  assert.deepEqual(reps.map(z => [z.url, z.cookieStoreId]), [["https://old.example/", B]], "once, in its folder's space");
+  assert.equal(ff.values.get(reps[0].id).syncKey, "k");
+  assert.equal(ff.synced.k.cookieStoreId, B);
+  assert.equal(ff.synced.k.parentKey, "f");
+  assert.ok(!ff.tabs.has(t.id));
+  assert.deepEqual(x.errors, []);
+  x.kill();
+});
+
 const PROXY = { type: "http", host: "p.example", port: 3128 };
 const pastProxy = (x, details) => x.js("notPastProxy")({ tabId: -1, type: "main_frame", cookieStoreId: A, url: "https://site.example/", ...details });
 

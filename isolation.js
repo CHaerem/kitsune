@@ -251,7 +251,7 @@ async function spaceToOpenIn(tab) {
 // there), else the space you are in.
 async function homeOf(tab) {
   const all = await getSynced();
-  const folderSpace = all[folderKeyOf(all, syncKeyByTab.get(tab.id))]?.cookieStoreId;
+  const folderSpace = all[folderKeyOf(all, await recordKeyOf(tab.id))]?.cookieStoreId;
   return spaceIsThere(folderSpace) ? { space: folderSpace, inFolder: true } : { space: await spaceToOpenIn(tab) };
 }
 
@@ -284,8 +284,13 @@ async function openElsewhere(tab, url, space, popup, leaves = false) {
   return true;
 }
 
+// What a tab is in the record. A tab Firefox restores can ask for its page while Tidier is
+// still starting, before the map has been read: it would be taken for a new tab, and come
+// back as a placeholder as well.
+const recordKeyOf = async tabId => syncKeyByTab.get(tabId) ?? await browser.sessions.getTabValue(tabId, SYNC_KEY).catch(() => undefined);
+
 async function closeOldTab(tab, created, space) {
-  const key = syncKeyByTab.get(tab.id);
+  const key = await recordKeyOf(tab.id);
   // A tab Tidier knows has placeholders in other windows and a record, which only the
   // queue may change. One it doesn't know yet (nearly all of them: this is its first
   // page) is simply closed, now, so you don't see it hanging around.
@@ -303,6 +308,7 @@ async function recordIntoSpace(key, created, space) {
   // Its copies in two windows can both load at once, and each asks here. The first one
   // to get here closes the other's new tab along with the rest, and that is the end of it.
   if (created.id && !await browser.tabs.get(created.id).catch(() => null)) return;
+  if (!started) await loadRoles(); // (at a start this can come first in the queue)
   const all = await getSynced();
   if (all[key]) {
     all[key].cookieStoreId = space;
