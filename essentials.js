@@ -49,7 +49,8 @@ function tagTab(tabId, key) {
 
 async function keyOf(tab) {
   if (keyByTab.has(tab.id)) return keyByTab.get(tab.id);
-  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY);
+  // Refused for a tab closed since it was looked up: it is no copy of anything any more.
+  const key = await browser.sessions.getTabValue(tab.id, TAB_KEY).catch(() => undefined);
   if (key) keyByTab.set(tab.id, key);
   return key;
 }
