@@ -78,10 +78,14 @@ async function showSpace(windowId) {
   if (hide.length) await browser.tabs.hide?.(hide).catch(() => {});
 }
 
-// The tab to go back to in a space: the one used last, an essential counts.
+// The tab to go back to in a space: the one used last, an essential counts. A placeholder
+// only if there is nothing else: its lastAccessed is when it was made, not when you used
+// it, so a tab opened in another window meanwhile would count as the one used last here,
+// and going back to the space would pull it out of the window you opened it in.
 async function lastUsedIn(windowId, space, exceptId) {
   const tabs = await browser.tabs.query({ windowId, cookieStoreId: space }).catch(() => []);
-  return tabs.filter(t => t.id !== exceptId).sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  return tabs.filter(t => t.id !== exceptId)
+    .sort((a, b) => isGhostUrl(a.url) - isGhostUrl(b.url) || (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
 }
 
 // Switching: back to the tab you used last in that space, else a new tab there.

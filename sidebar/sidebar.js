@@ -64,17 +64,26 @@ function keep(id, make, state, draw) {
 // comes near the view: with many tabs most rows are not. One that failed is not asked
 // for again for a while (it may have been the network): a site without an icon would
 // otherwise be asked at every redraw.
-const ICON_RETRY_MS = 5 * 60000;
+//
+// All this only saves asking again, so it can be forgotten, and is: a sidebar stays open
+// as long as its window, and a page can change its icon all day. A data: address (a
+// counter drawn as an icon, say) asks nobody and can be large, so it is not remembered
+// at all, and is drawn at once.
+const ICON_RETRY_MS = 5 * 60000, ICONS_REMEMBERED = 1000;
 const iconsLoaded = new Set(), iconsFailed = new Map(); // URL -> when it failed
+const roomFor = list => { if (list.size >= ICONS_REMEMBERED) list.clear(); };
 function icon(item) {
   const failed = iconsFailed.get(item.icon);
   if (item.icon && /^(https?:|data:|moz-extension:)/.test(item.icon) && !(Date.now() - failed < ICON_RETRY_MS)) {
-    const img = el("img");
-    if (!iconsLoaded.has(item.icon)) img.loading = "lazy";
+    const img = el("img"), asks = !item.icon.startsWith("data:");
+    if (asks && !iconsLoaded.has(item.icon)) img.loading = "lazy";
     img.src = item.icon;
     img.alt = "";
-    img.onload = () => { iconsLoaded.add(item.icon); iconsFailed.delete(item.icon); };
-    img.onerror = () => { iconsFailed.set(item.icon, Date.now()); img.replaceWith(el("span", "letter", (item.title || "?").trim()[0] || "?")); };
+    img.onload = () => { if (asks) { roomFor(iconsLoaded); iconsLoaded.add(item.icon); iconsFailed.delete(item.icon); } };
+    img.onerror = () => {
+      if (asks) { roomFor(iconsFailed); iconsFailed.set(item.icon, Date.now()); }
+      img.replaceWith(el("span", "letter", (item.title || "?").trim()[0] || "?"));
+    };
     return img;
   }
   return el("span", "letter", (item.title || "?").trim()[0] || "?");

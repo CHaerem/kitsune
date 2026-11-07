@@ -4,6 +4,8 @@
 // Firefox is measured by the smoke test (alone_many).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { FakeFirefox, wait, realSleep, GHOST } from "./fake_firefox.mjs";
 
 const C1 = "firefox-container-1", C2 = "firefox-container-2";
@@ -225,6 +227,76 @@ test("a placeholder's row takes its icon from the record, or the site's when tha
   x.kill();
 });
 
+test("a loaded page shows only an icon of its own: the record may still have the last site's", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = {
+    a: entry("https://new.example/", { title: "Loaded", icon: "https://old.example/i.png" }),
+    b: entry("https://b.example/", { title: "Own icon", icon: "https://b.example/old.png" }),
+    c: entry("https://c.example/", { title: "Unloaded", icon: "https://c.example/i.png" }),
+  };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://new.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://b.example/", favIconUrl: "https://b.example/new.png", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://c.example/", discarded: true, cookieStoreId: C1 }, { syncKey: "c", syncRole: "live" });
+  const x = await alone(ff);
+  const icons = Object.fromEntries((await x.js("viewFor")(w.id)).tabs.map(t => [t.title, t.icon]));
+  assert.equal(icons.Loaded, null);
+  assert.equal(icons["Own icon"], "https://b.example/new.png");
+  assert.equal(icons.Unloaded, "https://c.example/i.png");
+  x.kill();
+});
+
+test("an address in the record that cannot be read does not stop the sidebar, and a login in one is not sent for its icon", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = {
+    bad: entry("http://", { title: "Bad", cookieStoreId: C1 }),
+    login: entry("https://me:secret@c.example/x", { title: "Login" }),
+  };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true, cookieStoreId: C1 });
+  ff.addTab(w.id, { url: GHOST("ghost", "bad"), discarded: true, cookieStoreId: C1 }, { syncKey: "bad", syncRole: "ghost" });
+  ff.addTab(w.id, { url: GHOST("ghost", "login"), discarded: true, cookieStoreId: C1 }, { syncKey: "login", syncRole: "ghost" });
+  const x = await alone(ff);
+  const icons = Object.fromEntries((await x.js("viewFor")(w.id)).tabs.map(t => [t.title, t.icon]));
+  assert.equal(icons.Bad, null);
+  assert.equal(icons.Login, "https://c.example/favicon.ico");
+  x.kill();
+});
+
+// The sidebar's own script, with just enough of a page around it.
+function sidebarPage() {
+  const element = () => ({ dataset: {}, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {}, contains: () => false }, append() {}, replaceWith() {}, replaceChildren() {} });
+  const ctx = vm.createContext({
+    browser: { runtime: { connect: () => ({ onMessage: { addListener() {} }, postMessage() {} }) }, windows: { getCurrent: async () => ({ id: 1 }) }, storage: { managed: { get: async () => ({}) } } },
+    document: { createElement: element, getElementById: element, documentElement: element(), head: element() },
+  });
+  vm.runInContext(readFileSync(new URL("../sidebar/sidebar.js", import.meta.url), "utf8"), ctx);
+  return code => vm.runInContext(code, ctx);
+}
+
+test("the sidebar asks for an icon only near the view, once, and what it remembers does not grow", () => {
+  const page = sidebarPage(), icon = page("icon");
+  const first = icon({ icon: "https://a.example/i.png", title: "A" });
+  assert.equal(first.loading, "lazy", "not seen yet: only near the view");
+  first.onload();
+  assert.equal(icon({ icon: "https://a.example/i.png", title: "A" }).loading, undefined, "loaded: at once, so it does not blink");
+  icon({ icon: "https://b.example/i.png", title: "B" }).onerror();
+  assert.equal(icon({ icon: "https://b.example/i.png", title: "B" }).className, "letter", "failed: not asked for at every draw");
+
+  // A page that draws a counter as its icon, all day.
+  const data = n => `data:image/png;base64,${n}`;
+  assert.equal(icon({ icon: data(0), title: "C" }).loading, undefined, "a data: address asks nobody");
+  for (let n = 0; n < 3000; n++) icon({ icon: data(n), title: "C" }).onload();
+  assert.equal(page("iconsLoaded.size"), 1, "and is not remembered");
+  for (let n = 0; n < 3000; n++) icon({ icon: data(n), title: "C" }).onerror();
+  assert.equal(page("iconsFailed.size"), 1);
+
+  for (let n = 0; n < 3000; n++) icon({ icon: `https://c.example/${n}.png`, title: "C" }).onload();
+  assert.ok(page("iconsLoaded.size") <= 1000, String(page("iconsLoaded.size")));
+  for (let n = 0; n < 3000; n++) icon({ icon: `https://d.example/${n}.png`, title: "D" }).onerror();
+  assert.ok(page("iconsFailed.size") <= 1000, String(page("iconsFailed.size")));
+});
+
 test("after moving back, placeholders without an icon load their page, once", async () => {
   const ff = new FakeFirefox();
   ff.store.syncedTabs = { a: entry("https://a.example/") };
@@ -342,6 +414,42 @@ test("the wait for a view: a pause in events, a limit in a long burst, and a res
   x.kill();
 });
 
+test("a slow view is followed by a rest, but not by a long one: what you just did must show", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 4);
+  const x = await alone(ff);
+  await sidebar(x, w.id);
+  await wait(300);
+  const rests = [], rest = x.js("viewRest"), set = rest.set.bind(rest);
+  rest.set = (id, until) => { rests.push(until - x.js("performance.now()")); return set(id, until); };
+  ff.hooks.query = async q => { if (q.cookieStoreId && q.hidden === undefined) await realSleep(30); }; // Firefox is busy: 3 s in the scripts' time
+  x.js("viewSoon")(w.id);
+  await until(() => rests.length);
+  delete ff.hooks.query;
+  assert.ok(rests[0] > 0 && rests[0] <= 1000, String(rests));
+  x.kill();
+});
+
+test("events that keep coming do not put off a view that is due", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 4);
+  const x = await alone(ff);
+  await sidebar(x, w.id);
+  await wait(300);
+  const timers = x.js("viewTimers"), viewSoon = x.js("viewSoon");
+  x.js("viewRest").set(w.id, x.js("performance.now()") + 1e6); // so that it is still waiting when the next event comes
+  viewSoon(w.id);
+  const waiting = timers.get(w.id);
+  viewSoon(w.id);
+  assert.notEqual(timers.get(w.id), undefined);
+  await wait(300); // past VIEW_LONGEST_WAIT_MS
+  const due = timers.get(w.id);
+  assert.equal(due.first, waiting.first);
+  viewSoon(w.id);
+  assert.equal(timers.get(w.id), due, "the same timer: another would start over");
+  x.kill();
+});
+
 test("a long burst of events still shows", async () => {
   const ff = new FakeFirefox();
   const w = manyTabs(ff, 6);
@@ -367,6 +475,59 @@ test("a sidebar that closes leaves nothing behind, also in the middle of a view"
   bar.close();
   await wait(300);
   for (const name of ["sidebarPorts", "viewTimers", "viewRest", "viewsBuilding"]) assert.equal(x.js(name).size, 0, name);
+  x.kill();
+});
+
+test("a sidebar that closes while Firefox does not answer for its view leaves nothing behind", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2);
+  const x = await alone(ff);
+  const bar = await sidebar(x, w.id);
+  await wait(300);
+  ff.hooks.query = q => (q.cookieStoreId && q.hidden === undefined ? new Promise(() => {}) : undefined);
+  x.js("viewSoon")(w.id);
+  await until(() => x.js("viewsBuilding").size);
+  assert.equal(x.js("viewsBuilding").size, 1);
+  bar.close();
+  assert.equal(x.js("viewsBuilding").size, 0);
+  delete ff.hooks.query;
+  x.kill();
+});
+
+test("tabs hidden at a switch of space wake nothing, and a switch asks only for the tabs that may change", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 6);
+  const x = await alone(ff);
+  await sidebar(x, w.id);
+  await wait(300);
+  const views = x.js("work.views"), jobs = x.js("work.jobs");
+  for (const t of ff.list(w.id)) x.b.tabs.onUpdated.fire(t.id, { hidden: true }, t);
+  await wait(400);
+  assert.equal(x.js("work.views"), views);
+  assert.equal(x.js("work.jobs"), jobs);
+  const asked = await queries(ff, () => x.js("showSpace")(w.id));
+  assert.ok(asked.length, "it does ask");
+  assert.ok(!asked.some(q => wholeWindow(q) || (q.hidden === true && !q.cookieStoreId)), JSON.stringify(asked));
+  // Firefox sends a message per listener and per tab: with hundreds of tabs hidden one by
+  // one, a listener without a filter costs that much at every switch, and has nothing to do.
+  const woken = x.b.tabs.onUpdated.ls.filter(({ filter }) => !filter?.properties || filter.properties.includes("hidden"));
+  assert.deepEqual(woken.map(l => l.f.toString().slice(0, 80)), []);
+  x.kill();
+});
+
+test("what tab sync's filter on tab changes must let through", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2), other = ff.addWindow();
+  const x = await alone(ff);
+  const live = ff.list(w.id)[0];
+  ff.tabs.get(live.id).pinned = true;
+  x.b.tabs.onUpdated.fire(live.id, { pinned: true }, ff.snap(ff.tabs.get(live.id)));
+  await x.js("serial")(() => {});
+  assert.equal((await x.js("getSynced")()).k0, undefined, "a tab pinned leaves tab sync");
+  const fresh = ff.addTab(w.id, { url: "https://new.example/", cookieStoreId: C1 });
+  x.b.tabs.onUpdated.fire(fresh.id, { status: "complete" }, ff.snap(fresh));
+  assert.ok(x.js("pending").has(fresh.id), "a new tab that has loaded a page is taken in");
+  assert.ok(ff.list(other.id).length, "(and the other window is still there)");
   x.kill();
 });
 
@@ -413,6 +574,41 @@ test("a placeholder that reaches Recently Closed late is still forgotten, during
   x.b.sessions.onChanged.fire();
   await until(() => !ff.recentlyClosed.length);
   assert.equal(ff.recentlyClosed.length, 0);
+  x.kill();
+});
+
+test("the rests after a look at Recently Closed and at a window's order are in proportion, with a limit", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2);
+  const x = await alone(ff);
+  // Every delay asked for from the moment a look is done.
+  const delays = [], set = x.ctx.setTimeout;
+  x.ctx.setTimeout = (f, ms, ...a) => { delays.push(ms); return set(f, ms, ...a); };
+  const read = x.b.sessions.getRecentlyClosed;
+  x.b.sessions.getRecentlyClosed = async () => { await realSleep(30); delays.length = 0; return read(); }; // 3 s in the scripts' time
+  x.js("forgetClosedPlaceholders")("ghost", ["k"]);
+  delays.length = 0; // (the timer that empties the list once it is all over)
+  await until(() => delays.length);
+  assert.ok(delays.length && delays.every(ms => ms > 0 && ms <= 1000), `after a slow look at Recently Closed: ${delays}`);
+  x.b.sessions.getRecentlyClosed = read;
+  delays.length = 0;
+  ff.hooks.query = async () => { await realSleep(30); delays.length = 0; };
+  x.js("noteOrder")(w.id);
+  x.js("noteOrder")(w.id); // changed during the look: another one follows
+  await until(() => delays.length);
+  delete ff.hooks.query;
+  assert.ok(delays.length && delays.every(ms => ms > 0 && ms <= 1000), `after a slow look at the order: ${delays}`);
+  x.kill();
+});
+
+test("a pull request never opened leaves no placeholder in Recently Closed", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2);
+  const x = await alone(ff);
+  ff.recentlyClosed = [{ tab: { url: GHOST("lazy", "k0"), windowId: w.id, sessionId: "s" } }, { tab: { url: "https://keep.example/", windowId: w.id, sessionId: "r" } }];
+  await x.js("serial")(() => x.js("closeEverywhere")("k0", { dismiss: false }));
+  await until(() => ff.recentlyClosed.length === 1);
+  assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["r"]);
   x.kill();
 });
 
@@ -482,17 +678,76 @@ test("a page closed while its placeholders wait to be refreshed leaves no timer 
   x.kill();
 });
 
+test("a page closed while its refresh waits in the queue leaves nothing behind", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2), other = ff.addWindow();
+  const x = await alone(ff);
+  const live = ff.list(w.id)[0], serial = x.js("serial");
+  x.js("refreshGhostsSoon")("k0");
+  let release;
+  serial(() => new Promise(r => { release = r; })); // the queue is busy,
+  ff.rm(live.id); // the close waits there,
+  await wait(4000); // and the refresh comes in after it
+  assert.equal(x.js("refreshTimers").size, 1);
+  release();
+  await until(() => !x.js("refreshTimers").size);
+  await serial(() => {});
+  assert.equal(x.js("lastRefresh").size, 0);
+  assert.ok(!ff.list(other.id).some(t => x.js("syncKeyByTab").get(t.id) === "k0"), "it is closed everywhere");
+  x.kill();
+});
+
+test("back in a space, the tab you used there is selected, not a placeholder made since", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true }), other = ff.addWindow();
+  ff.store.syncedTabs = { used: entry("https://used.example/"), since: entry("https://since.example/") };
+  ff.addTab(w.id, { url: "https://away.example/", active: true, cookieStoreId: C2 });
+  const used = ff.addTab(w.id, { url: "https://used.example/", cookieStoreId: C1, lastAccessed: 1000 }, { syncKey: "used", syncRole: "live" });
+  ff.addTab(w.id, { url: GHOST("ghost", "since"), discarded: true, cookieStoreId: C1, lastAccessed: 2000 }, { syncKey: "since", syncRole: "ghost" });
+  ff.addTab(other.id, { url: "https://since.example/", active: true, cookieStoreId: C1 }, { syncKey: "since", syncRole: "live" });
+  const x = await alone(ff);
+  assert.equal((await x.js("lastUsedIn")(w.id, C1)).id, used.id);
+  x.kill();
+});
+
+test("a space with only placeholders goes back to the newest of them", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/") };
+  ff.addTab(w.id, { url: "https://away.example/", active: true, cookieStoreId: C2 });
+  ff.addTab(w.id, { url: GHOST("ghost", "a"), discarded: true, cookieStoreId: C1, lastAccessed: 1000 }, { syncKey: "a", syncRole: "ghost" });
+  const newest = ff.addTab(w.id, { url: GHOST("ghost", "b"), discarded: true, cookieStoreId: C1, lastAccessed: 2000 }, { syncKey: "b", syncRole: "ghost" });
+  const x = await alone(ff);
+  assert.equal((await x.js("lastUsedIn")(w.id, C1)).id, newest.id);
+  x.kill();
+});
+
+test("a tab gone when Tidier looks over its record is not remembered for a refresh", async () => {
+  const ff = new FakeFirefox();
+  manyTabs(ff, 2);
+  const x = await alone(ff);
+  const all = await x.js("getSynced")();
+  all.gone = entry("https://gone.example/");
+  x.js("lastRefresh").set("gone", 1);
+  await x.js("serial")(() => x.js("reconcileAll")());
+  assert.equal(all.gone, undefined);
+  assert.equal(x.js("lastRefresh").size, 0);
+  x.kill();
+});
+
 test("a tab event with Tidier alone schedules no work that only Sidebery needs", async () => {
   const ff = new FakeFirefox();
   const w = manyTabs(ff, 4);
   const x = await alone(ff);
   const t = ff.list(w.id)[1];
+  const jobs = x.js("work.jobs");
   const asked = await queries(ff, async () => {
     x.b.tabs.onMoved.fire(t.id, { windowId: w.id, fromIndex: 1, toIndex: 2 });
     await wait(600);
   });
   // The window's order is looked at once, for placing a closed tab, and nothing else.
   assert.ok(asked.filter(wholeWindow).length <= 1, JSON.stringify(asked));
+  assert.equal(x.js("work.jobs"), jobs, "nor is anything queued");
   assert.equal(x.js("foldersTimers").size, 0);
   x.kill();
 });

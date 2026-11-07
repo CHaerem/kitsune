@@ -14,7 +14,13 @@ export const wait = ms => realSleep(ms / SCALE); // wait in the scripts' time
 const ev = () => {
   const ls = [];
   return { ls, addListener(f, filter) { ls.push({ f, filter }); }, removeListener(f) { const i = ls.findIndex(l => l.f === f); if (i >= 0) ls.splice(i, 1); }, hasListener(f) { return ls.some(l => l.f === f); },
-    fire(...a) { for (const { f } of [...ls]) { try { const r = f(...a); if (r?.catch) r.catch(() => {}); } catch { /* as in Firefox: a listener's error stays with it */ } } } };
+    fire(...a) {
+      for (const { f, filter } of [...ls]) {
+        // As in Firefox: a listener with a filter hears only of the properties it names.
+        if (filter?.properties && !filter.properties.some(p => a[1] && p in a[1])) continue;
+        try { const r = f(...a); if (r?.catch) r.catch(() => {}); } catch { /* as in Firefox: a listener's error stays with it */ }
+      }
+    } };
 };
 
 export class FakeFirefox {

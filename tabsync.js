@@ -380,7 +380,7 @@ async function reconcileAll() {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
       // the tab's last copy. fillWindow gives it a new placeholder.
-      if (sessionHere && !all[key].saved) delete all[key];
+      if (sessionHere && !all[key].saved) { delete all[key]; stopRefreshing(key); }
       continue;
     }
     if (!all[key].group) {
@@ -785,8 +785,10 @@ function refreshGhostsSoon(key) {
   const wait = Math.max(REFRESH_DELAY_MS, (lastRefresh.get(key) || 0) + REFRESH_GAP_MS - Date.now());
   refreshTimers.set(key, setTimeout(() => serial(async () => {
     refreshTimers.delete(key);
+    const reps = await repsNow(key);
+    if (!reps.length) return; // closed while this waited in the queue: nothing to remember it for
     lastRefresh.set(key, Date.now());
-    for (const t of await repsNow(key)) {
+    for (const t of reps) {
       if (t.discarded && syncRoleByTab.get(t.id) === "ghost") await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(() => {});
     }
   }), wait));
@@ -895,8 +897,9 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
 // One look at a time, and if tabs changed meanwhile, another after a rest in proportion
 // to what this one took: a burst of events in a window of a thousand tabs would otherwise
 // keep Firefox busy describing tabs to no one, the whole time. (With 50 tabs the rest is
-// a few milliseconds, with 1000 it is less than a tenth of a second.)
-const ORDER_REST = 9;
+// a few milliseconds.) It has a limit: this order says whether a tab you close was
+// loaded, and for a saved tab that decides between unloading it and closing it.
+const ORDER_REST = 9, ORDER_LONGEST_REST_MS = 1000;
 const lastOrder = new Map(); // windowId -> [{ id, cookieStoreId, unloaded }]
 const orderQueries = new Map(); // windowId -> whether to look again when the query in progress is done
 function noteOrder(windowId) {
@@ -910,7 +913,7 @@ function noteOrder(windowId) {
       .map(t => ({ id: t.id, cookieStoreId: t.cookieStoreId, unloaded: t.discarded || isGhostUrl(t.url) })));
   }, () => lastOrder.delete(windowId)).finally(() => {
     if (!orderQueries.get(windowId)) { orderQueries.delete(windowId); return; }
-    setTimeout(() => { orderQueries.delete(windowId); noteOrder(windowId); }, ORDER_REST * (performance.now() - t0));
+    setTimeout(() => { orderQueries.delete(windowId); noteOrder(windowId); }, Math.min(ORDER_REST * (performance.now() - t0), ORDER_LONGEST_REST_MS));
   });
 }
 browser.tabs.onCreated.addListener(tab => noteOrder(tab.windowId));

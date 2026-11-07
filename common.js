@@ -97,12 +97,17 @@ const isGhostUrl = url => (url || "").startsWith(GHOST_PAGE);
 // Closing many tabs changes that list once per tab, and a look makes Firefox copy
 // everything in it, also a closed window with all its tabs. So nobody waits for a look,
 // one runs at a time, and if the list changed meanwhile, another follows after a rest in
-// proportion to what this one took. With a few tabs that rest is hardly anything.
-const FORGET_MS = 10000, FORGET_REST = 9;
+// proportion to what this one took. With a few tabs that rest is hardly anything. It has
+// a limit, well below FORGET_MS: past that a placeholder would no longer be looked for,
+// and would stay in the list, on a machine that is merely busy.
+const FORGET_MS = 10000, FORGET_REST = 9, FORGET_LONGEST_REST_MS = 1000;
 const toForget = new Map(); // placeholder URL -> until when to look for it
 let forgetTimer = null, forgetBusy = false, forgetAgain = false;
 function forgetClosedPlaceholders(kind, keys) {
-  for (const k of keys) toForget.set(ghostUrl(kind, k), Date.now() + FORGET_MS);
+  // A synced tab's placeholder is a "ghost", or "lazy" if it stands for a pull request
+  // never opened (createLiveItem); ⌘⇧T would bring that back with nothing to show.
+  const kinds = kind === "ghost" ? ["ghost", "lazy"] : [kind];
+  for (const k of keys) for (const x of kinds) toForget.set(ghostUrl(x, k), Date.now() + FORGET_MS);
   clearTimeout(forgetTimer);
   forgetTimer = setTimeout(forgetClosedNow, FORGET_MS + 100); // so the list empties also if nothing else changes
   forgetClosedNow();
@@ -124,7 +129,7 @@ async function forgetClosedNow() {
     setTimeout(() => {
       forgetBusy = false;
       if (forgetAgain) { forgetAgain = false; forgetClosedNow(); }
-    }, FORGET_REST * (performance.now() - t0));
+    }, Math.min(FORGET_REST * (performance.now() - t0), FORGET_LONGEST_REST_MS));
   }
 }
 browser.sessions.onChanged.addListener(() => { forgetClosedNow(); });

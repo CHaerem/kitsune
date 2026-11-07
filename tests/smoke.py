@@ -1470,6 +1470,8 @@ def alone_live_folders(m):
     r = m.js(H + """await wait(1500); const all = (await storage("%s", ["syncedTabs"])).syncedTabs;
       return {tabs: Object.values(all).filter(e => e.liveFolder === "prs").length, left: wins().flatMap(w => w.gBrowser.tabs).filter(t => t.label.includes("r#")).length, folder: Object.values(all).some(e => e.live === "prs")};""" % EXT_ID)
     check("a pull request that leaves the search is removed, and the folder stays", r["tabs"] == 0 and r["left"] == 0 and r["folder"], str(r))
+    r = sidebar_page(m, RECENTLY_CLOSED_PLACEHOLDERS)
+    check("and it leaves no placeholder in Recently Closed, for ⌘⇧T to bring back", not r["left"], str(r))
 
 
 def alone_idle(m):
@@ -1661,6 +1663,15 @@ def many_diff(before, after):
     return {k: round(after[k] - before[k]) for k in ("jobs", "queueMs", "lookups", "views", "viewMs")}
 
 
+# Placeholders in Recently Closed, in a page of Tidier's own: they go a moment after they
+# are closed, so they are given a moment. (The smoke test's own helper pages are kind=test.)
+RECENTLY_CLOSED_PLACEHOLDERS = """
+  const look = async () => (await page.browser.sessions.getRecentlyClosed()).map(c => c.tab?.url || "").filter(u => /ghost\\.html\\?kind=(ghost|essential|lazy)/.test(u));
+  let left = await look();
+  for (let i = 0; i < 40 && left.length; i++) { await wait(500); left = await look(); }
+  return {left};"""
+
+
 def alone_many(m):
     # The owner has about 33 essentials and 53 tabs; this is well beyond that. All of it
     # in the real test Firefox, with tabs that were never loaded, as after a restart, so
@@ -1718,9 +1729,18 @@ def alone_many(m):
       const letter = await new Promise(resolve => { const look = n => { const l = doc.body.querySelector(":scope > .letter"); if (l || !n) resolve(l); else setTimeout(() => look(n - 1), 100); }; look(50); });
       const again = page.icon(bad).tagName;
       letter?.remove(); first.remove();
-      return {unloaded: row.classList.contains("unloaded"), icon: seen?.src.slice(0, 22), drawn: seen?.naturalWidth, firstTag: first.tagName, letter: letter?.textContent, again};""", m.pages)
+      // Far out of view it is not asked for at all, and is once it comes into view.
+      const far = page.icon({icon: args[0] + "/no-icon-far-away.png", title: "Far"});
+      far.style.position = "fixed"; far.style.top = "100000px"; doc.body.append(far);
+      await wait(1500);
+      const asked = !far.isConnected || far.complete;
+      far.style.top = "0";
+      const inView = await new Promise(resolve => { const look = n => { if (!far.isConnected || !n) resolve(!far.isConnected); else setTimeout(() => look(n - 1), 100); }; look(50); });
+      doc.body.querySelector(":scope > .letter")?.remove(); far.remove();
+      return {unloaded: row.classList.contains("unloaded"), icon: seen?.src.slice(0, 22), drawn: seen?.naturalWidth, firstTag: first.tagName, letter: letter?.textContent, again, asked, inView};""", m.pages)
     check("a placeholder made without a page shows its page's title and icon", r.get("unloaded") and r.get("icon") == "data:image/png;base64," and r.get("drawn") == 16, str(r))
     check("an icon that does not load shows the letter, and is not asked for at every draw", r.get("firstTag") == "IMG" and r.get("letter") == "L" and r.get("again") == "SPAN", str(r))
+    check("an icon far out of view is not asked for, and is when it comes into view", r.get("asked") is False and r.get("inView") is True, str(r))
     m.js(H + """const w = main(); w.gBrowser.selectedTab = w.__before; await removeWhere((x, t) => url(t).endsWith("/icon")); return 1;""")
 
     # From the event to the sidebar showing it, and a view's build, one at a time.
@@ -1782,7 +1802,7 @@ def alone_many(m):
       return out;""", m.pages)
     numbers["ticking"] = r
     check("a page ticking in another space builds no view", r["away"]["views"] == 0, str(r))
-    check("a page ticking in this one builds at most a view per tick", r["here"]["views"] <= 25, str(r))
+    check("a page ticking in this one is drawn, with at most a view per tick", 1 <= r["here"]["views"] <= 25, str(r))
 
     # Selecting a ghost, in the window you are using.
     r = m.js(H + """const x = other(), times = []; x.focus(); await wait(500);
@@ -1814,6 +1834,20 @@ def alone_many(m):
     check(f"switching space is quick ({r.get('ms')} ms)", (r.get("ms") or 1e9) < 3000, str(r))
     shown = m.js(H + """const w = main(); await wait(500); return [...new Set(w.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && t.userContextId).map(t => t.userContextId))];""")
     check("and shows one space", len(shown) == 1, str(shown))
+
+    # Back in a space, the tab you used there, not one opened in another window meanwhile:
+    # its placeholder here is newer, and selecting that would pull it out of that window.
+    space = number
+    m.js(H + """const w = main(); w.focus(); await wait(300);
+      w.gBrowser.selectedTab = w.gBrowser.addTrustedTab(args[0] + "/icon?used", {userContextId: args[1]}); await wait(2500); return 1;""", m.pages, space)
+    press(m, "2" if space == 1 else "1", CTRL)
+    time.sleep(1.5)
+    m.js(H + """other().gBrowser.addTrustedTab(args[0] + "/icon?elsewhere", {userContextId: args[1], inBackground: true}); await wait(3500); return 1;""", m.pages, space)
+    press(m, str(space), CTRL)
+    time.sleep(2)
+    r = m.js(H + """const w = main(), s = w.gBrowser.selectedTab, r = {selected: url(s), elsewhere: other().gBrowser.tabs.some(t => url(t).endsWith("/icon?elsewhere"))};
+      await removeWhere((x, t) => url(t).includes("/icon?")); return r;""")
+    check("back in a space, the tab you used is selected, and a tab opened elsewhere stays there", r["selected"].endswith("/icon?used") and r["elsewhere"], str(r))
 
     # A new window, on top of the two.
     before = sidebar_page(m, MANY_PAGE + """return await ask({type: "stats"});""")
@@ -1852,6 +1886,8 @@ def alone_many(m):
       return !wins().some(w => w.gBrowser.tabs.some(t => { const k = value(w, t, "syncKey"); return k && !keys.has(k); }));""" % EXT_ID, 300)
     numbers["closedAllTabsS"] = None if left is None else round(time.time() - t0, 1)
     check(f"closing them all closes them everywhere ({numbers['closedAllTabsS']} s)", gone is not None and left is not None, str(numbers))
+    r = sidebar_page(m, RECENTLY_CLOSED_PLACEHOLDERS)
+    check("and leaves no placeholder in Recently Closed", not r["left"], str(r))
     m.js(H + """await removeWhere((x, t) => url(t).includes("ticking")); return 1;""")
     sidebar_page(m, MANY_PAGE + """const id = args[0]; if (spaces().find(s => s.active).id !== id) { doc.querySelector(`#spaces .space[data-space="${id}"]`).click(); await wait(1000); } return 1;""", space0)
     if made_window:

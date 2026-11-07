@@ -16,23 +16,31 @@ const viewsBuilding = new Map(); // windowId -> { since, changed }: the view bei
 const viewRest = new Map(); // windowId -> not before when its next view is built
 const VIEW_DEBOUNCE_MS = 30; // a burst of tab events becomes one view...
 const VIEW_LONGEST_WAIT_MS = 250; // ... and a long burst still shows, every so often
-const VIEW_REST = 3; // times what the last view took, so that views never take most of the time, however many tabs
+// Times what the last view took, so that views never take most of the time, however
+// many tabs. With a limit: a view is slow when Firefox is busy, and what you just did
+// must still show soon after.
+const VIEW_REST = 3, VIEW_LONGEST_REST_MS = 1000;
 const VIEW_STUCK_MS = 15000; // a view Firefox never answers for must not leave a sidebar frozen
 
 // What the sidebar shows of a tab. A placeholder's own title and icon are the
-// page's (see ghost.js); an essential shows its short name if it has one.
+// page's (see ghost.js); an essential shows its short name if it has one. The icon in
+// the record is for what is not loaded: a loaded page without an icon has none, and the
+// record may still have the icon of the site it was on before.
 const tabItem = (t, title, icon) => ({
-  id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || icon || null,
+  id: t.id, title: title || t.title || t.url, icon: t.favIconUrl || (isLoadedCopy(t) ? null : icon) || null,
   active: t.active, loaded: !t.discarded && !isGhostUrl(t.url), audible: !!t.audible, muted: !!t.mutedInfo?.muted,
 });
 
 // The icon in the record, for a placeholder that has none of its own (createRep,
 // tabsync.js). One from Firefox's own icon cache (page-icon:) cannot be shown in an
-// extension's page, so then the site's, which is what ghost.js would look for.
+// extension's page, so then the site's, which is what ghost.js would look for. (By
+// its origin: this is asked for outside the tab's container, and a login in the address
+// must not go along. A record taken in from a copy can hold any address, and one
+// that cannot be read must not stop the whole sidebar from drawing.)
 function recordIcon(entry) {
   if (!entry) return null;
   if (/^(https?:|data:|moz-extension:)/.test(entry.icon || "")) return entry.icon;
-  return isWeb(entry.url) ? new URL("/favicon.ico", entry.url).href : null;
+  try { return isWeb(entry.url) ? new URL(entry.url).origin + "/favicon.ico" : null; } catch { return null; }
 }
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";
@@ -81,6 +89,7 @@ function viewSoon(windowId) {
   const now = performance.now(), building = viewsBuilding.get(windowId);
   if (building && now - building.since < VIEW_STUCK_MS) { building.changed = true; return; }
   const waiting = viewTimers.get(windowId), first = waiting?.first ?? now;
+  if (waiting && now - first >= VIEW_LONGEST_WAIT_MS) return; // it is due: events that keep coming must not put it off again
   clearTimeout(waiting?.timer);
   viewTimers.set(windowId, { first, timer: setTimeout(() => buildView(windowId), viewWait(now, first, viewRest.get(windowId) ?? 0)) });
 }
@@ -97,7 +106,7 @@ async function buildView(windowId) {
   if (viewsBuilding.get(windowId) !== building) return; // given up on: a newer one is on its way
   viewsBuilding.delete(windowId);
   if (view) for (const port of sidebarPorts.get(windowId) || []) port.postMessage(view);
-  if (sidebarPorts.has(windowId)) viewRest.set(windowId, performance.now() + VIEW_REST * ms);
+  if (sidebarPorts.has(windowId)) viewRest.set(windowId, performance.now() + Math.min(VIEW_REST * ms, VIEW_LONGEST_REST_MS));
   if (building.changed) viewSoon(windowId);
 }
 const viewAllSoon = () => { for (const windowId of sidebarPorts.keys()) viewSoon(windowId); };
@@ -135,7 +144,7 @@ browser.runtime.onConnect.addListener(port => {
     const set = sidebarPorts.get(windowId);
     if (!set) return;
     set.delete(port);
-    if (!set.size) { sidebarPorts.delete(windowId); clearTimeout(viewTimers.get(windowId)?.timer); viewTimers.delete(windowId); viewRest.delete(windowId); }
+    if (!set.size) { sidebarPorts.delete(windowId); clearTimeout(viewTimers.get(windowId)?.timer); viewTimers.delete(windowId); viewRest.delete(windowId); viewsBuilding.delete(windowId); }
   });
 });
 
