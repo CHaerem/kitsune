@@ -1495,10 +1495,12 @@ def alone_chaos(m):
     r = m.js(H + """const w = main(), mark = "smoke-chaos-link";
       const closed = () => w.SessionStore.getClosedTabDataForWindow(w).map(c => c.state.entries?.[c.state.index - 1]?.url || "").filter(u => u.includes(mark)).length;
       w.gBrowser.addTrustedTab("https://example.org/?" + mark, {inBackground: true});  // no container, as from another app
-      await wait(3000);
+      const inSpace = () => w.gBrowser.tabs.filter(t => url(t).includes(mark) && t.userContextId);
+      for (let i = 0; i < 100 && !inSpace().length; i++) await wait(100);
+      await wait(1500);  // a copy left there would be there by now
       const here = w.gBrowser.tabs.filter(t => url(t).includes(mark)), spaces = here.map(ctxOf), first = closed();
-      await wait(1500);
-      w.gBrowser.removeTab(here[0]); await wait(2500);
+      w.gBrowser.removeTab(here[0]);
+      for (let i = 0; i < 100 && !closed(); i++) await wait(100);
       return {spaces, first, then: closed()};""")
     check("a link from another app is opened in a space, and its first copy is not in Recently Closed", len(r["spaces"]) == 1 and r["spaces"][0] != "firefox-default" and r["first"] == 0, str(r))
     check("closed a moment later, ⌘⇧T brings it back", r["then"] == 1, str(r))
