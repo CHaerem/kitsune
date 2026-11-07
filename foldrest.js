@@ -10,7 +10,8 @@
 // a closed one, and leaving a tab in one. So there is nothing to cancel, no idle work,
 // and nothing at a start or an update, when a page must not be thrown away just because
 // Tidier started. Opening a folder loads nothing: a page loads when you select it, as
-// any unloaded tab does.
+// any unloaded tab does. (A click with the mouse reaches this half a second later, once
+// it is clear it is not the first of a double click, which renames: see sidebar.js.)
 
 // Whether the stored entry `key` is in a closed folder.
 const restsInFolder = (all, key) => !!all[folderKeyOf(all, key)]?.collapsed;
