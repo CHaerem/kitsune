@@ -327,12 +327,14 @@ async function reconcileAll() {
   for (const key of Object.keys(all)) {
     if (isOwnFolder(all[key])) continue;
     const reps = repsOf(key, tabs);
+    const backFromHidden = all[key].wasHidden && !isHiddenSpace(all[key].cookieStoreId); // hiddenspaces.js: closed by hiding, not by you
+    if (backFromHidden) delete all[key].wasHidden;
     if (!reps.length) {
       // Nothing left anywhere: the tab is gone. A saved tab stays: Firefox closes
       // a placeholder that is loaded when Tidier updates, and it may have been
       // the tab's last copy. fillWindow gives it a new placeholder.
       // So does a tab of a hidden space, which comes back when the space is shown.
-      if (sessionHere && !all[key].saved && !isHiddenSpace(all[key].cookieStoreId)) delete all[key];
+      if (sessionHere && !all[key].saved && !isHiddenSpace(all[key].cookieStoreId) && !backFromHidden) delete all[key];
       continue;
     }
     if (!all[key].group) {

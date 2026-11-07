@@ -1515,6 +1515,15 @@ def alone_sync_hide(m):
     def from_elsewhere(items):
         ext_page(m, settings, "await page.browser.storage.sync.set(page.JSON.parse(JSON.stringify(args[0]))); return 1;", items)
 
+    # A real Firefox refuses a whole write with half a character in it, and sync cuts long titles.
+    m.js(H + """const w = main(), t = w.gBrowser.addTrustedTab(args[0] + "/long-title", {userContextId: 1, inBackground: true});
+      await wait(2500); w.gBrowser.pinTab(t); return 1;""", m.pages)
+    r = ext_page(m, settings, """let items; for (let i = 0; i < 100; i++) { items = await page.browser.storage.sync.get(null); if (JSON.stringify(items).includes("/long-title")) break; await wait(200); }
+      return {written: JSON.stringify(items).includes("/long-title"), state: doc.getElementById("sync-state").textContent};""")
+    check("a title cut just where a character is goes into storage.sync like any other", r["written"] and "Stopped" not in r["state"], str(r))
+    m.js(H + """for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (t.pinned && url(t).includes("/long-title")) w.gBrowser.unpinTab(t);
+      await wait(2500); await removeWhere((w, t) => url(t).includes("/long-title")); return 1;""")
+
     # An essential added on another machine: in every window, unloaded, in the container called that here.
     from_elsewhere({f"1/{sid}.77": [["e", "smoke-synced", now, "https://example.org/?smoke-synced", "From elsewhere"]]})
     r = until(m, """const got = wins().map(w => w.gBrowser.tabs.filter(t => t.pinned && ek(w, t) === "smoke-synced").map(t => [t.userContextId, !!t.linkedPanel && !t.selected]));
@@ -1562,6 +1571,8 @@ def alone_sync_hide(m):
       return {essentials: s.essentials.filter(e => e.cookieStoreId === args[0]).map(e => e.key).sort(), saved: Object.keys(s.syncedTabs).filter(k => s.syncedTabs[k].cookieStoreId === args[0]).sort()};""" % EXT_ID, f"firefox-container-{space}")
     click_tick = """const line = [...doc.querySelectorAll("#spaces-here label")].find(l => l.textContent.includes(args[0]));
       line.querySelector("input").click(); await wait(300);"""
+    tab_order = """const n = args[0]; return main().gBrowser.tabs.filter(t => !t.pinned && t.userContextId === n).map(t => key(main(), t));"""
+    order_before = m.js(H + tab_order, space)
     # One page in it holds unsaved input: that one must stay, and be where you can reach it.
     unsaved = m.js(H + """const w = main(), t = w.gBrowser.addTrustedTab(args[0] + "/unsaved", {userContextId: args[1], inBackground: true});
       await wait(4000); return key(w, t);""", m.pages, space)
@@ -1601,6 +1612,15 @@ def alone_sync_hide(m):
       return {active, got};""")
     check("a rule pointing at a hidden space opens the tab in the space you are in", r["got"] and space not in r["got"] and r["active"] in r["got"], str(r))
     extension_message(m, {"type": "settings:rules", "rules": []})
+    # A page you open in it from Firefox's own menu: the record does not know it, so nothing could bring it back.
+    other = next(n for n in (1, 2, 3) if n != space)
+    m.js(H + """main().gBrowser.addTrustedTab(args[0] + "/ticking", {userContextId: args[1], inBackground: true}); await wait(3000); return 1;""", m.pages, space)
+    ext_page(m, settings, click_tick + "return 1;", f"Space {other}")
+    r = until(m, """const n = args[1], left = wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n).map(t => t.label));
+      return {ok: !left.length, left, mine: main().gBrowser.tabs.filter(t => url(t).includes("/ticking")).length};""", other)
+    check("a page you opened in a hidden container yourself stays when more is hidden", r["ok"] and r["mine"] == 1, str(r))
+    ext_page(m, settings, click_tick + "return 1;", f"Space {other}")
+    m.js(H + """await removeWhere((w, t) => url(t).includes("/ticking")); return 1;""")
     # It stays hidden after a restart, also where the session would bring something of it back.
     if m.can_restart:
         # (The test's own pages are closed first: restored unloaded, they could not be scripted.)
@@ -1626,6 +1646,36 @@ def alone_sync_hide(m):
       const got = wins().map(w => keys.filter(k => w.gBrowser.tabs.some(t => key(w, t) === JSON.stringify(k))).length);
       return {ok: got.every(x => x === keys.length), got, want: keys.length};""", EXT_ID, space)
     check("shown again, its tabs are back in every window", r["ok"] and r["want"] > 0, str(r))
+    order_after = m.js(H + tab_order, space)
+    check("shown again, its tabs are in the order they were", order_after == order_before and order_before, f"{order_before}, {order_after}")
+    # Declared for this machine, by name, in its managed storage file. Firefox reads that file once
+    # each time Tidier starts, so Tidier is started again; which is also what an update does.
+    def start_tidier_again():
+        m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
+          await (await AddonManager.getAddonByID(args[0])).reload(); await wait(9000); return 1;""", EXT_ID)
+    with open(m.tidier_managed) as f:
+        managed = json.load(f)
+    as_found = json.dumps(managed)
+    managed["data"]["hiddenSpaces"] = [f"Space {other}"]
+    with open(m.tidier_managed, "w") as f:
+        json.dump(managed, f)
+    start_tidier_again()
+    r = until(m, """const n = args[1], left = wins().flatMap(w => w.gBrowser.tabs.filter(t => t.userContextId === n).map(t => t.label));
+      return {ok: !left.length, left};""", other)
+    check("a space declared hidden for this machine by name leaves every window", r["ok"], str(r))
+    r = ext_page(m, settings, "for (let i = 0; i < 50 && !/setup/.test(doc.getElementById('spaces-here').textContent); i++) await wait(100); return doc.getElementById('spaces-here').textContent;")
+    check("the settings page says this machine's setup hides it", f"Space {other}: hidden by this machine's setup" in r, r)
+    rename = "await page.browser.contextualIdentities.update(args[0], {name: args[1]}); await wait(1000); return 1;"
+    ext_page(m, settings, rename, f"firefox-container-{other}", "Renamed here")
+    r = sidebar_page(m, "await wait(500); return spaces();")
+    check("renamed, it stays hidden: the name was all that said so", f"firefox-container-{other}" not in [x["id"] for x in r], str(r))
+    ext_page(m, settings, rename, f"firefox-container-{other}", f"Space {other}")
+    with open(m.tidier_managed, "w") as f:
+        f.write(as_found)
+    start_tidier_again()
+    ext_page(m, settings, "for (let i = 0; i < 50 && !doc.querySelector('#spaces-here label input:not(:checked)'); i++) await wait(100);" + click_tick + "return 1;", f"Space {other}")
+    r = until(m, """const n = args[1], left = main().gBrowser.tabs.filter(t => t.userContextId === n).length; return {ok: left > 0, left};""", other)
+    check("the declaration taken away, it can be shown again on the settings page", r["ok"], str(r))
     # With sync on and nothing happening: nothing at all, and nothing written.
     ext_page(m, settings, """await wait(7000); page.__smokeWrites = 0; page.browser.storage.onChanged.addListener(() => { page.__smokeWrites++; }); return 1;""")
     idle = extension_message(m, {"type": "idle", "ms": 12000})

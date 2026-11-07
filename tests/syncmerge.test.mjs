@@ -563,3 +563,52 @@ test("each machine's first round is a merge: two machines with their own things 
   assert.deepEqual(living(a.doc).essentials, ["fromA", "fromB", "same1"]);
   assert.deepEqual(living(b.doc).essentials, ["fromA", "fromB", "same1"]);
 });
+
+test("an order that was not there to see last time is no change you made, and one that is new is", () => {
+  let n = NOW;
+  const stamp = () => ++n;
+  const arranged = doc({ order: { "s:f": { list: ["c", "a", "b"], at: 100 } } });
+  const hereNow = { ...emptySyncDoc(), order: { "s:f": ["a", "b", "c"] } };
+  // Not among what was seen (the space was hidden, or no window was open): a window filled in any order.
+  const seenWithout = syncSeen(emptySyncDoc());
+  assert.deepEqual(noteLocalChanges(arranged, hereNow, seenWithout, stamp).order["s:f"], { list: ["c", "a", "b"], at: 100 });
+  // Seen, and different now: you arranged it.
+  const seenWith = syncSeen({ ...emptySyncDoc(), order: { "s:f": ["c", "a", "b"] } });
+  const moved = noteLocalChanges(arranged, hereNow, seenWith, stamp).order["s:f"];
+  assert.deepEqual(moved.list, ["a", "b", "c"]);
+  assert.ok(moved.at > 100);
+  // No order for it anywhere yet: this one is the first.
+  assert.deepEqual(noteLocalChanges(emptySyncDoc(), hereNow, seenWithout, stamp).order["s:f"].list, ["a", "b", "c"]);
+});
+
+test("half a character in a title, or in anything else, does not reach Firefox", () => {
+  const half = "\ud83d";
+  const { items } = syncItems(doc({
+    essentials: { x: e("https://x/", 5, { title: `title ${half}`, name: `name ${half}` }) },
+    folders: { f: folder(`folder ${half}`, 5), g: { gone: 1, at: 5, space: "s1", name: `gone ${half}` } },
+    saved: { s: tab("https://s/", "f", 5, { title: `saved ${half}` }) },
+    spaces: { s1: { name: `space ${half}`, color: "blue", icon: "circle", at: 5 } },
+    rules: { [`r:rule ${half}`]: { space: "s1", at: 5 } },
+  }));
+  const text = JSON.stringify(items);
+  assert.ok(!/\\ud[89a-f][0-9a-f]{2}/i.test(text), text);
+  // A whole character stays what it is.
+  const whole = syncItems(doc({ essentials: { x: e("https://x/", 5, { title: "a 😀 b" }) } })).items;
+  assert.equal(docFromItems(whole).essentials.x.title, "a 😀 b");
+});
+
+test("what other machines hold is taken for what it can be: no inherited names, and text as text", () => {
+  const got = docFromItems({
+    "1/s1.0": [
+      ["e", "constructor", 5, "https://evil.example/"], ["t", "toString", 5, "https://evil.example/", null, "f"], ["f", "hasOwnProperty", 5, "F"],
+      ["e", "ok", 5, "https://ok.example/", 12, { a: 1 }],
+    ],
+    "1/m.0": [["s", "constructor", 5, "Space"], ["s", "s1", 5, "Space", 7, ["x"]]],
+  });
+  assert.deepEqual(Object.keys(got.essentials), ["ok"]);
+  assert.deepEqual(got.essentials.ok, { at: 5, url: "https://ok.example/", space: "s1" }, "a title or a name that is no text is left out");
+  assert.deepEqual(Object.keys(got.saved), []);
+  assert.deepEqual(Object.keys(got.folders), []);
+  assert.deepEqual(Object.keys(got.spaces), ["s1"]);
+  assert.deepEqual(got.spaces.s1, { at: 5, name: "Space" });
+});

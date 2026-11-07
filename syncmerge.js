@@ -233,6 +233,10 @@ function noteLocalChanges(doc, here, seen, stamp, isHere = () => true) {
   for (const [scope, list] of Object.entries(here.order)) {
     const sig = JSON.stringify(list), old = syncOwn(out.order, scope);
     if (!seen) { if (!old) out.order[scope] = { list, at: 1 }; continue; }
+    // An order that was not here to see last time (a folder's tabs while its space was hidden
+    // or no window was open) is how a window happened to be filled, not what you arranged: it
+    // must not replace what is arranged on every machine. Applying puts it right.
+    if (syncOwn(seen.order, scope) === undefined && old) continue;
     if (syncOwn(seen.order, scope) === sig || (old && JSON.stringify(old.list) === sig)) continue;
     out.order[scope] = { list, at: stamp() };
   }
@@ -262,14 +266,19 @@ const SYNC_ROWS = {
 };
 const SYNC_KIND_OF = Object.fromEntries(Object.entries(SYNC_ROWS).map(([kind, [letter]]) => [letter, kind]));
 
+// Firefox refuses a whole write that has half a character in it ("An unexpected error
+// occurred", seen in a real Firefox), and one title must not stop everything. A page can
+// make such a title, and cutting a title can too (syncClip in sync.js).
+const syncText = v => (typeof v === "string" ? v.toWellFormed() : v);
+
 function trimRow(row) {
   while (row.at(-1) === undefined || row.at(-1) === null) row.pop();
   return row;
 }
 function syncRow(kind, id, item) {
   const [letter, fields] = SYNC_ROWS[kind];
-  if (item.gone) return trimRow([letter.toUpperCase(), id, syncStamp(item), item.to ?? null, kind === "folders" ? item.name : null]);
-  return trimRow([letter, id, syncStamp(item), ...fields.map(f => item[f] ?? null)]);
+  if (item.gone) return trimRow([letter.toUpperCase(), syncText(id), syncStamp(item), item.to ?? null, kind === "folders" ? syncText(item.name) : null]);
+  return trimRow([letter, syncText(id), syncStamp(item), ...fields.map(f => syncText(item[f] ?? null))]);
 }
 
 function utf8Size(text) {
@@ -328,7 +337,8 @@ function syncItems(doc) {
 
 // Back from rows: what cannot be read is left out, and what is left out is not deleted.
 function addSyncRow(doc, group, row) {
-  if (!Array.isArray(row) || typeof row[1] !== "string" || row[1] === "__proto__" || !Number.isFinite(row[2])) return;
+  // (A key is used on plain objects later: "constructor" there would be something else.)
+  if (!Array.isArray(row) || typeof row[1] !== "string" || row[1] in Object.prototype || !Number.isFinite(row[2])) return;
   const [letter, id, at] = row;
   if (letter === "o") {
     if (Array.isArray(row[3])) doc.order[id] = newerVersion(syncOwn(doc.order, id), { list: row[3], at });
@@ -345,7 +355,7 @@ function addSyncRow(doc, group, row) {
     if (kind === "folders" && typeof row[4] === "string") item.name = row[4];
   } else {
     item = { at };
-    SYNC_ROWS[kind][1].forEach((f, i) => { if (row[3 + i] !== undefined && row[3 + i] !== null) item[f] = row[3 + i]; });
+    SYNC_ROWS[kind][1].forEach((f, i) => { if (typeof row[3 + i] === "string") item[f] = row[3 + i]; });
     if (kind !== "spaces" && kind !== "rules") item.space = group;
     const web = /^https?:/i.test(item.url || "");
     const whole = { spaces: typeof item.name === "string", rules: typeof item.space === "string", folders: typeof item.name === "string",

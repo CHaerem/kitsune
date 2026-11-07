@@ -153,15 +153,18 @@ export class FakeFirefox {
       get: async k => { if (ff.syncRefused) throw new Error(ff.syncRefused); const all = JSON.parse(JSON.stringify(ff.syncArea)); return k === null ? all : Object.fromEntries(Object.entries(all).filter(([x]) => [k].flat().includes(x))); },
       set: async o => {
         if (ff.syncRefused) throw new Error(ff.syncRefused);
+        // Half a character (which JSON.stringify writes as an escape) makes a real Firefox refuse all of it.
+        if (/\\ud[89a-f][0-9a-f]{2}/i.test(JSON.stringify(o))) throw new Error("An unexpected error occurred");
         const next = { ...ff.syncArea, ...JSON.parse(JSON.stringify(o)) };
-        for (const [k, v] of Object.entries(o)) if (k.length + JSON.stringify(v).length > 8192) throw new Error(`QuotaExceededError: storage.sync API call exceeded its quota limitations: ${k}`);
-        if (Object.keys(next).length > 512 || JSON.stringify(next).length > 102400) throw new Error("QuotaExceededError: storage.sync API call exceeded its quota limitations");
+        const bytes = ([k, v]) => Buffer.byteLength(k) + Buffer.byteLength(JSON.stringify(v)); // in UTF-8, as in a real Firefox
+        for (const item of Object.entries(o)) if (bytes(item) > 8192) throw new Error(`QuotaExceededError: storage.sync API call exceeded its quota limitations: ${item[0]}`);
+        if (Object.keys(next).length > 512 || Object.entries(next).reduce((n, item) => n + bytes(item), 0) > 102400) throw new Error("QuotaExceededError: storage.sync API call exceeded its quota limitations");
         const changes = changesOf(ff.syncArea, JSON.parse(JSON.stringify(o)));
         ff.syncArea = next; ff.syncWrites = (ff.syncWrites || 0) + 1;
         b.storage.onChanged.fire(changes, "sync");
       },
       remove: async k => { const keys = [k].flat(), changes = {}; for (const x of keys) { if (x in ff.syncArea) changes[x] = { oldValue: ff.syncArea[x] }; delete ff.syncArea[x]; } ff.syncWrites = (ff.syncWrites || 0) + 1; b.storage.onChanged.fire(changes, "sync"); },
-      getBytesInUse: async () => Object.entries(ff.syncArea).reduce((n, [k, v]) => n + k.length + JSON.stringify(v).length, 0),
+      getBytesInUse: async () => Object.entries(ff.syncArea).reduce((n, [k, v]) => n + Buffer.byteLength(k) + Buffer.byteLength(JSON.stringify(v)), 0),
     } };
     b.alarms = { create() {}, onAlarm: ev() };
     b.runtime = { id: "tidier", getPlatformInfo: async () => ({ os: "mac" }), getManifest: () => ({ version: "1.6" }), getURL: p => "moz-extension://tidier/" + p, onMessage: ev(), onStartup: ev(), onInstalled: ev(), onConnect: ev(),
@@ -178,6 +181,8 @@ export class FakeFirefox {
       } };
     b.contextualIdentities.update = async (id, changes) => {
       if (!ff.containers.has(id)) throw new Error(`Invalid contextual identity: ${id}`);
+      if (ff.badColors?.includes(changes.color)) throw new Error(`Invalid color name ${changes.color}`);
+      ff.identityUpdates = (ff.identityUpdates || 0) + 1;
       (ff.identities ||= {})[id] = { ...identity(id), ...changes };
       b.contextualIdentities.onUpdated.fire({ contextualIdentity: identity(id) });
       return identity(id);

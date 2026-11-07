@@ -24,6 +24,7 @@
 // anywhere and nothing is wrong.
 
 const SYNC_DELAY_MS = 5000;
+const SYNC_COPY_WAIT_MS = 10000; // for the helper that writes a copy to a file; the queue waits meanwhile
 const SYNC_BIG_REMOVAL = 5; // removed from elsewhere in one go: a copy is taken first
 const SYNC_WATCHED = ["essentials", "syncedTabs", "rules", "spaceOrder"]; // what a round reads from storage.local
 let syncIsOn = false;
@@ -43,12 +44,22 @@ function syncSoon() {
   }, SYNC_DELAY_MS);
 }
 
+// What a round looks at in the record. A title or an icon is not shared, and a page whose
+// title ticks writes the record every half minute: that must not start a round each time.
+const SYNC_SHARED_PART = {
+  essentials: list => (list || []).map(e => [e.key, e.url, e.name, e.cookieStoreId]),
+  syncedTabs: all => Object.entries(all || {}).filter(([, e]) => e.group || e.saved).map(([key, e]) => [key, e.name, e.rank, e.parentKey, e.saved?.url, e.cookieStoreId, e.live]),
+};
+const syncSharedChanged = (key, change) => !SYNC_SHARED_PART[key] || JSON.stringify(SYNC_SHARED_PART[key](change.oldValue)) !== JSON.stringify(SYNC_SHARED_PART[key](change.newValue));
+
 browser.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && SYNC_WATCHED.some(k => k in changes)) syncSoon();
+  if (area === "local" && SYNC_WATCHED.some(k => k in changes && syncSharedChanged(k, changes[k]))) syncSoon();
   if (area === "sync" && Object.entries(changes).some(([k, c]) => syncWrote.get(k) !== JSON.stringify(c.newValue))) syncSoon();
 });
 // A tab moved within a folder changes no record: its order is the window's (syncSnapshot).
 browser.tabs.onMoved.addListener(syncSoon);
+// A window after none, or a space shown again: filled by the record, and a round puts its order right.
+browser.windows.onCreated.addListener(syncSoon);
 for (const event of ["onCreated", "onUpdated", "onRemoved"]) browser.contextualIdentities[event].addListener(syncSoon);
 
 async function syncStateNow() {
@@ -80,10 +91,11 @@ async function syncMatchSpaces(st, remote) {
   // space removed. A refusal stops the round, which changes nothing.)
   const containers = (await browser.contextualIdentities.query({})).map(c => ({ id: c.cookieStoreId, name: c.name }));
   const exists = new Set(containers.map(c => c.id));
+  const dropped = new Set();
   // A container you removed here: the space stays for the other machines (their logins are
   // in it), and stays away from this one until a container with its name is made here.
   for (const [sid, id] of Object.entries(st.map)) {
-    if (!exists.has(id)) { delete st.map[sid]; st.away[sid] = 1; }
+    if (!exists.has(id)) { delete st.map[sid]; st.away[sid] = 1; dropped.add(sid); }
   }
   const mapped = new Set(Object.values(st.map));
   const known = { ...st.doc.spaces, ...remote.spaces };
@@ -96,10 +108,12 @@ async function syncMatchSpaces(st, remote) {
   for (const c of free) {
     if (!mapped.has(c.id)) st.map[syncSpaceId(c.name, sid => st.map[sid] || known[sid])] = c.id;
   }
+  return dropped;
 }
 
 // --- What is here --------------------------------------------------------------------
-const syncClip = title => (typeof title === "string" ? title.slice(0, SYNC_TITLE_CHARS) : undefined);
+// (Not through the middle of a character: half of one would show, see syncText.)
+const syncClip = title => (typeof title === "string" ? title.slice(0, SYNC_TITLE_CHARS).replace(/[\ud800-\udbff]$/, "") : undefined);
 const syncDefined = item => Object.fromEntries(Object.entries(item).filter(([, v]) => v !== undefined && v !== null));
 
 async function syncSnapshot(st) {
@@ -181,17 +195,20 @@ function syncLastKey(map, key) {
 // yours, as an ordinary tab. Nothing that is open is closed by another machine.
 async function syncRetireEssential(entry) {
   const copies = await copiesOf(entry.key);
-  const open = copies.find(isLoadedCopy) || copies.find(t => t.active);
+  // (Normally one is loaded, but Firefox can restore a page in several windows at once.)
+  const loaded = copies.filter(isLoadedCopy);
+  const open = loaded.length ? loaded : copies.filter(t => t.active).slice(0, 1);
   copies.forEach(t => busy.add(t.id));
-  const closing = copies.filter(t => t !== open).map(t => t.id);
+  const closing = copies.filter(t => !open.includes(t)).map(t => t.id);
   if (closing.length) await browser.tabs.remove(closing).catch(noteError);
   await forgetClosedPlaceholders("essential", [entry.key]);
-  if (!open) return;
-  keyByTab.delete(open.id);
-  await browser.sessions.removeTabValue(open.id, TAB_KEY).catch(() => {});
-  await browser.tabs.update(open.id, { pinned: false, ...(isGhostUrl(open.url) ? { url: entry.url } : {}) }).catch(() => {});
-  setTimeout(() => busy.delete(open.id), SETTLE_MS);
-  registerSoon(open.id); // an ordinary tab now, in every window
+  for (const t of open) {
+    keyByTab.delete(t.id);
+    await browser.sessions.removeTabValue(t.id, TAB_KEY).catch(() => {});
+    await browser.tabs.update(t.id, { pinned: false, ...(isGhostUrl(t.url) ? { url: entry.url } : {}) }).catch(() => {});
+    setTimeout(() => busy.delete(t.id), SETTLE_MS);
+    registerSoon(t.id); // an ordinary tab now, in every window
+  }
 }
 
 // The same essential under the key both machines chose: it keeps its tabs, loaded or not.
@@ -203,7 +220,8 @@ async function syncRekeyEssential(oldKey, newKey) {
 }
 
 async function syncApplyEssentials(doc, here, idOf) {
-  let list = [...await getList()], changed = false;
+  const before = await getList();
+  let list = [...before], changed = false;
   const retired = [], rekeyed = [];
   for (const [key, item] of Object.entries(doc.essentials)) {
     const entry = list.find(e => e.key === key), isHere = syncOwn(here.essentials, key);
@@ -228,6 +246,12 @@ async function syncApplyEssentials(doc, here, idOf) {
       if (!item.name) delete list.find(e => e.key === key).name;
       changed = true;
     }
+  }
+  // The icon stays with what is the same essential: icons are not shared, and one that came
+  // from a page behind a sign-in cannot be found again until that page has been opened.
+  for (const [oldKey, newKey] of rekeyed) {
+    const now = list.find(e => e.key === newKey);
+    if (now && !now.icon) now.icon = before.find(e => e.key === oldKey)?.icon;
   }
   if (changed) setList(list);
   for (const [oldKey, newKey] of rekeyed) await syncRekeyEssential(oldKey, newKey);
@@ -292,7 +316,7 @@ async function syncApplyRecord(doc, here, idOf) {
     } else if (!isHere || syncSig("saved", item) !== syncSig("saved", isHere)) {
       const reps = repsOf(key, tabs);
       // The address a saved tab goes back to; a page you have open stays on what it shows.
-      e.saved = { url: item.url, title: item.title ?? e.saved?.title };
+      e.saved = { ...(e.saved?.url === item.url ? e.saved : {}), url: item.url, title: item.title ?? e.saved?.title };
       if (!syncIsOpen(reps)) Object.assign(e, { url: item.url, title: item.title ?? e.title });
       e.parentKey = item.folder;
       if (item.name) e.name = item.name; else delete e.name;
@@ -306,7 +330,8 @@ async function syncApplyRecord(doc, here, idOf) {
   // as when you delete one here.
   for (const [key, item] of Object.entries(doc.saved)) {
     if (!item.gone || !syncOwn(here.saved, key) || !all[key]) continue;
-    if (syncIsOpen(repsOf(key, tabs))) { all[key].parentKey = null; noteSaved(all, [key]); saveSynced(all); }
+    // (Looked at now: you may have opened one while the others were being handled.)
+    if (syncIsOpen(repsOf(key, await browser.tabs.query({})))) { all[key].parentKey = null; noteSaved(all, [key]); saveSynced(all); }
     else await closeEverywhere(key, { dismiss: false });
     changed = true;
   }
@@ -420,12 +445,16 @@ async function syncApplySpaces(doc, here, st) {
       continue;
     }
     const h = syncOwn(here.spaces, sid);
-    if (h && syncSig("spaces", h) !== syncSig("spaces", s)) {
-      await browser.contextualIdentities.update(id, { name: s.name, ...(s.color ? { color: s.color } : {}), ...(s.icon ? { icon: s.icon } : {}) }).catch(noteError);
-      changed = true;
-    }
+    if (!h) continue;
+    const changes = { name: s.name, ...(s.color ? { color: s.color } : {}), ...(s.icon ? { icon: s.icon } : {}) };
+    if (Object.keys(changes).every(k => h[k] === changes[k])) continue;
+    // Firefox tells of every update, which starts a round: what it refuses is not asked for
+    // again in a way that succeeds without changing anything, or the rounds would never end.
+    const nameOnly = () => (h.name === s.name ? null : browser.contextualIdentities.update(id, { name: s.name }));
+    await browser.contextualIdentities.update(id, changes).catch(nameOnly).catch(noteError);
+    changed = true;
   }
-  if (changed) await readHiddenSpaces(); // a space that came just now may be declared hidden here
+  if (changed) await rereadHiddenSpaces(); // a space that came just now, or was renamed, may be declared hidden here
   return changed;
 }
 
@@ -448,7 +477,7 @@ async function syncApply(doc, here, st) {
 
 // --- A round --------------------------------------------------------------------------
 async function syncKeepCopy() {
-  const res = await makeCopy().catch(() => null);
+  const res = await Promise.race([makeCopy().catch(() => null), sleep(SYNC_COPY_WAIT_MS).then(() => null)]); // a helper that hangs must not hold every tab up
   if (!res?.saved) await browser.storage.local.set({ copyBeforeSync: await theCopy() }); // no helper here: at least inside Firefox's storage
 }
 
@@ -473,13 +502,19 @@ async function syncRound() {
     st.clock = Math.max(st.clock, syncHighest(remote));
     const stamp = () => (st.clock = Math.max(Date.now(), st.clock + 1));
     if (!st.seen) await syncKeepCopy(); // the first merge: there is a way back from it
-    await syncMatchSpaces(st, remote);
+    const dropped = await syncMatchSpaces(st, remote);
     const here = await syncSnapshot(st);
-    const isHere = sid => sid === SYNC_NO_SPACE || !!st.map[sid];
+    // A space whose container went this very round (even if one of its name is here again) says
+    // nothing about what is in it: essentials.js has dropped its essentials, and you deleted nothing.
+    const isHere = sid => sid === SYNC_NO_SPACE || (!!st.map[sid] && !dropped.has(sid));
     const merged = mergeSynced(noteLocalChanges(st.doc, here, st.seen, stamp, isHere), remote);
     st.clock = Math.max(st.clock, syncHighest(merged));
     st.seen = syncSeen(await syncApply(merged, here, st));
     st.doc = merged;
+    // What was applied first, and only then that it was seen: the record is written a moment
+    // after a change, and a state that is ahead of it (a crash, a quit, an update just now) would
+    // at the next start read as you having deleted all that just came, on every machine.
+    await flushWrites();
     const text = JSON.stringify(st);
     if (text !== syncStateWritten) { await browser.storage.local.set({ syncState: st }); syncStateWritten = text; }
     await syncWrite(merged, items);
@@ -500,6 +535,7 @@ async function syncTurn(on) {
   clearTimeout(syncTimer);
   syncTimer = null;
   syncIsOn = !!on;
+  if (!syncIsOn) { syncProblem = null; setNotice("sync", null); } // what is off has no problem to show
   await browser.storage.local.set({ syncOn: syncIsOn });
   const st = await syncStateNow();
   st.doc = emptySyncDoc();

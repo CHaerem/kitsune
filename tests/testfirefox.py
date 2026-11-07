@@ -73,6 +73,7 @@ TEST_PREFS = {
 PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
+    "/long-title": "<title>" + "x" * 59 + "😀 and more</title>a character just where sync cuts a title",
 }
 
 
@@ -227,6 +228,7 @@ class TestFirefox:
             self.pages = serve_pages()
         self.m.pages = f"http://127.0.0.1:{self.pages.server_address[1]}"
         self.m.update_xpi = self._newer_xpi
+        self.m.tidier_managed = f"{self.dir}/managed/ManagedStorage/{EXT_ID}.json"
         self.m.cmd("WebDriver:SetWindowRect", {"width": 1600, "height": 1000})
 
     def _setup(self):
