@@ -117,10 +117,11 @@ body {
 .cursor { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: -2px; }
 
 /* A small window that is open (sidebar/littlewindow.js): one quiet row above the bar. */
-#little { flex: none; padding-bottom: 4px; }
+#little { flex: none; padding-bottom: 4px; max-height: 30vh; overflow-y: auto; container-type: inline-size; }
 #little:empty { display: none; }
 .little .keep {
   flex: none; max-width: 60%; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px;
   height: 22px; padding: 0 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .little .keep:hover { background: var(--hover); color: var(--text); }
+@container (max-width: 240px) { .little .where { display: none; } }

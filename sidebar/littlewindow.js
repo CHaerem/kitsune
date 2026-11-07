@@ -12,7 +12,11 @@ function littleRow(item) {
   const row = el("div", "row little");
   row.title = item.title;
   row.onclick = () => send({ type: "little:show", tabId: item.id });
-  const keepIt = el("button", "keep", item.space ? `Keep in ${item.space}` : "Keep");
+  const keepIt = el("button", "keep", "Keep");
+  if (item.space) {
+    keepIt.append(el("span", "where", ` in ${item.space}`)); // not in a narrow sidebar (sidebar.css)
+    keepIt.title = `Keep in ${item.space}`;
+  }
   keepIt.onclick = e => { e.stopPropagation(); send({ type: "little:keep", tabId: item.id }); };
   const close = el("button", "close", "×");
   close.title = "Close";

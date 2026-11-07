@@ -73,7 +73,7 @@ TEST_PREFS = {
 PAGES = {
     "/unsaved": "<title>Unsaved</title><script>onbeforeunload = e => { e.preventDefault(); return 'unsaved'; };</script>unsaved input",
     "/ticking": "<title>0</title><script>let n = 0; setInterval(() => { document.title = String(++n); }, 200);</script>a title that ticks",
-    "/links": "<title>Links</title><a id='a' href='/links?little-from-a-link' style='font-size:40px'>a link</a>",
+    "/links": "<title>Links</title><a id='a' href='/links?little-from-a-link' style='font-size:40px'>a link</a><p><a id='new' target='_blank' href='/links?little-new-tab'>a new tab</a><p><a id='sign-in' href='#' onclick=\"window.open('/links?little-sign-in', 'sign-in', 'width=500,height=600'); return false\">sign in</a>",
 }
 
 

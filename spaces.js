@@ -91,6 +91,8 @@ async function switchSpace(windowId, space) {
 async function switchToNth(n) {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
+  // A small window or a sign-in's has no spaces: switching would add a tab that nothing shows.
+  if ((await browser.windows.get(tab.windowId).catch(() => null))?.type !== "normal") return;
   const tabs = await browser.tabs.query({ windowId: tab.windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
   const space = (await spaceList(used))[n];
@@ -115,7 +117,7 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   closedIn.delete(windowId);
   serial(async () => {
     const tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab || tab.cookieStoreId === NO_CONTAINER) { viewSoon(windowId); return; }
+    if (!tab || tab.cookieStoreId === NO_CONTAINER || littleHolds(tab)) { viewSoon(windowId); return; } // littlewindow.js
     if (tidierAlone && stay && stay !== tab.cookieStoreId) {
       const last = await lastUsedIn(windowId, stay);
       if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});

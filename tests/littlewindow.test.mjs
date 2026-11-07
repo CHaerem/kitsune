@@ -38,6 +38,7 @@ function withWindows(ff, x) {
       tab.windowId = w.id; w.order.push(tab.id);
       b.tabs.onAttached.fire(tab.id, { newWindowId: w.id, newPosition: 0 });
       closeIfEmpty(from);
+      if (ff.wasOn?.has(tab.id) && ff.tabs.has(ff.wasOn.get(tab.id))) ff.select(ff.wasOn.get(tab.id));
     } else {
       tab = ff.addTab(w.id, { url: p.url, title: p.url, cookieStoreId: p.cookieStoreId ?? NONE, active: true });
       b.tabs.onCreated.fire(ff.snap(tab));
@@ -52,14 +53,23 @@ function withWindows(ff, x) {
     if (p.focused) { ff.focused = id; b.windows.onFocusChanged.fire(id); }
   };
   const move = b.tabs.move, remove = b.tabs.remove;
-  b.tabs.move = async (id, p) => { const from = ff.tabs.get(id).windowId; const r = await move(id, p); closeIfEmpty(from); return r; };
+  b.tabs.move = async (id, p) => {
+    const from = ff.tabs.get(id).windowId;
+    const r = await move(id, p);
+    if (ff.tabs.get(id).windowId !== from) ff.tabs.get(id).active = false; // a tab that arrives in a window is not selected there
+    closeIfEmpty(from);
+    return r;
+  };
+  b.commands.update ??= async () => {};
   b.tabs.remove = async ids => {
     const from = [ids].flat().map(id => ff.tabs.get(id)?.windowId);
+    // Measured: a link's tab that closes gives the selection back to the tab you were on.
+    for (const id of [ids].flat()) if (ff.tabs.get(id)?.active && ff.tabs.has(ff.wasOn?.get(id))) ff.select(ff.wasOn.get(id));
     await remove(ids);
     from.forEach(closeIfEmpty);
   };
   ff.winValues ??= new Map();
-  b.sessions.setWindowValue = async (id, k, v) => { ff.winValues.set(`${id}/${k}`, v); };
+  b.sessions.setWindowValue = async (id, k, v) => { ff.winValues.set(`${id}/${k}`, v); (ff.winValueLog ??= []).push([id, k, v]); };
   b.sessions.getWindowValue = async (id, k) => ff.winValues.get(`${id}/${k}`);
   b.menus.update = async (id, p) => { (ff.menuUpdates ??= []).push([id, p]); };
   return x;
@@ -87,12 +97,15 @@ function session(ff) {
   return { w, on, old };
 }
 
-// What a real Firefox does with a link from another app: a new tab on about:blank in
-// the selected tab's container, the first about:blank ended early, then the address.
+// What a real Firefox does with a link from another app: a new tab on about:blank, with no
+// container, or that of another visible tab on the same host (Firefox's guess, which is
+// what `container` plays), selected, the first about:blank ended early, then the address.
 function linkFromOutside(ff, x, windowId, { url = LINK, container = C1, marked = true } = {}) {
-  for (const id of ff.wins.get(windowId).order) ff.tabs.get(id).active = false;
-  const t = ff.addTab(windowId, { url: "about:blank", title: url, cookieStoreId: container, active: true });
+  const on = ff.wins.get(windowId).order.find(id => ff.tabs.get(id).active);
+  const t = ff.addTab(windowId, { url: "about:blank", title: url, cookieStoreId: container });
+  (ff.wasOn ??= new Map()).set(t.id, on);
   x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.select(t.id);
   if (marked) x.b.tabs.onUpdated.fire(t.id, { status: "complete", url: "about:blank" }, ff.snap(t));
   ff.navigate(t.id, url);
   return t;
@@ -446,23 +459,248 @@ test("a link's menu: the small window opens in the page's space, or the rule's",
   x.kill();
 });
 
-test("Keep is on the page's menu only in a small window", async () => {
+test("Keep is on the page's menu only in a small window, and on a link there too", async () => {
   const ff = new FakeFirefox();
   const { w, on } = session(ff);
   const x = await start(ff);
   const t = linkFromOutside(ff, x, w.id);
   await wait(300);
-  const shown = async tab => {
+  const shown = async (tab, contexts = ["page"]) => {
     ff.menuUpdates = [];
-    for (const { f } of x.b.menus.onShown.ls) await f({ contexts: ["page"] }, ff.snap(tab));
-    return ff.menuUpdates.at(-1)[1];
+    for (const { f } of x.b.menus.onShown.ls) await f({ contexts }, ff.snap(tab));
+    return ff.menuUpdates.filter(([id]) => id === "tidier-keep").at(-1)?.[1];
   };
-  assert.equal((await shown(on)).visible, false);
+  assert.equal(await shown(on), undefined, "in a normal window it is left hidden");
   const inSmall = await shown(ff.tabs.get(t.id));
   assert.equal(inSmall.visible, true);
   assert.equal(inSmall.title, `Keep in ${C1}`);
+  assert.equal((await shown(ff.tabs.get(t.id), ["link"])).visible, true);
+  // Hidden again when the menu closes: the next one, in a normal window, must not start with it.
+  ff.menuUpdates = [];
+  x.b.menus.onHidden.fire();
+  assert.equal(JSON.stringify(ff.menuUpdates), JSON.stringify([["tidier-keep", { visible: false }]]));
+  ff.menuUpdates = [];
+  x.b.menus.onHidden.fire();
+  assert.equal(ff.menuUpdates.length, 0, "and nothing to do after any other menu");
   x.b.menus.onClicked.fire({ menuItemId: "tidier-keep" }, ff.snap(ff.tabs.get(t.id)));
   await wait(800);
   assert.equal(ff.tabs.get(t.id).windowId, w.id);
+  x.kill();
+});
+
+test("Firefox's guess puts a link in another space: your window stays, and it opens in your space", async () => {
+  const ff = new FakeFirefox();
+  const { w, on } = session(ff);
+  ff.addTab(w.id, { url: "https://link.example/essential", title: "Essential", cookieStoreId: C2, pinned: true });
+  const x = await start(ff);
+  ff.winValueLog = [];
+  const t = linkFromOutside(ff, x, w.id, { container: C2 });
+  await wait(300);
+  const [small] = popups(ff);
+  assert.equal(ff.tabs.get(tabOf(small)).cookieStoreId, C1, "in the space you are in");
+  assert.equal(ff.tabs.get(tabOf(small)).url, LINK);
+  assert.ok(!ff.tabs.has(t.id), "the first tab goes");
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C1);
+  assert.ok(!ff.winValueLog.some(([id, k, v]) => id === w.id && k === "space" && v === C2), "not even for a moment");
+  assert.ok(!ff.log.some(([what, ids]) => what === "hide" && [ids].flat().includes(on.id)), "your tabs stay shown");
+  assert.equal(x.js(`newBlanks.size`), 0);
+  x.kill();
+});
+
+test("a new tab in another space that is no link still takes you there, once it has an address", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const t = linkFromOutside(ff, x, w.id, { container: C2, marked: false });
+  await wait(300);
+  assert.deepEqual(popups(ff), []);
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C2);
+  assert.ok(ff.tabs.get(t.id).active);
+  assert.equal(x.js(`newBlanks.size`), 0);
+  // And one that stops on a page that is no web page.
+  const u = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(u));
+  ff.select(u.id);
+  await wait(100);
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C2, "held for now");
+  ff.navigate(u.id, "about:newtab");
+  await wait(300);
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C1);
+  assert.equal(x.js(`newBlanks.size`), 0);
+  x.kill();
+});
+
+test("off in the settings, a link Firefox guessed into another space goes there as any tab does", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  ff.store.littleWindow = false;
+  const x = await start(ff);
+  const t = linkFromOutside(ff, x, w.id, { container: C2 });
+  await wait(300);
+  assert.deepEqual(popups(ff), []);
+  assert.ok(ff.wins.get(w.id).order.includes(t.id));
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C2);
+  x.kill();
+});
+
+test("asked at the request, before Firefox's mark (isolation.js), it can still become a link", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const t = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  assert.equal(x.ctx.littleTakes(t.id, LINK), false);
+  x.b.tabs.onUpdated.fire(t.id, { url: "about:blank" }, ff.snap(t));
+  ff.navigate(t.id, LINK);
+  await wait(300);
+  assert.equal(tabOf(popups(ff)[0]), t.id);
+  x.kill();
+});
+
+test("a link's first tab, closed by Tidier, is not what ⌘⇧T brings back", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  ff.recentlyClosed = [{ tab: { url: "https://yours.example/", sessionId: "yours", windowId: w.id } }];
+  linkFromOutside(ff, x, w.id, { container: NONE });
+  await wait(300);
+  ff.recentlyClosed.unshift({ tab: { url: LINK, sessionId: "first", windowId: w.id } }); // a moment after it closed
+  x.b.sessions.onChanged.fire();
+  await wait(100);
+  assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["yours"]);
+  x.kill();
+});
+
+test("an address that changes right away is one link: one small window, and a rule looks at the first", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  ff.store.rules = [{ url: "next.example", space: C2 }];
+  const x = await start(ff);
+  const t = linkFromOutside(ff, x, w.id); // both before the queue gets to it
+  ff.navigate(t.id, "https://next.example/");
+  await wait(300);
+  assert.equal(popups(ff).length, 1);
+  assert.equal(tabOf(popups(ff)[0]), t.id);
+  assert.equal(ff.tabs.get(t.id).url, "https://next.example/", "not opened again by the rule");
+  x.kill();
+});
+
+test("a rule's removed space loses no link: it opens in the space you are in", async () => {
+  const ff = new FakeFirefox();
+  const { w, on } = session(ff);
+  ff.store.rules = [{ url: "link.example", space: "firefox-container-9" }];
+  const x = await start(ff);
+  linkFromOutside(ff, x, w.id, { container: NONE });
+  await wait(300);
+  const [small] = popups(ff);
+  assert.equal(ff.tabs.get(tabOf(small)).cookieStoreId, C1);
+  assert.equal(ff.tabs.get(tabOf(small)).url, LINK);
+  // And the menu's small window, for the same link.
+  x.b.menus.onClicked.fire({ menuItemId: "tidier-open-little", linkUrl: LINK }, ff.snap(on));
+  await wait(200);
+  assert.equal(popups(ff).length, 2);
+  assert.equal(ff.tabs.get(tabOf(popups(ff)[1])).cookieStoreId, C1);
+  x.kill();
+});
+
+test("a window that opens as a popup is never taken for a small window", async () => {
+  // Measured: a sign-in's window.open does not carry the mark. Should Firefox change that,
+  // moving it would still be wrong: its page expects to stay in the window it opened.
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const signIn = ff.addWindow({ type: "popup" });
+  const t = linkFromOutside(ff, x, signIn.id);
+  await wait(300);
+  assert.equal(ff.tabs.get(t.id).windowId, signIn.id);
+  assert.equal(popups(ff).length, 1);
+  assert.equal(x.js(`littles.size`), 0);
+  assert.equal(ff.wins.get(w.id).order.length, 2);
+  x.kill();
+});
+
+test("⌃2 in a small window adds no tab to it", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  ff.addTab(w.id, { url: "https://two.example/", title: "Two", cookieStoreId: C2 }, { syncKey: "two", syncRole: "live" });
+  ff.store.syncedTabs.two = { url: "https://two.example/", title: "Two", cookieStoreId: C2, parentKey: null, group: false, added: 1 };
+  const x = await start(ff);
+  const t = linkFromOutside(ff, x, w.id);
+  await wait(300);
+  const [small] = popups(ff);
+  assert.equal(ff.focused, small.id);
+  const made = ff.log.filter(([what]) => what === "create").length;
+  x.b.commands.onCommand.fire("space-2");
+  await wait(300);
+  assert.deepEqual(small.order, [t.id]);
+  assert.equal(ff.log.filter(([what]) => what === "create").length, made);
+  // From your window it works as ever.
+  ff.focused = w.id;
+  x.b.commands.onCommand.fire("space-2");
+  await wait(300);
+  assert.equal(x.js(`activeSpace.get(${w.id})`), C2);
+  x.kill();
+});
+
+test("a closed small window reopened (⌘⇧T, ⌘⇧N) is one again; a sign-in's popup is not", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const back = ff.addWindow({ type: "popup" });
+  ff.addTab(back.id, { url: LINK, title: "Link", cookieStoreId: C1, active: true });
+  ff.winValues.set(`${back.id}/little`, true);
+  const signIn = ff.addWindow({ type: "popup" });
+  ff.addTab(signIn.id, { url: "https://sign.example/", title: "Sign in", cookieStoreId: C1, active: true });
+  x.b.windows.onCreated.fire({ id: back.id, type: "popup" });
+  x.b.windows.onCreated.fire({ id: signIn.id, type: "popup" });
+  await wait(300);
+  assert.equal(x.js(`littles.has(${back.id})`), true);
+  assert.equal(back.titlePreface, `${C1} · `);
+  assert.equal(x.js(`littles.has(${signIn.id})`), false);
+  assert.equal(signIn.titlePreface, undefined);
+  x.js(`serial(() => keepLittle(${tabOf(back)}))`);
+  await wait(800);
+  assert.ok(ff.wins.get(w.id).order.some(id => ff.tabs.get(id).url === LINK));
+  assert.ok(!ff.wins.has(back.id));
+  x.kill();
+});
+
+test("a private window's link goes nowhere else", async () => {
+  const ff = new FakeFirefox();
+  const { on } = session(ff);
+  const x = await start(ff);
+  ff.containers.add("firefox-private"); // the fake would refuse it for the wrong reason
+  const priv = { ...ff.snap(on), incognito: true, cookieStoreId: "firefox-private" };
+  ff.menuUpdates = [];
+  for (const { f } of x.b.menus.onShown.ls) await f({ contexts: ["link"] }, priv);
+  assert.ok(ff.menuUpdates.some(([id, p]) => id === "tidier-open-in" && p.visible === false), "the menu is hidden");
+  assert.equal(x.js(`linkChoices.length`), 0);
+  x.b.menus.onClicked.fire({ menuItemId: "tidier-open-little", linkUrl: LINK }, priv);
+  x.b.menus.onClicked.fire({ menuItemId: `tidier-open-in:${C2}`, linkUrl: LINK }, priv);
+  x.send({ type: "little:peek", url: LINK }, { url: "https://here.example/", tab: priv });
+  await wait(300);
+  assert.deepEqual(popups(ff), []);
+  assert.ok(![...ff.tabs.values()].some(t => t.url === LINK));
+  // A normal window's menu shows it again.
+  ff.menuUpdates = [];
+  for (const { f } of x.b.menus.onShown.ls) await f({ contexts: ["link"] }, ff.snap(on));
+  assert.ok(ff.menuUpdates.some(([id, p]) => id === "tidier-open-in" && p.visible === true));
+  x.kill();
+});
+
+test("nothing is kept for tabs that are gone", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const a = linkFromOutside(ff, x, w.id);
+  await wait(200);
+  const b = linkFromOutside(ff, x, w.id, { marked: false, url: "https://b.example/" });
+  const blank = ff.addTab(w.id, { url: "about:blank", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(blank));
+  assert.equal(x.js(`newBlanks.size`), 1, "one still on about:blank");
+  await x.b.tabs.remove([a.id, b.id, blank.id]);
+  await wait(300);
+  assert.equal(x.js(`newBlanks.size`), 0);
+  assert.equal(x.js(`littles.size`), 0);
   x.kill();
 });
