@@ -1665,7 +1665,7 @@ def bar_open(m, window="main()"):
 
 
 def bar_keys(m, keys, *mods):
-    """Real key events, to the bar's window. The last one may close it, so the release can find no window."""
+    """Real key events, to the bar's window. Any of them may close it, before the rest of them or the release have been sent."""
     for h in m.cmd("WebDriver:GetWindowHandles"):
         m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
         if m.js("return !window.toolbar.visible;"):
@@ -1675,23 +1675,35 @@ def bar_keys(m, keys, *mods):
     for key in keys:
         acts += [{"type": "keyDown", "value": key}, {"type": "keyUp", "value": key}]
     acts += [{"type": "keyUp", "value": k} for k in reversed(mods)]
-    m.cmd("WebDriver:PerformActions", {"actions": [{"type": "key", "id": "kb", "actions": acts}]})
     try:
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "key", "id": "kb", "actions": acts}]})
         m.cmd("WebDriver:ReleaseActions")
-    except RuntimeError:
-        pass
+    except RuntimeError as err:
+        if "no such window" not in str(err):
+            raise
     m.chrome()
+
+
+def to_bar_page(m):
+    """Marionette to the bar's own page, in content. The handles are every tab of every window, and
+    one can be going away meanwhile: a placeholder unloading itself, or a tab closing."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for h in m.cmd("WebDriver:GetWindowHandles"):
+        try:
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/commandbar/commandbar.html" in m.cmd("WebDriver:GetCurrentURL"):
+                return True
+        except RuntimeError as err:
+            if "no such window" not in str(err):
+                raise
+    return False
 
 
 def bar_page(m, script, *args):
     """Run `script` in the bar's own page."""
-    m.cmd("Marionette:SetContext", {"value": "content"})
     result = None
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if "/commandbar/commandbar.html" in m.cmd("WebDriver:GetCurrentURL"):
-            result = m.cmd("WebDriver:ExecuteScript", {"script": "const page = window.wrappedJSObject || window, doc = page.document; " + script, "args": list(args)})
-            break
+    if to_bar_page(m):
+        result = m.cmd("WebDriver:ExecuteScript", {"script": "const page = window.wrappedJSObject || window, doc = page.document; " + script, "args": list(args)})
     m.chrome()
     return result
 
@@ -1840,11 +1852,7 @@ def alone_command_bar(m):
     bar_keys(m, [TAB])
     field = bar_page(m, """return {value: doc.getElementById("field").value, focused: doc.activeElement?.id === "field"};""")
     check("⇥ completes to the address of the row, and stays in the field", field["value"] == "example.org/?smoke-bar-address" and field["focused"], str(field))
-    m.cmd("Marionette:SetContext", {"value": "content"})
-    for h in m.cmd("WebDriver:GetWindowHandles"):
-        m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
-        if "/commandbar/commandbar.html" in m.cmd("WebDriver:GetCurrentURL"):
-            break
+    to_bar_page(m)
     row = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": ".row[data-kind=tab]"})
     m.cmd("WebDriver:ElementClick", {"id": next(iter(row.values()))})
     m.chrome()
@@ -2040,10 +2048,7 @@ def alone_bar_edges(m):
 
     # ⌘W is one more way out: not kept as a closed window, and the key works at the first press.
     bar_open(m)
-    try:
-        bar_keys(m, ["w"], CMD)
-    except RuntimeError:  # the window has gone before the key was let go of
-        m.chrome()
+    bar_keys(m, ["w"], CMD)
     closed = wait_for_bar(m, False)
     r = 1
     for _ in range(50):
@@ -2113,9 +2118,9 @@ def alone_bar_edges(m):
     wait_for_bar(m, False)
 
     # The window it was opened from closes under it: what you then choose lands in another.
-    m.js(H + """const w = main().OpenBrowserWindow(); w.__smoke = true; for (let i = 0; i < 200 && !w.gBrowserInit?.delayedStartupFinished; i++) await wait(50); await wait(2500); return 1;""")
-    bar_open(m, "other()")
-    m.js(H + """Services.prefs.setBoolPref("browser.tabs.warnOnClose", false); other().close(); for (let i = 0; i < 50 && other(); i++) await wait(100); return 1;""")
+    windows = m.js(H + """const n = wins().length, w = main().OpenBrowserWindow(); w.__extra = true; for (let i = 0; i < 200 && !w.gBrowserInit?.delayedStartupFinished; i++) await wait(50); await wait(2500); return n;""")
+    bar_open(m, "wins().find(w => w.__extra)")
+    m.js(H + """Services.prefs.setBoolPref("browser.tabs.warnOnClose", false); wins().find(w => w.__extra).close(); for (let i = 0; i < 50 && wins().some(w => w.__extra); i++) await wait(100); return 1;""")
     still = bar_is_open(m)
     bar_keys(m, "example.org/?smoke-edge-source")
     bar_rows_until(m, lambda rows: rows and rows[0]["kind"] == "address")
@@ -2123,7 +2128,7 @@ def alone_bar_edges(m):
     wait_for_bar(m, False)
     r = m.js(H + """const w = main(); for (let i = 0; i < 50 && !w.gBrowser.tabs.some(x => url(x).includes("smoke-edge-source")); i++) await wait(100);
       return {here: w.gBrowser.tabs.filter(x => url(x).includes("smoke-edge-source")).length, windows: wins().length};""")
-    check("the window it was opened from closing leaves the bar working", still and r["here"] == 1 and r["windows"] == 1, str(r))
+    check("the window it was opened from closing leaves the bar working", still and r["here"] == 1 and r["windows"] == windows, f"{still} {r} {windows}")
     m.js(H + """await removeWhere((w, t) => url(t).includes("smoke-edge-source") || t.label.includes("smoke-edge-source")); main().focus(); return 1;""")
     press(m, str(start["space"]), CTRL)
     time.sleep(1)

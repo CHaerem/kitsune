@@ -622,6 +622,13 @@ test("Clear and Rename are there once what they use is, and go to it", async () 
   page = await openBar(ff, x, w.id);
   const rename = page.sent[0].items.find(i => i.name === "rename-tab");
   assert.ok(rename?.ask, "an essential has one");
+  assert.equal(rename.ask.value, "Here", "the page's title while it has no name of its own");
+  await page.tell({ type: "close", refocus: true });
+  await wait(100);
+  x.js("getList()").then(list => { list.find(e => e.url === "https://here.example/").name = "Called this"; });
+  await wait(50);
+  page = await openBar(ff, x, w.id);
+  assert.equal(page.sent[0].items.find(i => i.name === "rename-tab").ask.value, "Called this", "what it is called, to change that");
   await page.tell({ type: "choose", value: "Short", row: { kind: "command", name: "rename-tab" } });
   await wait(200);
   assert.equal(JSON.stringify(x.js("renamed")), JSON.stringify([[a.id, "Short"]]));

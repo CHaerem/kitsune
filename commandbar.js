@@ -130,7 +130,7 @@ async function barContext(windowId) {
   const closed = (await browser.sessions.getRecentlyClosed({ maxResults: CLOSED_LOOKED_AT }).catch(() => []))
     .filter(c => c.tab && isWeb(c.tab.url));
   return {
-    windowId, spaces, space, tab, picked, closed, all,
+    windowId, spaces, space, tab, picked, closed, all, list,
     addresses: picked.map(t => barAddressOf(t, all, list)).filter(Boolean),
     key: tab ? syncKeyByTab.get(tab.id) : undefined,
   };
@@ -180,7 +180,7 @@ const BAR_COMMANDS = [
   { name: "copy-url", label: ctx => barCount(ctx, "Copy address", "Copy # addresses"), when: ctx => ctx.addresses.length > 0,
     run: ctx => navigator.clipboard.writeText(ctx.addresses.join("\n")) },
   { name: "rename-tab", label: "Rename this tab", when: ctx => barOnlyThisTab(ctx) && typeof renameTab === "function" && barIsKept(ctx),
-    ask: ctx => ({ placeholder: "A name, or nothing for the page's title", value: ctx.tab.title }),
+    ask: ctx => ({ placeholder: "A name, or nothing for the page's title", value: barNameOf(ctx) }),
     run: (ctx, name) => renameTab(ctx.tab.id, name) },
   { name: "rename-folder", label: "Rename this folder", when: ctx => barOnlyThisTab(ctx) && !!barOwnFolderOf(ctx),
     ask: ctx => ({ placeholder: "Name of the folder", value: barOwnFolderOf(ctx).name }),
@@ -223,6 +223,8 @@ const BAR_COMMANDS = [
 const barFolderKey = ctx => folderKeyOf(ctx.all, ctx.key);
 const barOwnFolderOf = ctx => { const f = ctx.all[barFolderKey(ctx)]; return isOwnFolder(f) && !f.live ? f : null; };
 const barIsKept = ctx => ctx.tab.pinned || !!ctx.all[ctx.key]?.saved;
+// What you have called it, to change that, or else what the page calls itself.
+const barNameOf = ctx => (ctx.tab.pinned ? ctx.list.find(e => e.key === keyByTab.get(ctx.tab.id))?.name : ctx.all[ctx.key]?.name) || ctx.tab.title;
 
 // The tab's real page, also of a placeholder, is what can be unloaded (the tab menu's own
 // way when it is there, tabactions.js). The tab you are on must first make way: Firefox
