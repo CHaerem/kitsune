@@ -82,13 +82,17 @@ const keptIcon = (entry, tab) => {
 // (Ghost placeholder URLs come from ghostUrl() in common.js.)
 const groupBaseUrl = url => url.replace(/~!.*!~$/, "");
 
+// Whether it took: Firefox refuses a tab closed since it was looked up. That is no error, and
+// must not stop the work on the other tabs and windows (a whole start, say).
 function setRole(tabId, key, role) {
   syncKeyByTab.set(tabId, key);
   syncRoleByTab.set(tabId, role);
   return Promise.all([
     browser.sessions.setTabValue(tabId, SYNC_KEY, key),
     browser.sessions.setTabValue(tabId, SYNC_ROLE, role),
-  ]).catch(err => { ifGone(err); forget(tabId); }); // its close was told before this answer
+  // Whether it took: Firefox refuses a tab closed since, which is no error and must not stop
+  // the work on the other tabs (false). Any other refusal is passed on.
+  ]).then(() => true, err => { ifGone(err); forget(tabId); return false; }); // its close was told before this answer
 }
 
 function forget(tabId) {
@@ -183,16 +187,17 @@ async function createRep(windowId, key, entry, parentId, index) {
   if (index !== undefined) props.index = index;
   if (placeholderWithoutPage(entry)) Object.assign(props, { discarded: true, title: entry.title || entry.url });
   const url = entry.group ? groupBaseUrl(entry.url) : ghostUrl("ghost", key);
-  const tab = await browser.tabs.create({ ...props, url }).catch(err => {
+  // (createTab, common.js: nothing if the window closes meanwhile, also before Firefox answers.)
+  const tab = await createTab({ ...props, url }).catch(err => {
     // Its folder closed, or went to another window, a moment ago: better outside it than not there.
     if (props.openerTabId === undefined || !/^(Invalid tab ID|Opener tab must)/.test(err?.message)) throw err;
     const { openerTabId, ...rest } = props;
-    return browser.tabs.create({ ...rest, url });
+    return createTab({ ...rest, url });
   });
+  if (!tab) return null;
   syncBusy.add(tab.id);
   setTimeout(() => syncBusy.delete(tab.id), SETTLE_MS);
-  await setRole(tab.id, key, entry.group ? "copy" : "ghost");
-  return tab;
+  return await setRole(tab.id, key, entry.group ? "copy" : "ghost") ? tab : null;
 }
 
 // The window with the most synced tabs, other than `exceptWindowId`. Its order
@@ -263,7 +268,8 @@ async function sortWindow(windowId) {
 // whatever its container. A throwaway pinned tab takes that place while the
 // essentials are created, and is removed afterwards.
 async function withPinnedPlaceholder(windowId, fn) {
-  const tab = await browser.tabs.create({ windowId, url: "about:blank", active: false, pinned: true });
+  const tab = await createTab({ windowId, url: "about:blank", active: false, pinned: true });
+  if (!tab) return;
   syncBusy.add(tab.id);
   try { await fn(); } finally { await browser.tabs.remove(tab.id).catch(() => {}); }
 }
@@ -372,7 +378,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     })();
   }
   const lists = {
-    toForget, staleOpener, busy, keyByTab, ownMoves, ownPins, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
+    toForget, tabsOnTheirWay, staleOpener, busy, keyByTab, ownMoves, ownPins, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries, loadedSeen,
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers, viewRest, viewsBuilding, requestOfTab,
     unruled,
@@ -444,20 +450,29 @@ async function reconcileAll({ firefoxStart = false } = {}) {
       const live = reps.filter(t => syncRoleByTab.get(t.id) === "live");
       // Exactly one live tab: prefer a loaded one. A real page is yours, whatever
       // its role says: a ghost selected before the roles were read has opened it.
-      // (A ghost created a moment ago still says about:blank.)
+      // (A ghost made a moment ago still says about:blank. It must not be taken for a page: it
+      // would take over from a live tab Firefox has unloaded, or be unloaded before it has its title.)
       const page = t => !t.discarded && isWeb(t.url);
-      const keep = live.find(page) || reps.find(page) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
+      const selected = reps.filter(t => page(t) && t.active); // what you are looking at stays
+      const lookedAt = t => t.active && t.windowId === focusedWindowId; // no page to keep at all: this one opens it (openIfBlank)
+      // (With no page anywhere the one you are looking at comes before a live placeholder elsewhere,
+      // which a second look at a start makes of a tab that has only placeholders.)
+      const keep = selected.find(t => t.windowId === focusedWindowId) || selected[0] || live.find(page) || reps.find(page) || reps.find(lookedAt) || live.find(t => !t.discarded) || live[0] || reps.find(t => !t.discarded) || reps[0];
       if (syncRoleByTab.get(keep.id) !== "live") await setRole(keep.id, key, "live");
       // Keep title and icon current (older entries have no icon).
       if (isWeb(keep.url)) Object.assign(all[key], { title: keep.title || all[key].title, icon: keptIcon(all[key], keep) });
       for (const t of live) if (t.id !== keep.id) await setRole(t.id, key, "ghost");
-      // Loaded twice: a ghost selected before the roles were read opens its page, also with
-      // the live tab loaded elsewhere. Nothing else would ever unload it.
+      // A page is loaded once. Another copy that has it open (a ghost selected before the roles
+      // were read, a window you reopened) is a placeholder again: unloaded, which a page with
+      // unsaved input refuses, without asking, and stays; or, selected (in a window you are
+      // not using: the one you use keeps its page), it becomes the placeholder page, and the
+      // page comes to it as you go to its window.
       for (const t of reps) {
         if (t.id === keep.id || !page(t)) continue;
         await setRole(t.id, key, "ghost");
+        if (!t.active) { await browser.tabs.discard(t.id).catch(() => {}); continue; }
         await browser.tabs.update(t.id, { url: ghostUrl("ghost", key) }).catch(ifGone);
-        if (t.active) await pull(t.id); // you are looking at it: the page you had comes here
+        await pull(t.id);
       }
     }
     for (const w of wins) {
@@ -475,11 +490,23 @@ async function reconcileAll({ firefoxStart = false } = {}) {
   saveSynced(all);
   // A window closed meanwhile must not keep the others from being filled.
   for (const w of wins) await fillIfOpen(w.id).catch(noteError);
+  await openIfBlank(focusedWindowId);
+  await titlesBack();
 }
 
 // A window closed meanwhile wants no more tabs: what was refused for that reason is no error.
 async function fillIfOpen(windowId, options) {
   await fillWindow(windowId, options).catch(ifGone);
+}
+
+// Firefox moves an unloaded tab to another window without its title, and may bring one back
+// so with a reopened window, and then shows its address (the placeholder's, a long
+// moz-extension address), in the tab strip, ⌃Tab and Sidebery. Its placeholder is loaded once
+// more to set the title, and unloads itself again.
+async function titlesBack() {
+  for (const t of await browser.tabs.query({ discarded: true }).catch(() => [])) {
+    if (isGhostUrl(t.url) && (!t.title || t.title.includes("ghost.html"))) await browser.tabs.update(t.id, { url: t.url }).catch(() => {});
+  }
 }
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
@@ -660,11 +687,30 @@ async function dropIfUnused(key) {
 // The live tab's window is closing: a ghost in another window takes over.
 async function handOver(key, closingWindowId) {
   const reps = (await repsNow(key)).filter(t => t.windowId !== closingWindowId);
-  if (reps.some(t => syncRoleByTab.get(t.id) === "live")) return; // dragged out of it just before
-  if (reps.length) { await setRole(reps[0].id, key, "live"); return; }
+  // A ghost shown while this waited in the queue has taken over already (ghostShown), and
+  // opened the page: a second heir would open it twice. Or it was dragged out just before.
+  if (reps.some(t => syncRoleByTab.get(t.id) === "live")) return;
+  if (reps.length) {
+    // The one you are looking at, if it is one of them: it should not stay blank.
+    const heir = reps.find(t => t.active && t.windowId === focusedWindowId) || reps[0];
+    await setRole(heir.id, key, "live");
+    await openIfBlank(heir.windowId);
+    return;
+  }
   // No other window has it yet (one still being filled, say). It was the only copy now, so
   // they must get it, or the next start takes it for a tab you closed.
   for (const w of await normalWindows()) if (w.id !== closingWindowId) await fillIfOpen(w.id);
+}
+
+// A placeholder asks once what to do when it is shown (ghostShown), and it is told to
+// wait if another tab is live. If it then becomes the live tab itself while it is the
+// selected tab (that tab's window closed, say), nothing will ask again, and you are looking
+// at an empty page. So in the window you are using, it opens its page now.
+async function openIfBlank(windowId) {
+  if (windowId !== focusedWindowId) return; // when you switch to it, see pullSelected
+  const [active] = await browser.tabs.query({ windowId, active: true }).catch(() => []);
+  if (!active || syncRoleByTab.get(active.id) !== "live" || !isGhostUrl(active.url)) return;
+  await openPlaceholder(active.id, syncKeyByTab.get(active.id));
 }
 
 // Pull the live tab for `ghostId` into the ghost's window. The part you see
@@ -684,7 +730,7 @@ async function pull(ghostId) {
   if (!live || live.windowId === ghost.windowId) {
     // No live tab to pull: the ghost becomes the live tab and loads itself.
     await setRole(ghostId, key, "live");
-    if (!live) await openPlaceholder(ghostId, key);
+    await openIfBlank(ghost.windowId);
     return;
   }
   pulling++;
@@ -703,16 +749,20 @@ async function pull(ghostId) {
       const oldTabs = await browser.tabs.query({ windowId: fromWindow, hidden: false, discarded: false });
       const calm = oldTabs.find(t => t.id !== live.id && t.cookieStoreId === live.cookieStoreId) ||
         oldTabs.find(t => t.id !== live.id);
-      if (calm) await browser.tabs.update(calm.id, { active: true });
+      if (calm) await browser.tabs.update(calm.id, { active: true }).catch(() => {});
     }
+    // Bookkeeping too. A tab moved before it was ever loaded (a live folder's pull
+    // request) can arrive without its sessions values, so they are set again. Any of
+    // it is refused if you close the tab or the window meanwhile: ⌘W right after a
+    // click. The ghost then stays what it was, for closing that tab to deal with: it
+    // would otherwise be left behind, unknown to Tidier, as a tab you closed coming back.
     beingPulled.add(live.id);
-    await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index }).finally(() => beingPulled.delete(live.id));
-    await browser.tabs.update(live.id, { active: true });
-
-    // Bookkeeping. A tab moved before it was ever loaded (a live folder's pull
-    // request) can arrive without its sessions values, so they are set again.
+    const moved = await browser.tabs.move(live.id, { windowId: ghost.windowId, index: ghost.index })
+      .finally(() => beingPulled.delete(live.id))
+      .then(() => browser.tabs.update(live.id, { active: true }))
+      .then(() => setRole(live.id, key, "live"), () => false);
+    if (!moved) return;
     forget(ghostId);
-    await setRole(live.id, key, "live");
     const all = await getSynced();
     const entry = all[key];
     // (A folder of Tidier's own has no tab to be the parent.)
@@ -869,13 +919,17 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
   const key = syncKeyByTab.get(tabId);
   if (!key) {
     // A new tab that has navigated to a page, e.g. "New Tab" -> a URL. Busy or not: it may
-    // be a new tab you dragged a moment ago, and no later event would tell.
-    if (change.url || change.status === "complete") registerSoon(tabId);
+    // be a new tab you dragged a moment ago, and no later event would tell. Or a pinned tab
+    // Tidier knew nothing about, unpinned: nothing else will happen to it.
+    if (change.url || change.status === "complete" || change.pinned === false) registerSoon(tabId);
     return;
   }
   // You pinned it, also if Tidier was just busy with it: Tidier pins no synced tab itself.
   if (change.pinned === true) { serial(() => leaveSync(tabId, key)); return; }
-  if (syncBusy.has(tabId)) return;
+  // A tab Tidier has just made, moved or brought back (syncBusy) is still yours: a page that
+  // goes to another address then would leave the record behind it. What it says for a moment
+  // on the way back (Undo, quiet.js) is no new title, though.
+  const busyNow = syncBusy.has(tabId);
   if (syncRoleByTab.get(tabId) === "live" && (change.status === "complete" || change.favIconUrl || change.title)) {
     serial(async () => {
       const all = await getSynced();
@@ -885,7 +939,7 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
       const newIcon = entry.icon !== icon;
       const changed = entry.title !== tab.title || newIcon;
       const moved = entry.url !== tab.url;
-      if (!changed && !moved) return;
+      if ((!changed && !moved) || (busyNow && !moved)) return;
       Object.assign(entry, { url: tab.url, title: tab.title, icon });
       // On its saved address, a saved tab's saved title and icon follow the page.
       if (entry.saved?.url === tab.url) Object.assign(entry.saved, { title: tab.title, icon: tab.favIconUrl || entry.saved.icon });
@@ -944,6 +998,9 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         await setRole(tab.id, key, "live");
         return { load: true };
       }
+      // Its live tab comes here, also if nothing else is going to bring it: a window reopened
+      // and focused before its tabs were known has had its selection and focus events already.
+      await pull(tab.id);
       return { load: false };
     });
   }
@@ -960,10 +1017,12 @@ function unloadWhenIconShown(tabId, url, hasIcon) {
   const waiting = { url, hasIcon };
   awaitingIcon.set(tabId, waiting);
   unloadGhost(tabId);
-  // Firefox never reported this icon: better without it than loaded for good.
-  if (hasIcon) setTimeout(() => {
+  // Firefox never reported this icon, or never said the load had finished (a tab can stay
+  // "loading" for good after being loaded again in quick succession). The page has its title
+  // by now, and is better without its icon than loaded for good.
+  setTimeout(() => {
     if (awaitingIcon.get(tabId) !== waiting) return;
-    waiting.hasIcon = false;
+    waiting.overdue = true;
     unloadGhost(tabId);
   }, ICON_WAIT_MS);
 }
@@ -971,18 +1030,23 @@ function unloadGhost(tabId) {
   const waiting = awaitingIcon.get(tabId);
   if (!waiting) return;
   browser.tabs.get(tabId).then(t => {
-    // Not yet: the events below bring it back. Waiting a fixed time is not enough:
-    // with a new window's tabs all loading, a placeholder can take many seconds to
-    // report its load finished, and those given up on stayed loaded for good.
-    if (t.status !== "complete" || (waiting.hasIcon && !t.favIconUrl)) return;
+    // Selected right now: leaving it brings it back (below). Going through tabs quickly, a tab
+    // passed in that moment never gets to hear it was left, and would stay loaded for good.
+    if (t.active) return;
+    // Not yet: the events below bring it back. A placeholder can take many seconds to
+    // report its load finished, with a new window's tabs all loading.
+    if (!waiting.overdue && (t.status !== "complete" || (waiting.hasIcon && !t.favIconUrl))) return;
     if (awaitingIcon.get(tabId) !== waiting) return; // a newer load has asked meanwhile
     awaitingIcon.delete(tabId);
-    if (!t.active && isGhostUrl(t.url) && t.url === waiting.url) return browser.tabs.discard(tabId);
+    if (isGhostUrl(t.url) && t.url === waiting.url) return browser.tabs.discard(tabId);
   }).catch(() => awaitingIcon.delete(tabId));
 }
 browser.tabs.onUpdated.addListener(tabId => {
   if (awaitingIcon.has(tabId)) unloadGhost(tabId);
 }, { properties: ["favIconUrl", "status"] });
+browser.tabs.onActivated.addListener(({ previousTabId }) => {
+  if (awaitingIcon.has(previousTabId)) unloadGhost(previousTabId);
+});
 
 // A placeholder whose tab or essential no longer exists (left from before a
 // restart, or by an older version) has nothing to show or open: it is closed.
@@ -1108,17 +1172,27 @@ function closedPlace(windowId, tabId) {
 
 // Selecting a ghost in the window you are using pulls the live tab in. (A pull
 // selects tabs itself too, but never a ghost in the window you are using.)
-browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
-  if (!started || syncRoleByTab.get(tabId) !== "ghost" || windowId !== focusedWindowId) return;
-  serial(() => pull(tabId));
+browser.tabs.onActivated.addListener(({ tabId, windowId, previousTabId }) => {
+  if (!started) return;
+  if (syncRoleByTab.get(previousTabId) === "ghost") serial(() => unloadLeftPage(previousTabId));
+  if (syncRoleByTab.get(tabId) === "ghost" && windowId === focusedWindowId) serial(() => pull(tabId));
 });
+
+// A ghost that shows the page itself stays loaded while it is selected (in a window you
+// were not using, as reconcileAll leaves it). Click another tab there as you come back, and
+// the focus finds no ghost selected to pull in: the page would stay loaded twice for good.
+// It is only a copy, so it is unloaded, like the other copies.
+async function unloadLeftPage(tabId) {
+  const tab = await browser.tabs.get(tabId).catch(() => null);
+  if (tab && !tab.active && !tab.discarded && isWeb(tab.url) && syncRoleByTab.get(tabId) === "ghost") await browser.tabs.discard(tabId).catch(() => {});
+}
 
 // Switching to a window whose selected tab is a ghost pulls the live tab in.
 function pullSelected(windowId) {
   return serial(async () => {
     const [active] = await browser.tabs.query({ windowId, active: true });
     if (active && syncRoleByTab.get(active.id) === "ghost") await pull(active.id);
-    else if (active && syncRoleByTab.get(active.id) === "live" && isGhostUrl(active.url)) await openPlaceholder(active.id, syncKeyByTab.get(active.id));
+    else await openIfBlank(windowId);
   });
 }
 // A placeholder you are looking at that has become the live tab (the window with the real
@@ -1133,7 +1207,7 @@ browser.windows.onFocusChanged.addListener(windowId => {
 });
 
 // You dragged a tab to another window: fix up both windows.
-browser.tabs.onAttached.addListener(tabId => {
+browser.tabs.onAttached.addListener((tabId, { newWindowId }) => {
   // A tab arriving by a pull is not yours to fix up. Any other is, also one just created, just
   // pulled, or one you drag during a pull: it would be left without its values, twice in the
   // window it went to, and missing from the one it left. (Firefox sends this event before
@@ -1141,9 +1215,10 @@ browser.tabs.onAttached.addListener(tabId => {
   if (!started || beingPulled.has(tabId) || !syncKeyByTab.has(tabId)) return;
   const key = syncKeyByTab.get(tabId), role = syncRoleByTab.get(tabId);
   serial(async () => {
+    await movedAway(tabId, t => t.windowId !== newWindowId);
     // Firefox loses the sessions values of an unloaded tab moved to another window;
     // after a restart it would be a stranger, and a duplicate of itself.
-    await setRole(tabId, key, role).catch(() => {});
+    await setRole(tabId, key, role);
     await reconcileAll();
   });
 });
@@ -1160,6 +1235,13 @@ browser.windows.onCreated.addListener(win => {
     // select a tab there.
     if (await adoptRestored(win.id)) { await reconcileAll(); await showSpace(win.id); }
     else await fillIfOpen(win.id, { fresh: true });
+    // A reopened window can get its tabs' values later than this, with Firefox busy, and has
+    // then been filled as a new one; looked at once more, what is doubled goes. Its unloaded
+    // tabs' titles can come as late, and those that come as an address are put right here.
+    setTimeout(() => serial(async () => {
+      if (await adoptRestored(win.id)) { await reconcileAll(); await showSpace(win.id); }
+      else await titlesBack();
+    }), RESTORED_LATE_MS);
   }), NEW_WINDOW_DELAY_MS);
 });
 
@@ -1171,7 +1253,7 @@ async function adoptRestored(windowId) {
   const all = await getSynced();
   let found = false;
   const removed = [];
-  for (const t of await browser.tabs.query({ windowId })) {
+  for (const t of await browser.tabs.query({ windowId }).catch(() => [])) { // (the window may have closed since)
     // An essential's copy, closed with its window before it was pinned (with Sidebery that
     // comes a moment after it is created): it is pinned here, and is then only that.
     if (!tidierAlone && !t.pinned && placeholderOf(t.url).kind === "essential") await copyNotYetPinned(t);
@@ -1244,8 +1326,9 @@ async function start(delayMs) {
   started = true;
   serial(moveStragglers); // isolation.js: once new tabs are registered again
   await step(startBridge); // bridge.js
-  // A ghost selected while Tidier was starting was not pulled in, and waits blank.
-  if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
+  // A ghost or an essential's placeholder selected while Tidier was starting has asked
+  // what to do and been told to wait, or not been answered, and waits blank.
+  if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) { pullSelected(focusedWindowId); selectedEssential(focusedWindowId); }
   await step(seeUnseenTabs);
   await step(startSync); // sync.js
 }

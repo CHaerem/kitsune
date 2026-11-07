@@ -136,7 +136,7 @@ async function switchSpace(windowId, space) {
   // And written here, since setSpace below now sees no change: this is what a restart reads.
   await browser.sessions.setWindowValue(windowId, SPACE_KEY, space).catch(() => {});
   if (last) await browser.tabs.update(last.id, { active: true }).catch(() => {});
-  else if (tidierAlone) await browser.tabs.create({ windowId, cookieStoreId: space }).catch(ifGone);
+  else if (tidierAlone) await createTab({ windowId, cookieStoreId: space }).catch(ifGone); // common.js
   if (activeSpace.has(windowId)) await setSpace(windowId, space); // else closed meanwhile
 }
 
@@ -177,7 +177,7 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
       const next = await nextAfterClosing(windowId, stay);
       if (next) { await browser.tabs.update(next.id, { active: true }).catch(() => {}); return; }
       // Refused when the space has just been removed (safemoves.js): then this tab's space it is.
-      if (await browser.tabs.create({ windowId, cookieStoreId: stay }).catch(() => null)) return;
+      if (await createTab({ windowId, cookieStoreId: stay }).catch(() => null)) return;
     }
     await setSpace(windowId, tab.cookieStoreId);
     await setSuccessor(tab);
@@ -341,7 +341,7 @@ async function intoSpace(tabId) {
   if (!win || win.type !== "normal" || !space) return;
   const url = NEW_TAB_PAGES.has(tab.url) ? undefined : tab.url;
   if (url !== undefined && !isWeb(url)) return;
-  await browser.tabs.create({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: await indexWhenReopened(tab, space) }).catch(ifGone);
+  await createTab({ windowId: tab.windowId, cookieStoreId: space, url, active: tab.active, index: await indexWhenReopened(tab, space) }).catch(ifGone);
   await browser.tabs.remove(tab.id).catch(() => {});
   // The page is open in its space: in Recently Closed it would come back by ⌘⇧T, a second
   // time, instead of the tab you closed.

@@ -186,7 +186,7 @@ browser.runtime.onConnect.addListener(port => {
     } else if (msg.type === "space") {
       await serial(() => switchSpace(windowId, msg.space));
     } else if (msg.type === "newTab") {
-      await browser.tabs.create({ windowId, cookieStoreId: msg.space, index: tidierAlone ? await topOfToday(windowId, msg.space) : undefined }).catch(ifGone);
+      await createTab({ windowId, cookieStoreId: msg.space, index: tidierAlone ? await topOfToday(windowId, msg.space) : undefined }).catch(ifGone); // common.js
     } else if (msg.type === "mute") {
       await browser.tabs.update(msg.tabId, { muted: msg.muted }).catch(() => {});
     } else if (msg.type === "undo") {
@@ -238,9 +238,13 @@ async function sidebarAction(windowId, msg) {
 // A tab moved or pinned a moment ago is still in the sets that make the listeners ignore
 // Tidier's own changes. This one is yours, and ignored it would leave the tab both an
 // essential and a tab with placeholders in the other windows, for good.
+//
+// A new tab has no page to keep as an essential: pinned, it would only be a stray tile in
+// one window, and an essential is in every window. (A placeholder stands for its page.)
 async function pinFromSidebar(tabId, pinned, before) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || tab.pinned === pinned) return; // closed or pinned meanwhile: no event will use a place
+  if (pinned && !isWeb(tab.url) && !isGhostUrl(tab.url)) return;
   busy.delete(tabId);
   syncBusy.delete(tabId);
   if (pinned && before) pinPlaces.set(tabId, before);

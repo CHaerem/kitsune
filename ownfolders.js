@@ -118,7 +118,8 @@ async function moveInWindow(tabs, tabId, beforeId) {
   if (index === tab.index) return;
   // Not marked as Tidier's own (syncBusy): without Sidebery nothing listens to a move, and for
   // that moment a pin or a new title would go unseen. A tab dragged on to the essentials
-  // right after a move stayed in the tab record too, and so was there twice.
+  // right after a move stayed in the tab record too, and so was there twice; a new tab
+  // dragged and given an address within a second and a half was never synced.
   await browser.tabs.move(tabId, { index }).catch(() => {});
 }
 

@@ -1172,9 +1172,13 @@ test("a ghost selected before the roles are read, with the live tab loaded, ends
   await ff.clock.run(50);
   ff.select(ghost.id); // in the window you are not using: shown, and asks if it should open; nothing is known yet
   await ff.clock.idle(60000);
+  assert.equal(ff.values.get(live.id).syncRole, "live", "the page you had stays the live tab");
+  assert.equal(ff.values.get(ghost.id).syncRole, "ghost");
+  // Selected in a window you may well see, it stays as it is until you leave it (unloadLeftPage).
+  ff.select(ff.list(here.id).find(t => t.id !== ghost.id).id);
+  await ff.clock.idle(60000);
   const loaded = [...ff.tabs.values()].filter(t => !t.discarded && t.url === "https://a.example/");
-  assert.deepEqual(loaded.map(t => t.id), [live.id], "loaded once, the page you had");
-  assert.equal(ff.values.get(live.id).syncRole, "live");
+  assert.deepEqual(loaded.map(t => t.id), [live.id], "then it is loaded once, the page you had");
   x.kill();
 });
 
@@ -1709,7 +1713,8 @@ test("a ghost whose folder closes or leaves its window in that moment is still m
   assert.equal(made.windowId, b.id);
   const closed = await ff.clock.settled(x.js(`createRep(${b.id}, "k2", { url: "https://l.example/", cookieStoreId: "${C1}" }, 99999)`));
   assert.equal(closed.windowId, b.id);
-  await assert.rejects(ff.clock.settled(x.js(`createRep(99999, "k3", { url: "https://m.example/", cookieStoreId: "${C1}" })`)), /Invalid window ID/);
+  // A window that has gone gets nothing, and that is no error (createTab, common.js).
+  assert.equal(await ff.clock.settled(x.js(`createRep(99999, "k3", { url: "https://m.example/", cookieStoreId: "${C1}" })`)), null);
   x.kill();
 });
 
@@ -2068,4 +2073,966 @@ test("a tab pinned in the last moment of a start is an essential when it has sta
     assert.deepEqual(ff.store.essentials.map(e => e.url), ["https://p.example/"], `pinned ${before} ms before it had started`);
     x.kill();
   }
+});
+
+// --- Found by the long run in a real Firefox (soak.py) ------------------------------------
+
+test("a new tab dragged in the sidebar and given an address at once is synced", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await alone(ff);
+  const fresh = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(fresh));
+  await wait(2000); // long after a new tab is looked at for the first time
+  await x.js(`moveTab(${w.id}, ${fresh.id}, ${ff.list(w.id)[0].id}, undefined)`);
+  ff.navigate(fresh.id, "https://typed.example/");
+  await wait(3000);
+  const key = ff.values.get(fresh.id)?.syncKey;
+  assert.ok(key, "it has a key");
+  assert.ok(ff.list(other.id).some(t => t.url === GHOST("ghost", key)), "and a ghost in the other window");
+  x.kill();
+});
+
+test("a tab dragged to another window during a pull, or just after it was made, leaves no gap", async () => {
+  for (const mark of ["pulling++", id => `syncBusy.add(${id})`]) {
+    const ff = new FakeFirefox();
+    ff.store.syncedTabs = { a: entry("https://a.example/") };
+    const home = ff.addWindow({ focused: true });
+    ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+    const from = ff.addWindow();
+    ff.addTab(from.id, { url: "about:blank", active: true });
+    const ghost = ff.addTab(from.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+    const to = ff.addWindow();
+    ff.addTab(to.id, { url: "about:blank", active: true });
+    ff.addTab(to.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+    const x = await run(ff);
+    x.js(typeof mark === "string" ? mark : mark(ghost.id));
+    await x.b.tabs.move(ghost.id, { windowId: to.id, index: 1 });
+    await wait(3000);
+    assert.equal(ff.urls(from.id).filter(u => u.startsWith("ghost.html")).length, 1, "the window it left gets it back");
+    assert.equal(ff.urls(to.id).filter(u => u.startsWith("ghost.html")).length, 1, "and the window it came to has it once");
+    x.kill();
+  }
+});
+
+test("a ghost pinned just after it was made leaves tab sync, and is an essential", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.js(`syncBusy.add(${ghost.id})`); // as createRep does for a second and a half
+  await x.b.tabs.update(ghost.id, { pinned: true });
+  await wait(3000);
+  assert.deepEqual(Object.keys(ff.synced), [], "it has left the record");
+  assert.equal(ff.store.essentials.length, 1);
+  x.kill();
+});
+
+test("a page that finishes loading just after a pull still updates the record", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  x.js(`syncBusy.add(${live.id})`);
+  ff.navigate(live.id, "https://a.example/next", "Next");
+  await wait(1000);
+  assert.equal(ff.synced.a.url, "https://a.example/next");
+  x.kill();
+});
+
+test("a link put in its space is not in Recently Closed, so ⌘⇧T does not open it twice", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const x = await alone(ff);
+  await wait(200);
+  // The newest is the tab Tidier replaces; the one before it, with the same address, you closed.
+  ff.recentlyClosed = [
+    { tab: { url: "https://link.example/", sessionId: "replaced", windowId: w.id } },
+    { tab: { url: "https://b.example/", sessionId: "yours", windowId: w.id } },
+    { tab: { url: "https://link.example/", sessionId: "yours too", windowId: w.id } },
+  ];
+  const link = ff.addTab(w.id, { url: "about:blank", active: true });
+  x.b.tabs.onCreated.fire(ff.snap(link));
+  ff.navigate(link.id, "https://link.example/");
+  await wait(1000);
+  assert.ok(ff.list(w.id).some(t => t.url === "https://link.example/" && t.cookieStoreId === C1), "it is in the space");
+  assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["yours", "yours too"]);
+  x.kill();
+});
+
+test("a tab closed in the middle of its pull does not leave its ghost behind", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow();
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(here.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // ⌘W comes as the tab arrives, before the bookkeeping is done: its values are refused.
+  const update = x.b.tabs.update;
+  x.b.tabs.update = async (id, p) => { const r = await update(id, p); if (id === live.id && p.active) ff.rm(live.id); return r; };
+  ff.select(ghost.id);
+  await wait(3000);
+  assert.deepEqual(ff.synced, {}, "it is closed");
+  assert.equal(ff.list(here.id).filter(t => t.url.startsWith("moz-extension")).length, 0, "and no placeholder is left of it");
+  assert.equal(x.js("syncKeyByTab.size"), 0, "and Tidier does not remember it");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("closing a tab everywhere closes the others, also when one of them is gone by then", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const windows = [ff.addWindow({ focused: true }), ff.addWindow(), ff.addWindow()];
+  for (const w of windows) ff.addTab(w.id, { url: "about:blank", active: true });
+  const live = ff.addTab(windows[0].id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const gone = ff.addTab(windows[1].id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const stays = ff.addTab(windows[2].id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // The window with the other ghost is closing at this very moment: Firefox no longer has it.
+  const query = x.b.tabs.query;
+  x.b.tabs.query = async q => { const tabs = await query(q); if (ff.tabs.has(gone.id) && q.windowId === undefined) ff.rm(gone.id, { closing: true }); return tabs; };
+  ff.rm(live.id);
+  await wait(1000);
+  x.b.tabs.query = query;
+  assert.ok(!ff.tabs.has(stays.id), "the other ghost is closed");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a selected ghost that becomes the live tab opens its page", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  // In a window you are not using it is selected, and it was told to wait.
+  const there = ff.addWindow();
+  const ghost = ff.addTab(there.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  ff.rm(live.id, { closing: true });
+  ff.wins.delete(home.id);
+  ff.focused = there.id;
+  x.b.windows.onFocusChanged.fire(there.id);
+  await wait(500);
+  assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
+  x.kill();
+});
+
+test("a window closing while a new tab is copied to the windows is no error, and the others still get it", async () => {
+  const ff = new FakeFirefox();
+  const home = ff.addWindow({ focused: true });
+  const closing = ff.addWindow();
+  const other = ff.addWindow();
+  for (const w of [home, closing, other]) ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const create = x.b.tabs.create;
+  x.b.tabs.create = async p => { if (p.windowId === closing.id && ff.wins.has(closing.id)) { for (const id of [...ff.wins.get(closing.id).order]) ff.rm(id, { closing: true }); ff.wins.delete(closing.id); } return create(p); };
+  const t = ff.addTab(home.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, "https://a.example/");
+  await wait(3000);
+  const key = ff.values.get(t.id)?.syncKey;
+  assert.ok(key, "the tab is synced");
+  assert.ok(ff.list(other.id).some(y => y.url === GHOST("ghost", key)), "and the window after the closed one has it");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+// (You pinned it, so it is an essential, and an essential's copy you close comes back: the
+// chaos test's "a tab pinned and closed at once is still an essential".)
+test("a tab pinned and closed at once leaves no error, and is an essential", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const x = await run(ff);
+  const set = x.b.sessions.setTabValue;
+  x.b.sessions.setTabValue = async (id, k, v) => { if (k === "essentialKey") ff.rm(id); return set(id, k, v); };
+  await x.b.tabs.update(t.id, { pinned: true });
+  await wait(2000);
+  assert.deepEqual((ff.store.essentials ?? []).map(e => e.url), ["https://a.example/"]);
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a tab moved to a new window leaves its copy in the window it came from, though Firefox still lists it there for a moment", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const from = ff.addWindow({ focused: true });
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  ff.addTab(from.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const tab = ff.addTab(from.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const to = ff.addWindow();
+  // For a moment the old window lists the tab, under the same ID: long enough for a whole
+  // look at every window (each query({}) in reconcileAll and fillWindow).
+  let stale = 6;
+  const query = x.b.tabs.query;
+  x.b.tabs.query = async q => {
+    const tabs = await query(q);
+    if (q.windowId === undefined && stale-- > 0) tabs.push({ ...ff.snap(ff.tabs.get(tab.id)), windowId: from.id });
+    return tabs;
+  };
+  await x.b.tabs.move(tab.id, { windowId: to.id, index: 0 });
+  await wait(2000);
+  assert.ok(ff.urls(from.id).includes(GHOST("ghost", "a").replace("moz-extension://tidier/", "")), "the old window has a ghost");
+  x.kill();
+});
+
+test("an unloaded tab that has lost its title gets it back, and one that has not is left alone", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const from = ff.addWindow();
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(from.id, { url: GHOST("ghost", "a"), discarded: true, title: "A", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const to = ff.addWindow();
+  ff.addTab(to.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  ff.log.length = 0;
+  ff.tabs.get(ghost.id).title = "tidier/ghost.html?kind=ghost&key=a"; // as Firefox moves it
+  await x.b.tabs.move(ghost.id, { windowId: to.id, index: 1 });
+  await wait(1500);
+  assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === ghost.id), "its placeholder is loaded again");
+  const entries = ff.log.length;
+  ff.tabs.get(ghost.id).title = "A";
+  ff.tabs.get(ghost.id).discarded = true;
+  await x.js("reconcileAll()");
+  assert.ok(!ff.log.slice(entries).some(([what, id]) => what === "update-url" && id === ghost.id), "one with its title is left alone");
+  x.kill();
+});
+
+// Pinned is what an essential is: one reopened after its essential was removed is one again,
+// in every window, and not a stray pinned tab in one (chaos test: "an essential reopened after
+// you unpinned it is an essential again").
+test("a tab reopened pinned whose essential has been removed is an essential again", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const t = ff.addTab(w.id, { url: "https://gone.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "removed" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  await wait(3000);
+  assert.equal(ff.tabs.get(t.id).pinned, true, "it stays pinned");
+  const made = (ff.store.essentials ?? []).find(e => e.url === "https://gone.example/");
+  assert.ok(made, "as an essential");
+  assert.equal(ff.values.get(t.id).essentialKey, made.key, "tagged as that one");
+  assert.ok(!ff.values.get(t.id).syncKey, "and not a synced tab as well");
+  x.kill();
+});
+
+test("a ghost that opened its page while its window's tab was going does not get a second heir", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const closing = ff.addWindow({ focused: true });
+  ff.addTab(closing.id, { url: "about:blank", active: true });
+  const live = ff.addTab(closing.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const first = ff.addWindow();
+  ff.addTab(first.id, { url: "about:blank", active: true });
+  ff.addTab(first.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const shown = ff.addWindow();
+  const ghost = ff.addTab(shown.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // The queue is busy. The selected ghost asks what to do, and then the window closes: by the
+  // time the ghost's turn comes the live tab is gone, ahead of the hand-over.
+  x.js("serial(() => sleep(300))");
+  const asked = x.send({ type: "ghostShown" }, { tab: ff.snap(ff.tabs.get(ghost.id)) });
+  ff.rm(live.id, { closing: true });
+  await wait(1500);
+  assert.equal((await asked).load, true);
+  const lives = [...ff.values.values()].filter(v => v.syncKey === "a" && v.syncRole === "live").length;
+  assert.equal(lives, 1, "one live tab");
+  x.kill();
+});
+
+test("a window reopened with a page that is open elsewhere does not keep it loaded twice", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const one = ff.addWindow({ focused: true });
+  const here = ff.addTab(one.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const two = ff.addWindow();
+  ff.addTab(two.id, { url: "about:blank", active: true });
+  const twin = ff.addTab(two.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  assert.equal(ff.tabs.get(here.id).discarded, false, "the one you are using stays");
+  assert.equal(ff.tabs.get(twin.id).discarded, true, "the other is unloaded");
+  assert.equal(ff.values.get(twin.id).syncRole, "ghost");
+  x.kill();
+});
+
+test("a placeholder that never reports its load finished is unloaded all the same", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), status: "loading", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.send({ type: "ghostReady", icon: false }, { tab: ff.snap(ghost), url: ghost.url });
+  await wait(500);
+  assert.equal(ff.tabs.get(ghost.id).discarded, false, "it waits at first");
+  await wait(11000);
+  assert.equal(ff.tabs.get(ghost.id).discarded, true);
+  assert.equal(x.js("awaitingIcon.size"), 0);
+  x.kill();
+});
+
+test("an essential reopened with ⌘⇧T unloads the other window's loaded copy", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  ff.addTab(here.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const open = ff.addTab(there.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  const back = ff.addTab(here.id, { url: "https://e.example/", pinned: true, active: false, cookieStoreId: C1 }, { essentialKey: "e" });
+  x.b.tabs.onCreated.fire(ff.snap(back));
+  await wait(1000);
+  assert.ok(ff.tabs.get(open.id).url.startsWith(GHOST("essential", "e")), "the other copy is a placeholder again");
+  assert.equal(ff.tabs.get(back.id).url, "https://e.example/");
+  x.kill();
+});
+
+test("a copy of an essential unpinned just after it was made is an ordinary tab", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.js(`busy.add(${t.id})`); // as createEssentials does for a second and a half
+  await x.b.tabs.update(t.id, { pinned: false });
+  await wait(3000);
+  assert.deepEqual(ff.store.essentials, [], "the essential is gone");
+  assert.ok(ff.synced[ff.values.get(t.id).syncKey], "and the tab is synced");
+  x.kill();
+});
+
+test("a pinned tab that is no essential, unpinned, is synced", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const t = ff.addTab(w.id, { url: "https://a.example/", pinned: true, cookieStoreId: C1 });
+  const x = await run(ff);
+  x.js(`syncKeyByTab.delete(${t.id}); keyByTab.delete(${t.id})`);
+  ff.values.delete(t.id);
+  ff.store.essentials = [];
+  x.js("essentialsList.set([])");
+  await x.b.tabs.update(t.id, { pinned: false });
+  await wait(3000);
+  assert.ok(ff.synced[ff.values.get(t.id)?.syncKey], "it has a record");
+  x.kill();
+});
+
+test("a new tab dragged to the essentials stays a tab", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  const fresh = ff.addTab(w.id, { url: "about:newtab", active: true, cookieStoreId: C1 });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const page = ff.addTab(w.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  await x.js(`sidebarAction(${w.id}, { type: "pin", tabId: ${fresh.id}, pinned: true })`);
+  assert.equal(ff.tabs.get(fresh.id).pinned, false);
+  await x.js(`sidebarAction(${w.id}, { type: "pin", tabId: ${page.id}, pinned: true })`);
+  assert.equal(ff.tabs.get(page.id).pinned, true, "a page does become one");
+  x.kill();
+});
+
+test("a tab closed as its new window opens does not leave the window empty", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  const first = ff.addTab(w.id, { url: "about:newtab", active: true });
+  ff.hooks.getTabValue = async id => { if (id === first.id) throw new Error(`Invalid tab ID: ${id}`); };
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1500);
+  assert.ok(ff.urls(w.id).includes(GHOST("ghost", "a").replace("moz-extension://tidier/", "")), "the window still gets its tabs");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("the space you switched to is kept, and an update shows the selected tab's space", async () => {
+  const ff = new FakeFirefox();
+  const C2 = "firefox-container-2";
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/", { cookieStoreId: C2 }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const inTwo = ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C2 }, { syncKey: "b", syncRole: "live" });
+  const x = await alone(ff);
+  const stored = {};
+  x.b.sessions.setWindowValue = async (id, k, v) => { stored[k] = v; };
+  await x.js(`switchSpace(${w.id}, "${C2}")`);
+  assert.equal(stored.space, C2, "the switch is stored with the window");
+  // An update: a new background page, with what is stored behind the selected tab.
+  const y = await (async () => { const n = ff.boot(); n.b.sessions.getWindowValue = async () => C1; n.b.runtime.onInstalled.fire({ reason: "update" }); await wait(3500); return n; })();
+  assert.equal(y.js(`activeSpace.get(${w.id})`), C2);
+  assert.equal(ff.tabs.get(inTwo.id).hidden, false);
+  y.kill();
+});
+
+test("a tab closed just as it is synced leaves no record, and stops nothing", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const t = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, "https://a.example/");
+  ff.hooks.setRole = true;
+  const set = x.b.sessions.setTabValue;
+  x.b.sessions.setTabValue = async (id, k, v) => { if (id === t.id && k === "syncKey") ff.rm(id); return set(id, k, v); };
+  await wait(2500);
+  assert.deepEqual(ff.synced ?? {}, {}, "no record");
+  assert.equal(ff.urls(other.id).filter(u => u.startsWith("ghost.html")).length, 0, "and no ghost of it");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("an essential's placeholder selected while Tidier starts opens its page", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  const t = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, active: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  assert.equal(ff.tabs.get(t.id).url, "https://e.example/");
+  x.kill();
+});
+
+test("an essential's copy closed just after it was made comes back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const copy = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.js(`busy.add(${copy.id})`); // as createEssentials does for a second and a half
+  ff.rm(copy.id);
+  await wait(3000); // with Sidebery a copy is pinned only after a moment
+  assert.equal(ff.list(w.id).filter(t => t.pinned).length, 1, "the window has it again");
+  x.kill();
+});
+
+test("of two loaded copies, the selected one stays, also in a window you are not using", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const focused = ff.addWindow({ focused: true });
+  ff.addTab(focused.id, { url: "about:blank", active: true });
+  const one = ff.addWindow();
+  ff.addTab(one.id, { url: "about:blank", active: true });
+  const live = ff.addTab(one.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const two = ff.addWindow();
+  const shown = ff.addTab(two.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  assert.equal(ff.values.get(shown.id).syncRole, "live");
+  assert.equal(ff.tabs.get(live.id).discarded, true);
+  x.kill();
+});
+
+test("a reopened window whose tabs get their values late is not doubled", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  // Firefox opens the window, and has not set the values of its tabs yet.
+  const w = ff.addWindow();
+  const back = ff.addTab(w.id, { url: GHOST("ghost", "a"), active: true, discarded: true, title: "A", cookieStoreId: C1 });
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1500);
+  assert.equal(ff.urls(w.id).filter(u => u.startsWith("ghost.html")).length, 2, "filled as a new window");
+  ff.values.set(back.id, { syncKey: "a", syncRole: "ghost" });
+  await wait(3000);
+  assert.equal(ff.urls(w.id).filter(u => u.startsWith("ghost.html")).length, 1, "and the double is gone");
+  x.kill();
+});
+
+test("a new tab moved by Tidier and given an address at once is synced, with Sidebery too", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const fresh = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
+  x.b.tabs.onCreated.fire(ff.snap(fresh));
+  await wait(2000);
+  x.js(`syncBusy.add(${fresh.id})`); // folders first has just moved it (folders.js)
+  ff.navigate(fresh.id, "https://typed.example/");
+  await wait(3000);
+  assert.ok(ff.values.get(fresh.id)?.syncKey, "it has a key");
+  x.kill();
+});
+
+test("with Tidier alone, an essential moved just after its copy was made is moved everywhere", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = ["e", "f"].map(key => ({ key, url: `https://${key}.example/`, cookieStoreId: C1, title: key, icon: "x" }));
+  const w = ff.addWindow({ focused: true });
+  const first = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const second = ff.addTab(w.id, { url: GHOST("essential", "f"), pinned: true, cookieStoreId: C1 }, { essentialKey: "f" });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await alone(ff);
+  x.js(`busy.add(${second.id})`); // as createEssentials does for a second and a half
+  await x.b.tabs.move(second.id, { index: 0 });
+  await wait(500);
+  assert.deepEqual(ff.store.essentials.map(e => e.key), ["f", "e"]);
+  assert.ok(ff.tabs.has(first.id));
+  x.kill();
+});
+
+test("an essential's copy dragged to another window just after it was made is there once", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const from = ff.addWindow({ focused: true });
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  const copy = ff.addTab(from.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const to = ff.addWindow();
+  ff.addTab(to.id, { url: "about:blank", active: true });
+  ff.addTab(to.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.js(`busy.add(${copy.id})`); // as createEssentials does for a second and a half
+  await x.b.tabs.move(copy.id, { windowId: to.id, index: 0 });
+  await wait(3000); // after the window it left has got its copy back
+  assert.equal(ff.list(to.id).filter(t => t.pinned).length, 1);
+  x.kill();
+});
+
+// What follows was found by breaking each fix above on purpose: these cases passed either way.
+
+// A tab Firefox has closed already, while Tidier hears of it only a moment later.
+function goneInFirefox(ff, x, tabId, options) {
+  const fire = x.b.tabs.onRemoved.fire;
+  x.b.tabs.onRemoved.fire = (...a) => setTimeout(() => fire(...a), 2);
+  ff.rm(tabId, options);
+  x.b.tabs.onRemoved.fire = fire;
+}
+
+test("closing everywhere closes the others, also when Firefox has closed one and Tidier does not know yet", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const windows = [ff.addWindow({ focused: true }), ff.addWindow(), ff.addWindow()];
+  for (const w of windows) ff.addTab(w.id, { url: "about:blank", active: true });
+  const live = ff.addTab(windows[0].id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const gone = ff.addTab(windows[1].id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const stays = ff.addTab(windows[2].id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  const query = x.b.tabs.query;
+  x.b.tabs.query = async q => {
+    const tabs = await query(q);
+    if (q.windowId === undefined && ff.tabs.has(gone.id)) goneInFirefox(ff, x, gone.id, { closing: true });
+    return tabs;
+  };
+  ff.rm(live.id);
+  await wait(1000);
+  x.b.tabs.query = query;
+  assert.ok(!ff.tabs.has(stays.id), "the other ghost is closed");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a link a rule puts in its space is not in Recently Closed either", async () => {
+  const ff = new FakeFirefox();
+  const C2 = "firefox-container-2";
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  ff.store.rules = [{ url: "link.example", space: C2 }];
+  const x = await alone(ff);
+  await wait(200);
+  ff.recentlyClosed = [{ tab: { url: "https://link.example/", sessionId: "replaced", windowId: w.id } }, { tab: { url: "https://b.example/", sessionId: "yours", windowId: w.id } }];
+  const link = ff.addTab(w.id, { url: "about:blank", active: true });
+  x.b.tabs.onCreated.fire(ff.snap(link));
+  ff.navigate(link.id, "https://link.example/");
+  await wait(1000);
+  assert.ok(ff.list(w.id).some(t => t.url === "https://link.example/" && t.cookieStoreId === C2), "it is in the rule's space");
+  assert.deepEqual(ff.recentlyClosed.map(c => c.tab.sessionId), ["yours"]);
+  x.kill();
+});
+
+test("a pinned tab closed as its window is filled does not leave the window without essentials", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  ff.addTab(home.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const stray = ff.addTab(w.id, { url: "https://stray.example/", pinned: true, cookieStoreId: C1 });
+  ff.hooks.getTabValue = async id => { if (id === stray.id) throw new Error(`Invalid tab ID: ${id}`); };
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(6000); // with Sidebery a new window's copies are pinned only after it has started
+  assert.ok(ff.urls(w.id).some(u => u.startsWith("ghost.html?kind=essential")), "the window has its essential");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("an essential moved to another window leaves a copy, though Firefox still lists it in the old one for a moment", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const from = ff.addWindow({ focused: true });
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  const copy = ff.addTab(from.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const to = ff.addWindow();
+  ff.addTab(to.id, { url: "about:blank", active: true });
+  ff.addTab(to.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  let stale = 3;
+  const query = x.b.tabs.query;
+  x.b.tabs.query = async q => {
+    const tabs = await query(q);
+    if (q.windowId === undefined || q.windowId === from.id) { if (stale-- > 0) tabs.push({ ...ff.snap(ff.tabs.get(copy.id)), windowId: from.id }); }
+    return tabs;
+  };
+  await x.b.tabs.move(copy.id, { windowId: to.id, index: 0 });
+  await wait(3000);
+  assert.equal(ff.list(from.id).filter(t => t.pinned).length, 1, "the window it left has a copy");
+  assert.equal(ff.list(to.id).filter(t => t.pinned).length, 1, "and the window it came to has it once");
+  x.kill();
+});
+
+test("an essential's placeholder opens its page itself if the loaded copy closes as it is moved in", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const placeholder = ff.addTab(here.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  ff.addTab(there.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.b.tabs.move = async id => { throw new Error(`Invalid tab ID: ${id}`); };
+  const asked = await x.send({ type: "essentialShown" }, { tab: ff.snap(ff.tabs.get(placeholder.id)) });
+  assert.equal(asked.load, true);
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a tab closed before its record is made does not stay in the record", async () => {
+  const ff = new FakeFirefox();
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const other = ff.addWindow();
+  ff.addTab(other.id, { url: "about:blank", active: true });
+  const x = await run(ff);
+  const t = ff.addTab(w.id, { url: "about:blank" });
+  x.b.tabs.onCreated.fire(ff.snap(t));
+  ff.navigate(t.id, "https://a.example/");
+  // Closed just after Tidier looked it up. Tidier hears of it before it has a key, so that
+  // its closing means nothing to the tab record: setRole is what finds out.
+  ff.hooks.getTabValue = async (id, k) => { if (id === t.id && k === "syncKey" && ff.tabs.has(id)) ff.rm(id); };
+  await wait(2500);
+  assert.deepEqual(ff.synced ?? {}, {}, "no record");
+  assert.equal(ff.urls(other.id).filter(u => u.startsWith("ghost.html")).length, 0, "and no ghost of it");
+  assert.equal(x.js("syncKeyByTab.size"), 0);
+  x.kill();
+});
+
+test("a window closing hands its live tab to the ghost you are looking at, which opens it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const closing = ff.addWindow();
+  ff.addTab(closing.id, { url: "about:blank", active: true });
+  const live = ff.addTab(closing.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const first = ff.addWindow({ focused: true });
+  ff.addTab(first.id, { url: "about:blank", active: true });
+  const notThis = ff.addTab(first.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const shown = ff.addWindow();
+  const ghost = ff.addTab(shown.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.js(`focusedWindowId = ${shown.id}`); // no event yet: as a window you have just come to
+  ff.rm(live.id, { closing: true });
+  await wait(500);
+  assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
+  assert.equal(ff.values.get(ghost.id).syncRole, "live");
+  assert.equal(ff.values.get(notThis.id).syncRole, "ghost");
+  x.kill();
+});
+
+test("a selected ghost with no live tab left opens its page when it is selected", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(w.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const live = ff.addTab(ff.addWindow().id, { url: "https://a.example/", cookieStoreId: C1, active: true }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  goneInFirefox(ff, x, live.id, { closing: true });
+  ff.select(ghost.id);
+  await wait(500);
+  assert.equal(ff.tabs.get(ghost.id).url, "https://a.example/");
+  x.kill();
+});
+
+test("a placeholder that is the live tab, selected in a window you were not using, opens when you come to it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const there = ff.addWindow();
+  const placeholder = ff.addTab(there.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  assert.ok(ff.tabs.get(placeholder.id).url.startsWith("moz-extension"), "it waits");
+  ff.focused = there.id;
+  x.b.windows.onFocusChanged.fire(there.id);
+  await wait(500);
+  assert.equal(ff.tabs.get(placeholder.id).url, "https://a.example/");
+  x.kill();
+});
+
+test("an essential's copy on its way to its placeholder is not sent there again and again", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank" });
+  const open = ff.addTab(here.id, { url: "https://e.example/", pinned: true, active: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const other = ff.addTab(there.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  // Firefox unloaded the other copy with the page in it. Sent to its placeholder, it says "loading"
+  // while it is still about:blank; the placeholder's address comes only if the load gets through.
+  Object.assign(ff.tabs.get(other.id), { url: "https://e.example/", discarded: true });
+  let starts = 0;
+  const update = x.b.tabs.update;
+  x.b.tabs.update = async (id, p) => {
+    if (id !== other.id || !p.url) return update(id, p);
+    starts++;
+    if (starts >= 50) return update(id, p);
+    Object.assign(ff.tabs.get(id), { url: "about:blank", discarded: false, status: "loading" });
+    x.b.tabs.onUpdated.fire(id, { status: "loading" }, ff.snap(ff.tabs.get(id)));
+    setTimeout(() => { if (starts < 50) update(id, p); }, 100 / 100);
+    return ff.snap(ff.tabs.get(id));
+  };
+  ff.navigate(open.id, "https://e.example/");
+  await wait(500);
+  assert.equal(starts, 1, "its load is started once");
+  x.kill();
+});
+
+test("an essential's placeholder opens its page itself when the other copy is still on its way, on about:blank", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const placeholder = ff.addTab(here.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const onItsWay = ff.addTab(there.id, { url: "about:blank", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  const asked = await x.send({ type: "essentialShown" }, { tab: ff.snap(ff.tabs.get(placeholder.id)) });
+  assert.equal(asked.load, true);
+  assert.equal(ff.tabs.get(onItsWay.id).windowId, there.id, "the other copy is not moved");
+  x.kill();
+});
+
+test("a ghost made a moment ago is not taken for a page, nor unloaded before it has its title", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "about:blank", active: true });
+  const live = ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1, discarded: true }, { syncKey: "a", syncRole: "live" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const fresh = ff.addTab(there.id, { url: "about:blank", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" }); // Firefox says about:blank until the address is known
+  const x = await run(ff);
+  assert.equal(ff.values.get(live.id).syncRole, "live", "the live tab keeps its role");
+  assert.equal(ff.values.get(fresh.id).syncRole, "ghost");
+  assert.equal(ff.tabs.get(fresh.id).discarded, false, "and the new ghost goes on loading");
+  x.kill();
+});
+
+test("a window closed before it has finished starting holds nothing up", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  // Firefox waits for a new window to finish starting, and never answers if it closes first.
+  const create = x.b.tabs.create;
+  x.b.tabs.create = p => p.windowId === w.id && ff.wins.has(w.id) ? new Promise(() => {}) : create(p);
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1000);
+  ff.rm(ff.list(w.id)[0].id, { closing: true });
+  ff.wins.delete(w.id);
+  x.b.windows.onRemoved.fire(w.id);
+  let answered = false;
+  x.js("serial(() => {})").then(() => { answered = true; });
+  await wait(3000);
+  assert.ok(answered, "the queue goes on");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a tab closed at the last moment stops nothing: unpinned, pinned or moved in the sidebar, or selected by a pull", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = ["e", "f"].map(key => ({ key, url: `https://${key}.example/`, cookieStoreId: C1, title: key, icon: "x" }));
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const w = ff.addWindow({ focused: true });
+  const e = ff.addTab(w.id, { url: "https://e.example/", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const f = ff.addTab(w.id, { url: GHOST("essential", "f"), pinned: true, cookieStoreId: C1 }, { essentialKey: "f" });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await alone(ff);
+  const refused = id => { throw new Error(`Invalid tab ID: ${id}`); };
+
+  const { removeTabValue } = x.b.sessions;
+  x.b.sessions.removeTabValue = async id => refused(id);
+  await x.js(`serial(() => onUnpinned(${JSON.stringify(ff.snap(e))}))`);
+  x.b.sessions.removeTabValue = removeTabValue;
+
+  const { update, move } = x.b.tabs;
+  x.b.tabs.update = async id => refused(id);
+  await x.js(`serial(() => pinFromSidebar(${a.id}, true))`);
+  x.b.tabs.update = update;
+  x.b.tabs.move = async id => refused(id);
+  await x.js(`serial(() => moveEssential(${w.id}, ${e.id}, null))`);
+  x.b.tabs.move = move;
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a tab closed as a pull leaves it for that tab does not stop the pull", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const there = ff.addWindow();
+  const calm = ff.addTab(there.id, { url: "https://b.example/" });
+  const live = ff.addTab(there.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const ghost = ff.addTab(here.id, { url: GHOST("ghost", "a"), cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  const update = x.b.tabs.update;
+  x.b.tabs.update = async (id, p) => { if (id === calm.id) throw new Error(`Invalid tab ID: ${id}`); return update(id, p); };
+  ff.select(ghost.id);
+  await wait(1500);
+  assert.equal(ff.tabs.get(live.id).windowId, here.id, "the live tab has come here");
+  assert.equal(x.js("problems.join()"), "");
+  x.kill();
+});
+
+test("a window reopened and focused before its tabs were known opens its selected tab", async () => {
+  for (const liveElsewhere of [false, true]) {
+    const ff = new FakeFirefox();
+    ff.store.syncedTabs = { a: entry("https://a.example/") };
+    const home = ff.addWindow({ focused: true });
+    ff.addTab(home.id, { url: "about:blank", active: true });
+    const live = liveElsewhere ? ff.addTab(home.id, { url: "https://a.example/", cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" }) : null;
+    const x = await run(ff);
+    // Firefox brings the window back with its values; its focus and selection come first.
+    const w = ff.addWindow();
+    const back = ff.addTab(w.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+    ff.focused = w.id;
+    x.b.windows.onFocusChanged.fire(w.id);
+    x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+    await wait(1000);
+    // The placeholder asks once it has loaded, on a busy machine after all that.
+    if (ff.tabs.has(back.id)) await x.send({ type: "ghostShown" }, { tab: ff.snap(ff.tabs.get(back.id)) });
+    await wait(500);
+    const open = ff.list(w.id).find(t => t.active);
+    if (liveElsewhere) assert.equal(open.id, live.id, "the live tab has come here");
+    else assert.equal(open.url, "https://a.example/", "it has opened its page");
+    x.kill();
+  }
+});
+
+test("a ghost that shows the page, left when you come back to its window, is unloaded", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const there = ff.addWindow();
+  const other = ff.addTab(there.id, { url: "about:blank" });
+  const page = ff.addTab(there.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  // (At the start a page is loaded once: in the window you are not using it becomes the
+  // placeholder page, reconcileAll. As if it had come back after that:)
+  ff.navigate(page.id, "https://a.example/");
+  // Clicking another tab in that window: Firefox selects it and focuses the window.
+  for (const t of ff.list(there.id)) ff.tabs.get(t.id).active = false;
+  ff.tabs.get(other.id).active = true;
+  x.b.tabs.onActivated.fire({ tabId: other.id, windowId: there.id, previousTabId: page.id });
+  ff.focused = there.id;
+  x.b.windows.onFocusChanged.fire(there.id);
+  await wait(500);
+  assert.equal(ff.tabs.get(page.id).discarded, true, "and it is unloaded");
+  assert.ok(ff.tabs.has(page.id), "not closed");
+  x.kill();
+});
+
+test("a reopened window's placeholder whose title comes late, as an address, gets its title back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const x = await run(ff);
+  const w = ff.addWindow();
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const back = ff.addTab(w.id, { url: GHOST("ghost", "a"), discarded: true, title: "A", cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  x.b.windows.onCreated.fire({ id: w.id, type: "normal", incognito: false });
+  await wait(1500);
+  ff.log.length = 0;
+  ff.tabs.get(back.id).title = "tidier/ghost.html?kind=ghost&key=a";
+  await wait(3000);
+  assert.ok(ff.log.some(([what, id]) => what === "update-url" && id === back.id), "its placeholder is loaded again");
+  x.kill();
+});
+
+test("a tab dragged above a new tab in the sidebar is put there, not at the end", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/"), b: entry("https://b.example/"), c: entry("https://c.example/") };
+  const w = ff.addWindow({ focused: true });
+  const a = ff.addTab(w.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const fresh = ff.addTab(w.id, { url: "about:newtab", cookieStoreId: C1 });
+  ff.addTab(w.id, { url: "https://b.example/", cookieStoreId: C1 }, { syncKey: "b", syncRole: "live" });
+  ff.addTab(w.id, { url: "https://c.example/", cookieStoreId: C1 }, { syncKey: "c", syncRole: "live" });
+  const x = await alone(ff);
+  const c = ff.list(w.id).find(t => t.url === "https://c.example/");
+  await x.js(`moveTab(${w.id}, ${c.id}, ${fresh.id}, undefined)`);
+  assert.deepEqual(ff.list(w.id).map(t => t.id), [a.id, c.id, fresh.id, ff.list(w.id).find(t => t.url === "https://b.example/").id]);
+  x.kill();
+});
+
+test("a placeholder that was selected just as it was ready is unloaded when you have gone past it", async () => {
+  const ff = new FakeFirefox();
+  ff.store.syncedTabs = { a: entry("https://a.example/") };
+  const home = ff.addWindow({ focused: true });
+  ff.addTab(home.id, { url: "https://a.example/", active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "live" });
+  const other = ff.addWindow();
+  const stay = ff.addTab(other.id, { url: "about:blank" });
+  const ghost = ff.addTab(other.id, { url: GHOST("ghost", "a"), active: true, cookieStoreId: C1 }, { syncKey: "a", syncRole: "ghost" });
+  const x = await run(ff);
+  x.send({ type: "ghostReady", icon: false }, { tab: ff.snap(ghost), url: ghost.url });
+  await wait(100);
+  assert.equal(ff.tabs.get(ghost.id).discarded, false, "selected, it stays");
+  for (const t of ff.list(other.id)) ff.tabs.get(t.id).active = false;
+  ff.tabs.get(stay.id).active = true;
+  x.b.tabs.onActivated.fire({ tabId: stay.id, windowId: other.id, previousTabId: ghost.id });
+  await wait(100);
+  assert.equal(ff.tabs.get(ghost.id).discarded, true);
+  assert.equal(x.js("awaitingIcon.size"), 0);
+  x.kill();
 });

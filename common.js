@@ -24,7 +24,7 @@ function serial(fn) {
       work.longestJobMs = Math.max(work.longestJobMs, ms);
     }
   });
-  queue = run.catch(noteError);
+  queue = run.catch(err => noteError(err, fn));
   return run;
 }
 
@@ -32,10 +32,14 @@ function serial(fn) {
 // so they are also kept for the smoke test ("stats" in tabsync.js), which fails
 // on any: an error there is a tab that was not handled.
 const problems = [];
-function noteError(err) {
+function noteError(err, job) {
   console.error("Tidier:", err);
   work.errors++;
-  problems.push(String(err?.message ?? err));
+  // Where it happened, shortly: a message alone does not say which of many calls it was.
+  // Firefox's own refusals have no stack, so the job they stopped says it instead.
+  const where = String(err?.stack ?? "").split("\n").filter(Boolean).slice(0, 3).map(f => f.replace(/@.*\//, " ").replace(/:\d+$/, "")).join(" < ")
+    || String(job ?? "").replace(/\s+/g, " ").slice(0, 80);
+  problems.push(String(err?.message ?? err) + (where ? ` (${where})` : ""));
   if (problems.length > 20) problems.shift();
 }
 globalThis.addEventListener?.("unhandledrejection", event => noteError(event.reason));
@@ -95,6 +99,36 @@ async function removeTabs(ids, marks) {
   } finally {
     ids.forEach(id => marks?.delete(id));
   }
+}
+// A tab moved to another window: Firefox announces the move while it is still closing the
+// tab in the old window, under the same ID, so for a moment the old window lists it. Looked
+// at then, the window it left seems to have it still, and is not given its copy. (`stale`
+// says whether a tab listed with that ID is still the old one.)
+async function movedAway(tabId, stale) {
+  for (let i = 0; i < 40; i++) {
+    if (!(await browser.tabs.query({}).catch(() => [])).some(t => t.id === tabId && stale(t))) return;
+    await sleep(25);
+  }
+}
+// A new tab, or nothing if its window has closed meanwhile: a window you close at any
+// moment is no error, and must not stop the work for the other windows. Any other
+// refusal is passed on. Firefox answers only once a new window has finished starting, and
+// never if it is closed before that: the whole queue would wait for the answer, for a job's
+// time limit, so the closing of the window is an answer too.
+const tabsOnTheirWay = new Set(); // what to do when a window closes (one listener: each new one is a message to Firefox)
+browser.windows.onRemoved.addListener(windowId => { for (const heard of tabsOnTheirWay) heard(windowId); });
+function createTab(props) {
+  const { windowId } = props;
+  const made = browser.tabs.create(props).catch(async err => {
+    if (windowId !== undefined && !(await browser.windows.get(windowId).catch(() => null))) return null;
+    throw err;
+  });
+  let heard;
+  const closed = new Promise(resolve => {
+    heard = id => { if (id === windowId) resolve(null); };
+    tabsOnTheirWay.add(heard);
+  });
+  return Promise.race([made, closed]).finally(() => tabsOnTheirWay.delete(heard));
 }
 const isWeb = url => /^https?:/i.test(url || "");
 // Same host, ignoring a leading "www.".
@@ -274,6 +308,7 @@ async function refusedInWindow(windowId, err) {
 //   Sidebery gives it the active panel instead. Seen on a slower machine
 //   (GitHub's), not on a fast Mac.
 const NEW_WINDOW_DELAY_MS = 200;
+const RESTORED_LATE_MS = 3000; // see windows.onCreated in tabsync.js
 const CREATE_GAP_MS = 0;
 const SORT_SETTLE_MS = 1500;
 const PIN_SETTLE_MS = 800;

@@ -42,9 +42,15 @@ function setList(list, options) {
   essentialsList.set(grouped, options);
 }
 
+// Whether it took: Firefox refuses a tab closed since. That is no error, and must not stop
+// the work on the other tabs. The same goes for setRole (tabsync.js).
 function tagTab(tabId, key) {
   keyByTab.set(tabId, key);
-  return browser.sessions.setTabValue(tabId, TAB_KEY, key).catch(err => { ifGone(err); keyByTab.delete(tabId); }); // its close was told before this answer
+  return browser.sessions.setTabValue(tabId, TAB_KEY, key).then(() => true, err => {
+    if (!isGone(err)) { noteError(err); return true; } // refused otherwise: still known, here and by its address
+    keyByTab.delete(tabId); // its close was told before this answer
+    return false;
+  });
 }
 
 async function keyOf(tab) {
@@ -99,19 +105,20 @@ async function createEssentials(windowId, items, settle = () => sleep(PIN_SETTLE
       // Firefox refuses to create a tab both pinned and unloaded, so it is pinned next.)
       const alone = tidierAlone ? { discarded: true, title: entry.name || entry.title || entry.url } : {};
       let refused = null;
-      const tab = await browser.tabs.create({
+      // (createTab, common.js: nothing if the window closes meanwhile, also before Firefox answers.)
+      const tab = await createTab({
         windowId, url: ghostUrl("essential", entry.key), active: false,
         cookieStoreId: entry.cookieStoreId, index, ...alone,
       }).catch(err => { refused = err; return null; });
       if (!tab) {
-        if (await refusedInWindow(windowId, refused)) continue;
+        if (refused && await refusedInWindow(windowId, refused)) continue;
         break; // the window has gone
       }
       busy.add(tab.id);
       tabs.push({ tab, entry });
       // (Refused, it is still known by its address, and must still be pinned: left unpinned it
       // would be closed as a stray, and made again, and closed.)
-      await tagTab(tab.id, entry.key).catch(noteError);
+      await tagTab(tab.id, entry.key);
       // Closed by you before it could be told apart: nothing brought it back.
       if (!keyByTab.has(tab.id)) closedAlready.push(entry.key);
       else if (tidierAlone) {
@@ -381,7 +388,8 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
 // ignored (ownMoves), so the windows do not answer each other.
 const ownMoves = new Set();
 browser.tabs.onMoved.addListener((tabId, info) => {
-  if (ownMoves.delete(tabId) || busy.has(tabId) || !keyByTab.has(tabId)) return;
+  // (A copy just made is placed by Sidebery; without it, a move that is not Tidier's is yours.)
+  if (ownMoves.delete(tabId) || (busy.has(tabId) && !tidierAlone) || !keyByTab.has(tabId)) return;
   serial(() => onEssentialMoved(info.windowId));
 });
 
@@ -426,7 +434,7 @@ async function sortEssentials(windowId, list) {
 // brought (it may be loaded) and put it in the copy's place.
 browser.tabs.onDetached.addListener((tabId, info) => {
   if (!keyByTab.has(tabId)) return;
-  serial(() => ensureWindow(info.oldWindowId));
+  serial(async () => { await movedAway(tabId, t => t.windowId === info.oldWindowId); await ensureWindow(info.oldWindowId); });
 });
 browser.tabs.onAttached.addListener((tabId, info) => {
   // (Busy or not: a copy that just appeared can be dragged too.)
@@ -494,7 +502,7 @@ async function dropDoubleCopies(tabId, windowId) {
 // itself. A copy that loads anyway (restored by Firefox, or unloaded by it
 // and selected again) makes the other copies placeholders (oneLoaded).
 
-const isLoadedCopy = t => !t.discarded && !isGhostUrl(t.url);
+const isLoadedCopy = t => !t.discarded && isWeb(t.url); // (not one still on about:blank, on its way to a page or its placeholder)
 
 async function copiesOf(key) {
   const pinned = await browser.tabs.query({ pinned: true });
@@ -526,7 +534,8 @@ async function essentialShown(tab) {
     await createEssentials(loaded.windowId, [{ entry, index: loaded.index + 1 }], () => Promise.resolve());
   }
   // Moved into the placeholder's place; onDetached gives the old window one.
-  await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index }).catch(ifGone);
+  // Refused if you have just closed it: this placeholder then opens the page itself.
+  if (await browser.tabs.move(loaded.id, { windowId: tab.windowId, index: tab.index }).then(() => false, err => { ifGone(err); return true; })) return true;
   await browser.tabs.update(loaded.id, { active: true }).catch(() => {});
   await dropDoubleCopies(loaded.id, tab.windowId); // here, in case its arrival was not looked at
   return false;
@@ -536,7 +545,7 @@ async function essentialShown(tab) {
 // are using, else a loaded one there, else the one used last. Every other copy
 // that shows the real page (loaded, or unloaded by Firefox) becomes a placeholder.
 async function oneLoaded(key) {
-  const real = (await copiesOf(key)).filter(t => !isGhostUrl(t.url));
+  const real = (await copiesOf(key)).filter(t => isWeb(t.url));
   const loaded = real.filter(t => !t.discarded);
   const here = loaded.filter(t => t.windowId === focusedWindowId);
   const keep = here.find(t => t.active) || here[0] || loaded.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
@@ -557,8 +566,10 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
 // Switching to a window whose selected tab is an essential's placeholder.
 browser.windows.onFocusChanged.addListener(windowId => {
-  if (!started || windowId === browser.windows.WINDOW_ID_NONE) return;
-  serial(async () => {
+  if (started && windowId !== browser.windows.WINDOW_ID_NONE) selectedEssential(windowId);
+});
+function selectedEssential(windowId) {
+  return serial(async () => {
     const [active] = await browser.tabs.query({ windowId, active: true });
     if (!active?.pinned || !isGhostUrl(active.url) || !(await keyOf(active))) return;
     if (await essentialShown(active)) {
@@ -566,7 +577,7 @@ browser.windows.onFocusChanged.addListener(windowId => {
       if (entry) await browser.tabs.update(active.id, { url: entry.url }).catch(() => {});
     }
   });
-});
+}
 
 // A new tab page you pinned has no page to be an essential of, until you give it an address.
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
@@ -575,8 +586,11 @@ browser.tabs.onUpdated.addListener((tabId, change, tab) => {
 }, { properties: ["url"] });
 
 // A copy started loading its page: the others become placeholders.
+// (A copy on its way to a page or its placeholder says it is loading while it is still
+// about:blank. Taken for a page, it would be sent to its placeholder again, which starts
+// that load over and says the same: a thousand times a second, until a load got through.)
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || isGhostUrl(tab.url)) return;
+  if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || !isWeb(tab.url)) return;
   const key = keyByTab.get(tabId);
   if (key) serial(() => oneLoaded(key));
 }, { properties: ["status"] });
