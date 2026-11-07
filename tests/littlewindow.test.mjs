@@ -571,6 +571,47 @@ test("a link's first tab, closed by Tidier, is not what ⌘⇧T brings back", as
   x.kill();
 });
 
+test("a tab closed in the middle of it is no fault, on the way to a small window or out of it", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const create = x.b.windows.create;
+  x.b.windows.create = async p => { await x.b.tabs.remove(p.tabId); throw new Error(`Invalid tab ID: ${p.tabId}`); };
+  const t = linkFromOutside(ff, x, w.id);
+  await wait(300);
+  assert.ok(!ff.tabs.has(t.id));
+  assert.deepEqual(popups(ff), []);
+  x.b.windows.create = create;
+  const u = linkFromOutside(ff, x, w.id, { url: "https://b.example/" });
+  await wait(300);
+  const move = x.b.tabs.move;
+  x.b.tabs.move = async id => { await x.b.tabs.remove(id); throw new Error(`Invalid tab ID: ${id}`); };
+  await x.js(`serial(() => keepLittle(${u.id}))`);
+  x.b.tabs.move = move;
+  await wait(300);
+  assert.equal(x.js(`problems.length`), 0, x.js(`problems.join()`));
+  assert.equal(x.js(`littles.size`), 0);
+  assert.equal(x.js(`syncKeyByTab.has(${u.id})`), false);
+  x.kill();
+});
+
+test("a refused move leaves the small window as it is, to try again", async () => {
+  const ff = new FakeFirefox();
+  const { w } = session(ff);
+  const x = await start(ff);
+  const t = linkFromOutside(ff, x, w.id);
+  await wait(300);
+  const move = x.b.tabs.move;
+  x.b.tabs.move = async () => { throw new Error("Invalid window ID"); };
+  await x.js(`serial(() => keepLittle(${t.id}))`);
+  assert.equal(x.js(`syncKeyByTab.has(${t.id})`), false, "not in the record");
+  assert.equal(x.js(`littles.size`), 1);
+  x.b.tabs.move = move;
+  await x.js(`serial(() => keepLittle(${t.id}))`);
+  assert.equal(ff.tabs.get(t.id).windowId, w.id);
+  x.kill();
+});
+
 test("an address that changes right away is one link: one small window, and a rule looks at the first", async () => {
   const ff = new FakeFirefox();
   const { w } = session(ff);

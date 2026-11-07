@@ -93,7 +93,10 @@ function littleTakes(tabId, url) {
   firstPage.delete(tabId);
   newTabs.delete(tabId);
   serial(async () => {
-    const opened = await littleSetting.get() && await littleForLink(tabId, url).catch(err => { noteError(err); return false; });
+    const opened = await littleSetting.get() && await littleForLink(tabId, url).catch(async err => {
+      if (await browser.tabs.get(tabId).catch(() => null)) noteError(err); // closed meanwhile is no fault
+      return false;
+    });
     if (opened) { newBlanks.delete(tabId); return; }
     await byRule(tabId, url); // what any new tab gets: it is off, or there is no window for it
     settleBlank(tabId);
@@ -201,7 +204,8 @@ async function keepLittle(tabId, windowId) {
   let into;
   if (target) {
     const before = await firstOfToday(target.id, tab.cookieStoreId);
-    await browser.tabs.move(tabId, { windowId: target.id, index: -1 });
+    // Refused only if the tab or the window closed just now: it stays where it is, or is gone.
+    if (!await browser.tabs.move(tabId, { windowId: target.id, index: -1 }).catch(() => null)) return;
     await register(tabId);
     await moveTab(target.id, tabId, before);
     into = target.id;
