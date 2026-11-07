@@ -1106,3 +1106,17 @@ test("an essential's placeholder selected while Tidier starts opens its page", a
   assert.equal(ff.tabs.get(t.id).url, "https://e.example/");
   x.kill();
 });
+
+test("an essential's copy closed just after it was made comes back", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const copy = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.js(`busy.add(${copy.id})`); // as createEssentials does for a second and a half
+  ff.rm(copy.id);
+  await wait(3000); // with Sidebery a copy is pinned only after a moment
+  assert.equal(ff.list(w.id).filter(t => t.pinned).length, 1, "the window has it again");
+  x.kill();
+});

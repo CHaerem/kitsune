@@ -24,6 +24,14 @@ const TAB_KEY = "essentialKey"; // sessions value on each essential tab
 const busy = new Set();
 // Tab ID -> key, so we know which essential a closed tab was.
 const keyByTab = new Map();
+// Copies Tidier closes itself. Any other copy that closes was you, and comes back, also
+// one that is still `busy` because it was made a moment ago.
+const ownCloses = new Set();
+async function closeOwnCopies(ids) {
+  ids.forEach(id => ownCloses.add(id));
+  await removeTabs(ids);
+  ids.forEach(id => ownCloses.delete(id));
+}
 
 // Each space's essentials are kept together, the spaces in the order they
 // already have in the list: Sidebery shows pinned tabs by space, and when
@@ -167,8 +175,7 @@ async function ensureWindow(windowId, settle) {
     return ts.filter(t => t !== keep && isGhostUrl(t.url)).map(t => t.id);
   });
   if (extra.length) {
-    extra.forEach(id => busy.add(id));
-    await removeTabs(extra);
+    await closeOwnCopies(extra);
     await forgetClosedPlaceholders("essential", [...copies.keys()].filter(k => copies.get(k).length > 1));
   }
   let index = 0;
@@ -234,15 +241,13 @@ async function onUnpinned(tab) {
     else {
       // Unpinned while the essential was being removed from another window
       // (its copies are removed then): it goes the same way.
-      busy.add(tab.id);
-      await browser.tabs.remove(tab.id).catch(() => {});
+      await closeOwnCopies([tab.id]);
     }
   }
   const pinned = await browser.tabs.query({ pinned: true });
   const keys = await Promise.all(pinned.map(keyOf));
   const copies = pinned.filter((t, i) => t.id !== tab.id && keys[i] === key).map(t => t.id);
-  copies.forEach(id => busy.add(id));
-  await removeTabs(copies);
+  await closeOwnCopies(copies);
   await forgetClosedPlaceholders("essential", [key]);
 }
 
@@ -307,8 +312,8 @@ async function fillMissingIcons(tab) {
 }
 
 browser.tabs.onRemoved.addListener((tabId, info) => {
-  if (busy.has(tabId)) { busy.delete(tabId); keyByTab.delete(tabId); return; }
-  if (info.isWindowClosing) { keyByTab.delete(tabId); return; }
+  busy.delete(tabId);
+  if (ownCloses.has(tabId) || info.isWindowClosing) { keyByTab.delete(tabId); return; }
   serial(() => onClosed(tabId, info.windowId));
 });
 
@@ -409,8 +414,7 @@ async function dropDoubleCopies(tabId, windowId) {
   const keys = await Promise.all(pinned.map(keyOf));
   const doubles = pinned.filter((t, i) => t.id !== tabId && keys[i] === key).map(t => t.id);
   if (!doubles.length) return;
-  doubles.forEach(id => busy.add(id));
-  await removeTabs(doubles);
+  await closeOwnCopies(doubles);
   await forgetClosedPlaceholders("essential", [key]);
   await sortEssentials(windowId, await getList());
 }

@@ -292,7 +292,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     })();
   }
   const lists = {
-    toForget, staleOpener, busy, keyByTab, ownMoves, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
+    toForget, staleOpener, busy, keyByTab, ownMoves, ownCloses, ownFolderMoves, foldersTimers, syncKeyByTab, syncRoleByTab,
     syncBusy, movedTabs, moveTimers, createdAt, pending, refreshTimers, lastRefresh, awaitingIcon, lastOrder, orderQueries,
     activeSpace, newTabs, firstPage, showTimers, closedIn, sidebarPorts, viewTimers,
   };
@@ -838,8 +838,8 @@ async function closeOrphan(tabId, kind, key) {
   if (!["ghost", "essential", "lazy"].includes(kind) || (await ghostInfo(kind, key))) return;
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || !isGhostUrl(tab.url)) return;
-  syncBusy.add(tabId); busy.add(tabId); forget(tabId);
-  await browser.tabs.remove(tabId).catch(() => {});
+  syncBusy.add(tabId); forget(tabId);
+  await closeOwnCopies([tabId]);
   await forgetClosedPlaceholders(kind, [key]);
 }
 

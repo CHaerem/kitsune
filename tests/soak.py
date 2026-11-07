@@ -705,7 +705,9 @@ INVARIANTS = LIB + r"""
       if (n > 1) bad("an essential is twice in a window", e.title || e.url, `window ${wi}: ${n}`);
     }
     for (const x of pinned) {
-      if (!x.ek || !byEssential.has(x.ek)) bad("a pinned tab that is no essential", x.label, x.url.slice(0, 80) + " key " + x.ek);
+      // (A page that is no web page, pinned with Firefox's own menu, is yours.)
+      if ((realWeb(x) || x.ghost) && (!x.ek || !byEssential.has(x.ek))) bad("a pinned tab that is no essential", x.label, x.url.slice(0, 80) + " key " + x.ek);
+      else if (!byEssential.has(x.ek)) continue;
       else if (byEssential.get(x.ek).cookieStoreId !== x.ctx) bad("an essential in another container", x.label, x.ctx + " vs " + byEssential.get(x.ek).cookieStoreId);
     }
     const order = pinned.map(x => x.ek).filter(k => byEssential.has(k)), wanted = keys.filter(k => order.includes(k));
