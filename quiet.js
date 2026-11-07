@@ -140,13 +140,10 @@ async function clearSpace(windowId, space) {
   let stayed = 0;
   for (const t of drawn) {
     const key = syncKeyByTab.get(t.id), entry = all[key];
+    if (entry ? entry.group || storedInFolder(all, key) : !NEW_TAB_PAGES.has(t.url)) continue;
     const selected = await browser.tabs.query({ active: true });
     if (selected.some(s => s.id === t.id || (entry && syncKeyByTab.get(s.id) === key))) continue;
-    if (!entry) {
-      if (NEW_TAB_PAGES.has(t.url)) await browser.tabs.remove(t.id).catch(() => {});
-      continue;
-    }
-    if (entry.group || storedInFolder(all, key)) continue;
+    if (!entry) { await browser.tabs.remove(t.id).catch(() => {}); continue; }
     const item = await rememberTab(key, entry); // first: closesQuietly unloads the page
     if (!(await closesQuietly(key))) { stayed++; continue; }
     await closeEverywhere(key, { dismiss: false }).catch(noteError);
