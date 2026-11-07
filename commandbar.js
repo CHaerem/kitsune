@@ -21,10 +21,6 @@ const BAR_PAGE = "commandbar/commandbar.html";
 const BAR_WIDTH = 640, BAR_HEIGHT = 432;
 const BAR_OPEN_LIMIT_MS = 10000; // a window that never came must not take the key for good
 const BAR_FORGET_MS = 10000; // Firefox lists a closed window a moment after it has closed, once it has its last state
-// ⌘⇧K on a Mac (Firefox reads Ctrl as ⌘ there). The plain ⌘K and ⌘T would be nicer, but
-// Firefox keeps those for itself; ⌘T goes to the bar as soon as Firefox lets go of it
-// (customKeys.json in the dotfiles), through a second command that does nothing until then.
-const BAR_KEY = "Ctrl+Shift+K", BAR_KEY_FREED = "Ctrl+T";
 const BAR_ASK_SIDEBAR_MS = 100; // a sidebar answers at once; none must not hold up the bar
 const CLOSED_LOOKED_AT = 25; // Firefox's list of closed tabs holds about this many anyway
 const BAR_ASKED = "commandBarAsked"; // storage: history and bookmarks have been asked for, so the row does not come back
@@ -235,8 +231,9 @@ function barUnload(ctx) {
 
 // What shortcuts.js can do and this table does not have. A numbered key has no use here,
 // and Firefox only carries out the sidebar's own command itself, on a key press.
-const barSharedCommands = () => (typeof COMMANDS === "undefined" ? [] : COMMANDS)
-  .filter(c => !/^(space|tab)-\d$/.test(c.name) && c.name !== "_execute_sidebar_action" && !BAR_COMMANDS.some(b => b.name === c.name));
+// The bar's own keys have no action there either.
+const barSharedCommands = () => COMMANDS
+  .filter(c => c.action && !/^(space|tab)-\d$/.test(c.name) && c.name !== "_execute_sidebar_action" && !BAR_COMMANDS.some(b => b.name === c.name));
 
 // The rows for the commands that apply, most used first.
 function barCommandRows(ctx, uses, shortcuts) {
@@ -467,11 +464,3 @@ browser.runtime.onConnect.addListener(port => {
   });
 });
 
-// A key that works today, given only with Tidier alone (spaces.js): the manifest reaches
-// machines still on Sidebery, and with the setting off the command has no key. A key
-// you have changed yourself stays.
-async function giveCommandBarKey(commands) {
-  for (const [name, shortcut] of [["command-bar", BAR_KEY], ["command-bar-t", BAR_KEY_FREED]]) {
-    if (commands.some(c => c.name === name && !c.shortcut)) await browser.commands.update({ name, shortcut }).catch(noteError);
-  }
-}

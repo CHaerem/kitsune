@@ -51,6 +51,13 @@
     <label>Close tabs not used for <input type="number" id="archive-hours" min="0" step="1"> hours (0: never)</label>
   </section>
 
+  <section id="keys-section" hidden>
+    <h2>Keys</h2>
+    <p class="hint">Click a key, then press the new one. ⌫ removes it, Esc keeps it. ⌥⌘ and an arrow stay Firefox's. A key it uses itself, such as ⌘1 or ⌘D, works once you clear it in <code>about:keyboard</code>.</p>
+    <div id="keys"></div>
+    <button id="keys-back" hidden>Back to the usual keys</button>
+  </section>
+
   <section id="little-section" hidden>
     <h2>Links from other apps</h2>
     <label class="line"><input type="checkbox" id="little-window"> Open them in a small window, to read and close, or to keep</label>
@@ -76,5 +83,6 @@
   <script src="spaces.js"></script>
   <script src="settings.js"></script>
   <script src="littlewindow.js"></script>
+  <script src="keys.js"></script>
 </body>
 </html>

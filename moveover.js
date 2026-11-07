@@ -77,9 +77,8 @@ async function moveBack() {
   saveSynced(all);
   await flushWrites();
   await browser.tabs.show((await browser.tabs.query({ hidden: true })).map(t => t.id)).catch(() => {});
-  await resetSpaceKeys(); // Sidebery's again
+  await takeKeysBack(); // Sidebery's again, the command bar's too (keys-commands.js)
   stopIsolation();
-  for (const name of ["command-bar", "command-bar-t"]) await browser.commands.reset(name).catch(() => {}); // they stay, with no key and nothing to open
   await browser.storage.local.set({ tidierAlone: false });
   browser.runtime.reload();
 }
@@ -216,5 +215,8 @@ async function settingsAction(msg) {
     case "copyFile": return theCopy();
     case "copySummary": return copySummary(msg.copy);
     case "merge": return mergeCopy(msg.copy, msg.spaces);
+    case "keys": return commandKeys();
+    case "setKey": return setCommandKey(msg.name, msg.shortcut);
+    case "keysBack": return keysBackToFirst();
   }
 }

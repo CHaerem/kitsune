@@ -586,16 +586,13 @@ test("the commands of shortcuts.js come along, without the numbered ones, and ru
   const ff = new FakeFirefox();
   const { w } = world(ff);
   const x = await started(ff);
-  x.js(`var COMMANDS = [
-    { name: "next-space", label: "Next space", action: async id => { globalThis.ran = id; } },
-    { name: "tab-1", label: "Go to the first tab" },
-    { name: "copy-url", label: "Copy" },
-    { name: "_execute_sidebar_action", label: "Sidebar" },
-  ];`);
+  // shortcuts.js's own table, with one action watched.
+  x.js(`COMMANDS.find(c => c.name === "next-space").action = async id => { globalThis.ran = id; };`);
   const page = await openBar(ff, x, w.id);
   const names = page.sent[0].items.filter(i => i.kind === "command").map(c => c.name);
   assert.ok(names.includes("next-space"));
-  assert.ok(!names.includes("tab-1") && !names.includes("_execute_sidebar_action"));
+  assert.ok(!names.includes("tab-1") && !names.includes("space-1") && !names.includes("_execute_sidebar_action"));
+  assert.ok(!names.includes("command-bar") && !names.includes("command-bar-t"), "the bar's own keys are no command in it");
   assert.equal(names.filter(n => n === "copy-url").length, 1);
   await page.tell({ type: "choose", row: { kind: "command", name: "next-space" } });
   await wait(100);

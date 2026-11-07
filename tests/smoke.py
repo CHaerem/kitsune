@@ -1252,6 +1252,9 @@ def move_over(m):
               pages: wins().map(w => w.gBrowser.tabs.filter(t => url(t).includes("group.html")).length)};""" % EXT_ID
     tabs_here = H + """return wins().map(w => w.gBrowser.tabs.filter(t => !t.pinned && role(w, t) && role(w, t) !== "copy").map(t => key(w, t)).sort()).sort();"""
     before, tabs0 = m.js(record), m.js(tabs_here)
+    keys_now = """return Object.fromEntries((await WebExtensionPolicy.getByID(args[0]).extension.shortcuts.allCommands()).map(c => [c.name, c.shortcut]));"""
+    keys0 = m.js(keys_now, EXT_ID)
+    check("with Sidebery, Tidier's only key is the one to copy an address", [k for k, v in keys0.items() if v] == ["copy-url"], str(keys0))
     report = extension_message(m, {"type": "settings:get"})["report"]
     check("the report before moving names the folders and their tabs", len(report["folders"]) == len(before["folders"]) and not report["alone"] and report["tabs"] == len(before["tabs"]), str(report))
     # Sidebery's real export, with one folder closed in its snapshot: the record has an address
@@ -1285,6 +1288,8 @@ def move_over(m):
     r = m.js(H + "await wait(1500); return wins().map(w => [...new Set(w.gBrowser.tabs.filter(t => !t.pinned && !t.hidden && t.userContextId).map(t => t.userContextId))].length);")
     check("after moving over, each window shows one space", all(x == 1 for x in r), str(r))
     no_problems(m, "after moving over")
+    keys = m.js(keys_now, EXT_ID)
+    check("after moving over, Tidier's keys are given", keys["tab-1"] == "Ctrl+1" and keys["space-1"] == "MacCtrl+1" and keys["next-tab"] == "Ctrl+MacCtrl+Down", str(keys))
     # And back: Sidebery on first, and its folder pages return.
     m.js(H + """const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       await (await AddonManager.getAddonByID("%s")).enable(); await wait(4000); return 1;""" % SIDEBERY_ID)
@@ -1292,6 +1297,7 @@ def move_over(m):
     m.js(H + "await wait(10000); return 1;")
     back = m.js(record)
     check("after moving back, every folder has its tabs and its pages", back["folders"] == before["folders"] and back["tabs"] == before["tabs"] and back["pages"] == before["pages"], f"{before} -> {back}")
+    check("after moving back, Sidebery has the keys again", m.js(keys_now, EXT_ID) == keys0, str(m.js(keys_now, EXT_ID)))
 
 
 # The windows whose essentials (pinned tabs) are not together by space, with
@@ -4831,6 +4837,247 @@ def alone_little_window(m):
     check("nothing is kept of them in memory", kept["littles"] == 0 and kept["newBlanks"] == 0, str(kept))
 
 
+def alone_shortcuts(m):
+    ALT, UP, DOWN, LEFT, RIGHT, ENTER, BACKSPACE = "", "", "", "", "", "", ""
+    # A row or tile by what stays the same when a placeholder's real tab is pulled in: its record's key.
+    ident = H + """const {ExtensionParent} = ChromeUtils.importESModule("resource://gre/modules/ExtensionParent.sys.mjs");
+      const tabId = t => ExtensionParent.apiManager.global.tabTracker.getId(t), who = (w, t) => key(w, t) || ek(w, t);
+      const selected = () => { const w = main(); return who(w, w.gBrowser.selectedTab); };"""
+
+    def drawn():
+        """What the sidebar draws, top to bottom, without the test's own page, and as records' keys."""
+        ids = sidebar_page(m, """await wait(300); const me = (await page.browser.tabs.getCurrent()).id;
+          return [...doc.querySelectorAll(".tile, #tabs .tab")].filter(e => e.offsetParent !== null).map(e => Number(e.dataset.tab)).filter(id => id !== me);""")
+        return m.js(ident + """const w = main(); await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html"));
+          return args[0].map(id => { const t = w.gBrowser.tabs.find(x => tabId(x) === id); return t ? who(w, t) : null; });""", ids)
+
+    def selects(want):
+        return m.js(ident + "for (let i = 0; i < 100; i++) { if (selected() === args[0]) return true; await wait(100); } return false;", want)
+
+    def go(*keys):
+        m.js(H + "main().focus(); await wait(100); return 1;")
+        press(m, *keys)
+
+    def hold(key, *mods):
+        """A key held down: each further keyDown is a repeat, and fires the command again, as a real keyboard's do."""
+        m.js(H + "main().focus(); await wait(100); return 1;")
+        acts = [{"type": "keyDown", "value": k} for k in mods] + [{"type": "keyDown", "value": key}] * 4 + [{"type": "keyUp", "value": key}]
+        acts += [{"type": "keyUp", "value": k} for k in reversed(mods)]
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "key", "id": "kb", "actions": acts}]})
+        m.cmd("WebDriver:ReleaseActions")
+
+    # The real sidebar panel, not its page in a tab: what has the keyboard is what these checks are about.
+    panel = """const v = page.browser.extension.getViews({type: "sidebar", windowId: (await page.browser.windows.getCurrent()).id})[0];
+      return {focus: v.document.hasFocus(), renaming: v.document.querySelectorAll(".renaming").length};"""
+    keyboard_on_page = H + "const w = main(); w.focus(); w.gBrowser.selectedBrowser.focus(); await wait(300); return 1;"
+    keyboard_in_panel = H + """const w = main(), outer = w.SidebarController.browser; w.focus(); outer.focus(); await wait(100);
+      outer.contentDocument.getElementById("webext-panels-browser").focus(); await wait(400); return 1;"""
+
+    # ⌘1 to ⌘9 and ⌘D are Firefox's too until they are cleared in about:keyboard (customKeys.json
+    # in the dotfiles, reported to the owner), and with the keyboard in a page both would act.
+    firefox_keys = ["addBookmarkAsKb", "key_selectLastTab"] + [f"key_selectTab{n}" for n in range(1, 9)]
+    custom_keys = """const {CustomKeys} = ChromeUtils.importESModule("moz-src:///browser/components/customkeys/CustomKeys.sys.mjs");
+      for (const id of args[0]) CustomKeys[args[1]](id); return 1;"""
+    m.js(custom_keys, firefox_keys, "clearKey")
+    # The pages of the checks before this one would be rows too.
+    m.js(H + """await removeWhere((x, t) => /\\/(settings\\/settings|sidebar\\/sidebar)\\.html/.test(url(t))); return 1;""")
+
+    # In the second space, with a tab of that space in a folder: Firefox's own keys would go to
+    # the first space's essentials, and to the tabs in the window's order.
+    press(m, "2", CTRL)
+    time.sleep(1)
+    setup = sidebar_page(m, """await wait(300);
+      const space = spaces().find(s => s.active).id;
+      send({type: "newFolder", space, name: "Keys folder"}); await wait(800);
+      const box = [...doc.querySelectorAll("#tabs .folder")].find(f => f.querySelector(".title").textContent === "Keys folder");
+      const me = (await page.browser.tabs.getCurrent()).id;
+      const rows = [...doc.querySelectorAll("#tabs > .tab")].map(r => Number(r.dataset.tab)).filter(id => id !== me);
+      send({type: "moveTab", tabId: rows.at(-1), folder: box.dataset.key, before: null}); await wait(800);
+      return {folder: box.dataset.key, space, inFolder: rows.at(-1)};""")
+    order = drawn()
+    # Nothing selected in the folder, so closing it below keeps the list simple.
+    check("the test's list has essentials, a folder's tab and today's tabs", len(order) >= 4 and None not in order, str(order))
+    start = order.index(m.js(ident + "return selected();"))
+    walked = []
+    for i in range(1, len(order) + 1):
+        go(DOWN, CMD, CTRL)
+        want = order[(start + i) % len(order)]
+        walked.append(selects(want))
+    check("⌃⌘↓ goes to the next tab as shown, and round the end", all(walked), f"{walked} on {order}")
+    go(UP, CMD, CTRL)
+    check("⌃⌘↑ goes to the previous tab as shown", selects(order[(start - 1) % len(order)]), str(order))
+    # Held down: each press goes on from where the one before it got to, with placeholders being pulled in.
+    go("1", CMD)
+    selects(order[0])
+    for _ in range(3):
+        press(m, DOWN, CMD, CTRL)
+    check("⌃⌘↓ pressed quickly goes just as far", selects(order[3]), str(order))
+
+    go("1", CMD)
+    check("⌘1 goes to this space's first essential", selects(order[0]), str(order))
+    go("3", CMD)
+    check("⌘3 goes to the third tab as shown, essentials first", selects(order[2]), str(order))
+    was = m.js(ident + "return selected();")
+    go("9", CMD)
+    time.sleep(0.5)
+    check("⌘9 past the end of the list does nothing", m.js(ident + "return selected();") == was or len(order) >= 9, str(order))
+
+    # A closed folder's tabs are not in the list. The selection is outside it, as a click would leave it.
+    go("1", CMD)
+    selects(order[0])
+    sidebar_page(m, """await wait(200); send({type: "foldFolder", key: arguments[0], collapsed: true}); await wait(600); return 1;""".replace("arguments[0]", "args[0]"), setup["folder"])
+    closed = drawn()
+    check("a closed folder's tab is not drawn", len(closed) == len(order) - 1, f"{closed} of {order}")
+    walked = []
+    at = closed.index(order[0])
+    for i in range(1, len(closed) + 1):
+        go(DOWN, CMD, CTRL)
+        walked.append(selects(closed[(at + i) % len(closed)]))
+    check("⌃⌘↓ passes over a closed folder", all(walked), f"{walked} on {closed}")
+
+    # Spaces, along the bar.
+    r = sidebar_page(m, "await wait(300); return spaces();")
+    bar = [s["id"] for s in r]
+    here = next(s["id"] for s in r if s["active"])
+    space_now = H + """for (let i = 0; i < 100; i++) { if (ctxOf(main().gBrowser.selectedTab) === args[0]) return true; await wait(100); } return false;"""
+    m.js(H + """await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html")); return 1;""")
+    go(LEFT, CMD, CTRL)
+    check("⌃⌘← goes to the previous space on the bar", m.js(space_now, bar[bar.index(here) - 1]), f"{here} on {bar}")
+    go(RIGHT, CMD, CTRL)
+    check("⌃⌘→ goes to the next space on the bar", m.js(space_now, here), f"{here} on {bar}")
+
+    go(str(len(closed)), CMD)
+    selects(closed[-1])
+    r0 = m.js(ident + "const w = main(); return {who: selected(), pinned: w.gBrowser.selectedTab.pinned};")
+    hold("d", CMD)
+    pinned = m.js(H + "for (let i = 0; i < 50 && !main().gBrowser.selectedTab.pinned; i++) await wait(100); await wait(1000); return main().gBrowser.selectedTab.pinned;")
+    tiles = sidebar_page(m, "await wait(300); return doc.querySelectorAll('#essentials .tile.active').length;")
+    check("⌘D makes the selected tab an essential, however long it is held", r0["pinned"] is False and pinned and tiles == 1, f"{r0}, {pinned}, {tiles}")
+    m.js(H + """await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html")); return 1;""")
+    go("d", CMD)
+    unpinned = m.js(H + "for (let i = 0; i < 50 && main().gBrowser.selectedTab.pinned; i++) await wait(100); await wait(500); return !main().gBrowser.selectedTab.pinned;")
+    check("⌘D again makes it an ordinary tab", unpinned, "")
+
+    # New folder. With the keyboard on the page it is simply there: Firefox lets no frame take the
+    # keyboard from another, so nothing can ask for its name. With the keyboard in the sidebar it can.
+    folders_now = H + """await wait(800); const all = (await storage(args[0], ["syncedTabs"])).syncedTabs; return Object.values(all).filter(e => e.own).map(e => e.name);"""
+    before = m.js(folders_now, EXT_ID)
+    m.js(keyboard_on_page)
+    hold("n", CMD, ALT)
+    after = m.js(folders_now, EXT_ID)
+    check("⌘⌥N makes one folder in this space, however long it is held", sorted(after) == sorted(before + ["New folder"]), f"{before} -> {after}")
+    state = sidebar_page(m, panel)
+    active = sidebar_page(m, "await wait(300); return spaces().find(s => s.active).id;")
+    check("and with the keyboard on the page, no name field waits for it in the sidebar", state == {"focus": False, "renaming": 0} and active == setup["space"], f"{state} {active}")
+    m.js(H + """await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html")); return 1;""")
+    time.sleep(1.1)  # two presses, not a key held down
+    m.js(keyboard_in_panel)
+    press(m, "n", CMD, ALT)
+    m.js(H + "await wait(800); return 1;")
+    state = sidebar_page(m, panel)
+    check("with the keyboard in the sidebar, the name field takes it", state == {"focus": True, "renaming": 1}, str(state))
+    for letter in "Typed":
+        press(m, letter)
+    press(m, ENTER)
+    after = m.js(folders_now, EXT_ID)
+    check("and what you type next is the folder's name", "Typed" in after, f"{before} -> {after}")
+    # The others work from there too: the sidebar lets through what its own keys do not use.
+    m.js(H + """await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html")); return 1;""")
+    go("1", CMD)
+    selects(closed[0])
+    m.js(keyboard_in_panel)
+    press(m, DOWN, CMD, CTRL)
+    check("with the keyboard in the sidebar, ⌃⌘↓ goes to the next tab", selects(closed[1]), str(closed))
+    m.js(keyboard_on_page)
+
+    # The settings page lists them, and changes one with a real key press.
+    def settings(script, *args):
+        return ext_page(m, "/settings/settings.html", script, *args)
+    listed = settings("""await wait(800); return {shown: !doc.getElementById("keys-section").hidden,
+      lines: [...doc.querySelectorAll("#keys [data-command]")].map(k => [k.dataset.command, k.textContent])};""")
+    keys = dict(listed["lines"])
+    check("the settings page lists the commands with their keys", listed["shown"] and keys.get("next-tab") == "⌃⌘↓" and keys.get("tab-1") == "⌘1"
+          and keys.get("space-1") == "⌃1" and keys.get("toggle-essential") == "⌘D" and keys.get("copy-url") == "⇧⌘C" and len(keys) >= 20, str(listed))
+
+    def in_settings():
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if "/settings/settings.html" in m.cmd("WebDriver:GetCurrentURL"):
+                break
+
+    went_away = []
+
+    def record(command, *keys_pressed):
+        """A real click on the command's key, in the page in front, then a real key press in the window,
+        which Tidier's own keys are listening to as well."""
+        m.js(H + """const w = main(); w.focus(); w.gBrowser.selectedTab = w.gBrowser.tabs.find(t => url(t).includes("/settings/settings.html")); await wait(500); w.gBrowser.selectedBrowser.focus(); await wait(200); return 1;""")
+        in_settings()
+        button = m.cmd("WebDriver:FindElement", {"using": "css selector", "value": f'[data-command="{command}"]'})
+        m.cmd("WebDriver:ElementClick", {"id": list(button.values())[0] if isinstance(button, dict) else button})
+        m.chrome()
+        press(m, *keys_pressed)
+        time.sleep(0.6)
+        if not m.js(H + """return url(main().gBrowser.selectedTab).includes("/settings/settings.html");"""):
+            went_away.append(keys_pressed)
+        in_settings()
+        reply = m.cmd("WebDriver:ExecuteScript", {"script": """const k = document.querySelector('[data-command="' + arguments[0] + '"]'), n = k.closest("#keys > div").querySelector(".key-note");
+          return {key: k.textContent, note: n.hidden ? "" : n.textContent, focused: document.activeElement === k};""", "args": [command]})
+        m.chrome()
+        return reply
+
+    stored = """return (await WebExtensionPolicy.getByID(args[0]).extension.shortcuts.allCommands()).find(c => c.name === args[1]).shortcut;"""
+    r = record("next-tab", "j", ALT, SHIFT)
+    check("pressing a new key on the settings page changes it", r["key"] == "⌥⇧J" and m.js(stored, EXT_ID, "next-tab") == "Alt+Shift+J", str(r))
+    r = record("next-tab", "1", CMD)
+    check("a key another command has is refused, and said", "already" in r["note"] and r["key"] == "⌥⇧J" and m.js(stored, EXT_ID, "next-tab") == "Alt+Shift+J", str(r))
+    r = record("previous-tab", "l", CMD)
+    check("a letter Firefox uses is said", "about:keyboard" in r["note"] and r["key"] == "⌘L", str(r))
+    r = record("previous-tab", "j", ALT, SHIFT, CMD)
+    check("a key Firefox cannot take is refused, and said", "cannot be used" in r["note"] and r["key"] == "⌘L", str(r))
+    r = record("previous-tab", "j")
+    check("a letter alone is no key, and said, and it waits for a real one", "needs" in r["note"] and r["key"] == "Press a key…" and m.js(stored, EXT_ID, "previous-tab") == "Command+L", str(r))
+    r = record("previous-tab", LEFT, CMD)
+    check("a key on an arrow Firefox uses is said", "both happen" in r["note"] and r["key"] == "⌘←", str(r))
+    r = record("previous-tab", BACKSPACE)
+    check("⌫ removes a key", r["key"] == "none" and m.js(stored, EXT_ID, "previous-tab") == "", str(r))
+    r = record("previous-tab", "")  # Esc
+    check("Esc keeps what it was", r["key"] == "none", str(r))
+    r = settings("""await wait(300); const back = doc.getElementById("keys-back"), shown = !back.hidden; back.click(); await wait(800);
+      return {shown, gone: back.hidden, key: doc.querySelector('[data-command="previous-tab"]').textContent};""")
+    check("a button brings the usual keys back, and goes", r == {"shown": True, "gone": True, "key": "⌃⌘↑"}, str(r))
+    record("next-tab", "j", ALT, SHIFT)
+    r = record("previous-tab", BACKSPACE)
+    check("a key pressed while choosing only chooses: it does not do what it is the key for", not went_away, str(went_away))
+
+    # The key you chose works, and you keep what you did with them after a start.
+    m.js(H + """await removeWhere((x, t) => url(t).includes("/settings/settings.html")); return 1;""")
+    go("1", CMD)
+    selects(closed[0])
+    go("j", ALT, SHIFT)
+    check("the key you chose does what it is for", selects(closed[1]), str(closed))
+    m.js("""const {AddonManager} = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs"); await (await AddonManager.getAddonByID(args[0])).reload(); return 1;""", EXT_ID)
+    for _ in range(40):
+        time.sleep(1)
+        if m.js(H + """const p = WebExtensionPolicy.getByID(args[0]); return !!p && !!p.extension && (await storage(args[0], ["keysGiven"])).keysGiven?.length > 0;""", EXT_ID):
+            break
+    time.sleep(6)
+    kept = [m.js(stored, EXT_ID, name) for name in ("next-tab", "previous-tab", "tab-2")]
+    check("after a start, a key you changed stays, one you removed stays gone, and the others are there", kept == ["Alt+Shift+J", "", "Ctrl+2"], str(kept))
+    go("1", CMD)
+    selects(closed[0])
+    go("j", ALT, SHIFT)
+    check("and it still works", selects(closed[1]), str(closed))
+
+    # Back as it was for the checks after this one.
+    sidebar_page(m, """await wait(300);
+      for (const f of [...doc.querySelectorAll("#tabs .folder")]) if (["Typed", "Keys folder", "New folder"].includes(f.querySelector(".title").textContent)) send({type: "deleteFolder", key: f.dataset.key});
+      await wait(800); return 1;""")
+    m.js(H + """await removeWhere((x, t) => url(t).includes("/sidebar/sidebar.html")); return 1;""")
+    extension_message(m, {"type": "settings:keysBack"})
+    m.js(custom_keys, firefox_keys, "resetKey")
+
+
 def alone_idle(m):
     # What the groups before did can still have a timer running, started by what they did:
     # the quiet line (10 s) and a placeholder's new title (up to a minute, refreshGhostsSoon).
@@ -8117,6 +8364,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_archived,
                 alone_command_bar,
                 alone_bar_edges,
+                alone_shortcuts,
                 alone_idle, alone_update, alone_folds_rest_kept, alone_end, alone_restart, alone_folds_rest_kept, alone_isolation_start, alone_little_restart)
 
 

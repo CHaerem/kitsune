@@ -127,20 +127,12 @@ async function switchSpace(windowId, space) {
 }
 
 // The n-th space on the bar (⌃1, ⌃2, ...).
-async function switchToNth(n) {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return;
-  // A small window (the command bar, a link's, a sign-in's) has no spaces: switching would add a tab that nothing shows.
-  if ((await browser.windows.get(tab.windowId).catch(() => null))?.type !== "normal") return;
-  const tabs = await browser.tabs.query({ windowId: tab.windowId });
+async function switchToNth(windowId, n) {
+  const tabs = await browser.tabs.query({ windowId });
   const used = new Set([...(await getList()).map(e => e.cookieStoreId), ...tabs.map(t => t.cookieStoreId)]);
   const space = (await spaceList(used))[n];
-  if (space) await switchSpace(tab.windowId, space.id);
+  if (space) await switchSpace(windowId, space.id);
 }
-browser.commands.onCommand.addListener(name => {
-  const n = /^space-(\d)$/.exec(name);
-  if (n && tidierAlone) serial(() => switchToNth(n[1] - 1));
-});
 
 // The selected tab decides the space: a tab in another space (a link, an essential,
 // ⌃Tab) takes you there. Closing the last tab of a space is different: Firefox then
@@ -314,36 +306,14 @@ async function intoSpace(tabId) {
 }
 
 // --- When Tidier starts ------------------------------------------------------
-// ⌃1/⌃2/... are given here, not in the manifest, so that they are not taken from
-// Sidebery while it is in use. A key you have changed yourself stays.
-const SPACE_KEYS = 5;
-async function setSpaceKeys() {
-  const { os } = await browser.runtime.getPlatformInfo();
-  const control = os === "mac" ? "MacCtrl" : "Ctrl";
-  const commands = await browser.commands.getAll();
-  for (let n = 1; n <= SPACE_KEYS; n++) {
-    const command = commands.find(c => c.name === `space-${n}`);
-    if (command && !command.shortcut) await browser.commands.update({ name: command.name, shortcut: `${control}+${n}` }).catch(noteError);
-  }
-  // Without a sidebar a window has no list of tabs at all: a key to bring it back.
-  if (commands.some(c => c.name === "_execute_sidebar_action" && !c.shortcut)) {
-    await browser.commands.update({ name: "_execute_sidebar_action", shortcut: `${control}+Shift+S` }).catch(noteError);
-  }
-  await giveCommandBarKey(commands); // commandbar.js
-}
-
-async function resetSpaceKeys() {
-  for (const c of await browser.commands.getAll()) if (c.name.startsWith("space-") || c.name === "_execute_sidebar_action") await browser.commands.reset(c.name).catch(() => {});
-}
-
 // The permission to hide tabs was given in the sidebar.
 browser.permissions.onAdded.addListener(() => { if (started) serial(startSpaces); });
 
 // Each window's active space, shown again: Firefox shows every hidden tab again
 // when an add-on with this permission as an optional one is updated.
 async function startSpaces() {
-  if (!tidierAlone) return;
-  await setSpaceKeys();
+  if (!tidierAlone) return takeKeysBackIfGiven(); // keys-commands.js
+  await giveKeys().catch(noteError); // here and not in the manifest, so that they are not taken from Sidebery while it is in use; keys must not stop the rest
   await startLittleWindow(); // littlewindow.js
   for (const w of await normalWindows()) {
     const tabs = await browser.tabs.query({ windowId: w.id });
