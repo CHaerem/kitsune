@@ -417,7 +417,7 @@ async function reconcileAll() {
 
 // A real tab that is not synced yet: register it and add ghosts elsewhere.
 async function register(tabId) {
-  const tab = await browser.tabs.get(tabId).catch(() => null);
+  let tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || syncKeyByTab.has(tab.id) || !syncable(tab)) return;
   // Only tabs in ordinary windows: a sign-in popup (window.open) is not a tab
   // you keep, and pulling its tab into another window would break the sign-in.
@@ -425,6 +425,11 @@ async function register(tabId) {
   if (!win || win.type !== "normal" || win.incognito) return;
   const all = await getSynced();
   if (await reopenedSaved(tab, all)) return;
+  // Asked again, with nothing to wait for from here until its key is set: pinned just
+  // now, its event has found no key, so nothing would take it out of tab sync again. It
+  // would stay an essential with a ghost in every other window.
+  tab = await browser.tabs.get(tabId).catch(() => null);
+  if (!tab || syncKeyByTab.has(tab.id) || !syncable(tab)) return;
   const key = crypto.randomUUID();
   // Sidebery keeps a tab's opener equal to its parent; the opener alone says nothing.
   const parentKey = tab.openerTabId && !tidierAlone ? syncKeyByTab.get(tab.openerTabId) || null : null;

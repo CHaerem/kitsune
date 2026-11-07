@@ -530,6 +530,27 @@ test("tabs hidden at a switch of space wake nothing, and a switch asks only for 
   x.kill();
 });
 
+test("a tab pinned while it is being taken into tab sync stays out of it", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 2), other = ff.addWindow();
+  const x = await alone(ff);
+  const before = ff.list(other.id).length;
+  const fresh = ff.addTab(w.id, { url: "https://new.example/", cookieStoreId: C1 });
+  // Pinned between the first look at the tab and the moment it gets its key.
+  const look = x.b.windows.get;
+  x.b.windows.get = async id => {
+    x.b.windows.get = look;
+    fresh.pinned = true;
+    x.b.tabs.onUpdated.fire(fresh.id, { pinned: true }, ff.snap(fresh));
+    return look(id);
+  };
+  await x.js("serial")(() => x.js("register")(fresh.id));
+  assert.equal(x.js("syncKeyByTab").get(fresh.id), undefined, "it has no key");
+  assert.equal(ff.values.get(fresh.id)?.syncKey, undefined, "nor one stored with the tab");
+  assert.equal(ff.list(other.id).filter(t => !t.pinned).length, before, "and no ghost elsewhere");
+  x.kill();
+});
+
 test("what tab sync's filter on tab changes must let through", async () => {
   const ff = new FakeFirefox();
   const w = manyTabs(ff, 2), other = ff.addWindow();
