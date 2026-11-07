@@ -5315,6 +5315,8 @@ def alone_sync_hide(m):
     r = ext_page(m, settings, """doc.getElementById("sync-on").click(); await wait(800); await page.browser.storage.sync.clear();
       return doc.getElementById("sync-on").checked;""")
     check("sync can be turned off again", r is False, str(r))
+    # Back in the space hiding moved you out of: later groups (alone_restart's names) expect its essentials.
+    sidebar_page(m, """send({type: "space", space: args[0]}); for (let i = 0; i < 40 && spaces().find(s => s.active)?.id !== args[0]; i++) await wait(100); return 1;""", f"firefox-container-{space}")
     m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/settings/settings.html") || url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t); await wait(500); return 1;""")
 
 
@@ -5602,7 +5604,7 @@ def alone_bridge(m):
 
     # Copy for Claude, by the same page.
     m.js(H + """const w = main(); w.focus(); return 1;""")
-    tab_menu = BRIDGE_PAGE_ROW + """const row = plainTabs().find(r => isPage(r)), box = row.getBoundingClientRect(); await wait(200); // a page, not a new tab
+    tab_menu = BRIDGE_PAGE_ROW + """const row = [...doc.querySelectorAll("#tabs .tab")].find(isPage), box = row.getBoundingClientRect(); await wait(200); // a page, not a new tab, also in a folder
       row.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5})); await wait(500);
       const labels = [...doc.querySelectorAll("#menu .item")].map(b => b.textContent); doc.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true})); doc.body.click(); return labels;"""
     labels_off = sidebar_page(m, tab_menu)
