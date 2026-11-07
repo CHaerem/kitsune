@@ -322,7 +322,8 @@ browser.tabs.onRemoved.addListener((tabId, info) => {
 // ignored (ownMoves), so the windows do not answer each other.
 const ownMoves = new Set();
 browser.tabs.onMoved.addListener((tabId, info) => {
-  if (ownMoves.delete(tabId) || busy.has(tabId) || !keyByTab.has(tabId)) return;
+  // (A copy just made is placed by Sidebery; without it, a move that is not Tidier's is yours.)
+  if (ownMoves.delete(tabId) || (busy.has(tabId) && !tidierAlone) || !keyByTab.has(tabId)) return;
   serial(() => onEssentialMoved(info.windowId));
 });
 

@@ -731,7 +731,7 @@ INVARIANTS = LIB + r"""
     const reps = tabs.filter(x => x.key === key && !x.pinned);
     for (const [wi] of ws.entries()) {
       const n = reps.filter(x => x.wi === wi).length;
-      if (n === 0) bad("a synced tab is missing from a window", e.title || e.url, `window ${wi} of ${ws.length}, role elsewhere ${reps.map(x => x.role)}`);
+      if (n === 0) bad("a synced tab is missing from a window", e.title || e.url, `${key.slice(0, 8)}, window ${wi} of ${ws.length}, role elsewhere ${reps.map(x => x.role)}`);
       if (n > 1) bad("a synced tab is twice in a window", e.title || e.url, `window ${wi}: ${reps.filter(x => x.wi === wi).map(x => x.role + (x.ghost ? "/placeholder" : "/page"))}`);
     }
     if (e.group) continue;

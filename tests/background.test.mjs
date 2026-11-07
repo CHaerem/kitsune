@@ -1175,3 +1175,19 @@ test("a new tab moved by Tidier and given an address at once is synced, with Sid
   assert.ok(ff.values.get(fresh.id)?.syncKey, "it has a key");
   x.kill();
 });
+
+test("with Tidier alone, an essential moved just after its copy was made is moved everywhere", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = ["e", "f"].map(key => ({ key, url: `https://${key}.example/`, cookieStoreId: C1, title: key, icon: "x" }));
+  const w = ff.addWindow({ focused: true });
+  const first = ff.addTab(w.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const second = ff.addTab(w.id, { url: GHOST("essential", "f"), pinned: true, cookieStoreId: C1 }, { essentialKey: "f" });
+  ff.addTab(w.id, { url: "about:blank", active: true });
+  const x = await alone(ff);
+  x.js(`busy.add(${second.id})`); // as createEssentials does for a second and a half
+  await x.b.tabs.move(second.id, { index: 0 });
+  await wait(500);
+  assert.deepEqual(ff.store.essentials.map(e => e.key), ["f", "e"]);
+  assert.ok(ff.tabs.has(first.id));
+  x.kill();
+});
