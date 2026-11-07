@@ -863,7 +863,7 @@ async function closeOrphan(tabId, kind, key) {
   const tab = await browser.tabs.get(tabId).catch(() => null);
   if (!tab || !isGhostUrl(tab.url)) return;
   syncBusy.add(tabId); forget(tabId);
-  await closeOwnCopies([tabId]);
+  await removeTabs([tabId]);
   await forgetClosedPlaceholders(kind, [key]);
 }
 
