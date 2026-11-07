@@ -105,6 +105,17 @@ test("every way a key's tab appears or goes keeps the index right", async () => 
   x.kill();
 });
 
+test("a start with Tidier alone reads each tab's values once", async () => {
+  const ff = new FakeFirefox();
+  const w = manyTabs(ff, 5);
+  const read = new Map();
+  ff.hooks.getTabValue = (id, name) => { if (name === "syncKey") read.set(id, (read.get(id) || 0) + 1); };
+  const x = await alone(ff);
+  delete ff.hooks.getTabValue;
+  assert.deepEqual([...read.values()], ff.list(w.id).map(() => 1));
+  x.kill();
+});
+
 test("a view asks only for the tabs of the space it shows", async () => {
   const ff = new FakeFirefox();
   const w = manyTabs(ff, 40);

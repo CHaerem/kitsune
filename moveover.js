@@ -46,9 +46,9 @@ async function moveOver() {
 async function closeOldFolderPages() {
   await readAlone();
   if (!tidierAlone) return;
-  await loadRoles();
   const pages = (await browser.tabs.query({})).filter(t => isSideberyGroup(t.url));
-  if (!pages.length) return;
+  if (!pages.length) return; // as at every start but the first: reading every tab's values is left for the start itself
+  await loadRoles();
   pages.forEach(t => { syncBusy.add(t.id); forget(t.id); });
   await browser.tabs.remove(pages.map(t => t.id)).catch(noteError);
 }
