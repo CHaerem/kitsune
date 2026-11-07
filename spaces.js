@@ -192,7 +192,7 @@ browser.tabs.onRemoved.addListener(tabId => { newTabs.delete(tabId); firstPage.d
 // is being opened again, which then gets seen as a new tab.
 function seenLateInSpace(tab) {
   if (!tidierAlone || tab.pinned || tab.incognito) return false;
-  if (!isWeb(tab.url)) { firstPage.add(tab.id); return false; }
+  if (!isWeb(tab.url)) { if (!isGhostUrl(tab.url)) firstPage.add(tab.id); return false; }
   if (tab.cookieStoreId !== NO_CONTAINER) return false;
   serial(() => byRule(tab.id, tab.url));
   return true;

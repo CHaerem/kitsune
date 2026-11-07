@@ -581,7 +581,7 @@ async function pull(ghostId) {
     const others = await browser.tabs.query({ windowId: fromWindow, hidden: false });
     const entryNow = (await getSynced())[key];
     const leftBehind = entryNow && !others.some(t => t.id !== live.id)
-      ? await createRep(fromWindow, key, entryNow, undefined, fromIndex + 1) : null;
+      ? await createRep(fromWindow, key, entryNow, fromOpener, fromIndex + 1) : null;
     if (live.active) {
       // Leave the old window on a tab that is already loaded, preferably in the
       // same space, so the old window does not load anything in the background.
