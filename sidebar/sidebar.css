@@ -67,6 +67,19 @@ body {
   background: var(--accent); color: white; font-size: 10px; font-weight: 600;
 }
 
+/* A tab still loading after half a second (touches.js): its icon breathes, slowly. After
+ * half a minute it settles, dimmed, even if the page never finishes, since a running
+ * animation keeps Firefox drawing for as long as it runs. */
+@keyframes slow-load { to { opacity: .45; } }
+.slow-load { animation: slow-load 1.2s ease-in-out 31 alternate forwards; }
+
+/* Asked for less motion, in the system's settings: everything stands still, and a slow
+ * load is only dimmed, as an unloaded tab's icon is. For whatever moves in this sidebar. */
+@media (prefers-reduced-motion: reduce) {
+  .alone, .alone *, .alone *::before, .alone *::after { animation: none !important; transition: none !important; }
+  .slow-load { opacity: .55; }
+}
+
 .folder > .row .chevron { width: 16px; text-align: center; color: var(--muted); transition: transform .15s ease; }
 .folder.collapsed > .row .chevron { transform: rotate(-90deg); }
 .folder > .children { padding-left: 14px; }

@@ -149,6 +149,7 @@ export class FakeFirefox {
         setTimeout(() => { if (ff.tabs.has(t.id)) ff.navigate(t.id, o.url, o.title); });
         return { ...ff.snap(t), url: o.url };
       },
+      warmup: async id => { need(id); ff.log.push(["warmup", id]); },
     };
     b.windows = {
       WINDOW_ID_NONE: -1, onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),

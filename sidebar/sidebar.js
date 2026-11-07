@@ -84,7 +84,7 @@ function icon(item) {
 
 // --- Essentials ----------------------------------------------------------------
 function tile(item) {
-  return keep("tile:" + item.id, () => {
+  const e = keep("tile:" + item.id, () => {
     const t = el("div");
     t.dataset.tab = item.id;
     t.draggable = !!view?.alone;
@@ -93,11 +93,12 @@ function tile(item) {
     t.oncontextmenu = e => { if (view?.alone) openTabMenu(e, item.id); else browser.menus.overrideContext({ context: "tab", tabId: item.id }); };
     t.ondragstart = e => startDrag(e, { kind: "essential", tabId: item.id });
     return t;
-  }, item, t => {
+  }, { ...item, tip: undefined }, t => {
     t.className = "tile" + (item.active ? " active" : "") + (item.loaded ? "" : " unloaded");
-    t.title = item.title;
     t.replaceChildren(icon(item), ...(view.alone ? soundMark(item) : []));
   });
+  e.title = item.tip || item.title;
+  return e;
 }
 
 // --- Tabs ----------------------------------------------------------------------
@@ -111,9 +112,8 @@ function row(item, folderKey) {
     e.oncontextmenu = ev => { if (view?.alone) openTabMenu(ev, item.id); else browser.menus.overrideContext({ context: "tab", tabId: item.id }); };
     e.ondragstart = ev => startDrag(ev, { kind: "tab", tabId: item.id });
     return e;
-  }, item, e => {
+  }, { ...item, tip: undefined }, e => { // a tooltip is not drawn: some pages change their address as you scroll, and a row drawn again can lose a click or a drag
     e.className = "row tab" + (item.active ? " active" : "") + (item.loaded ? "" : " unloaded");
-    e.title = item.title;
     const parts = [icon(item), el("span", "title", item.title)];
     parts.push(...soundMark(item));
     const close = el("button", "close", "×");
@@ -122,6 +122,7 @@ function row(item, folderKey) {
     parts.push(close);
     e.replaceChildren(...parts);
   });
+  r.title = item.tip || item.title;
   r.dataset.folder = folderKey ?? "";
   return r;
 }

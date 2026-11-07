@@ -1275,7 +1275,7 @@ def ext_page(m, path, script, *args):
       const page = window.wrappedJSObject || window, doc = page.document;
       const rows = () => [...doc.querySelectorAll("#tabs .tab")].map(r => r.querySelector(".title").textContent);
       const folders = () => [...doc.querySelectorAll("#tabs .folder")].map(f => ({name: f.querySelector(".head .title")?.textContent, tabs: [...f.querySelectorAll(".tab .title")].map(t => t.textContent), collapsed: f.classList.contains("collapsed")}));
-      const tiles = () => [...doc.querySelectorAll("#essentials .tile")].map(t => t.title);
+      const tiles = () => [...doc.querySelectorAll("#essentials .tile")].map(t => t.title.split("\\n")[0]);
       const spaces = () => [...doc.querySelectorAll("#spaces .space")].map(b => ({id: b.dataset.space, active: b.classList.contains("active")}));
       const plainTabs = () => [...doc.querySelectorAll("#tabs > .tab")].filter(r => r.querySelector(".title").textContent !== "Tidier");
       (async () => {
@@ -2108,6 +2108,17 @@ def real_click(m, path, x, y, button=0):
     m.chrome()
 
 
+def pointer_over(m, *points):
+    """Move a real pointer over the sidebar page, which must be the selected tab and where sidebar_page last ran: to each point in turn, with no way in between."""
+    m.cmd("Marionette:SetContext", {"value": "content"})
+    for x, y in points:
+        m.cmd("WebDriver:PerformActions", {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+                                                        "actions": [{"type": "pointerMove", "x": round(x), "y": round(y), "duration": 0, "origin": "viewport"}]}]})
+        time.sleep(0.2)
+    m.cmd("WebDriver:ReleaseActions")
+    m.chrome()
+
+
 # In the sidebar's page: right clicks and the menu, waiting for what they lead to.
 MENU_PAGE = """
   const until = async (test, ms = 10000) => { const t0 = Date.now(); let r; while (!(r = test()) && Date.now() - t0 < ms) await wait(50); return r; };
@@ -2770,8 +2781,8 @@ def alone_sound(m):
       return opened;""", m.pages, int(here.split("-")[-1]), int(away.split("-")[-1]))
 
     FIND = """
-      const tile = name => [...doc.querySelectorAll("#essentials .tile")].find(e => e.title === name);
-      const row = name => [...doc.querySelectorAll("#tabs .tab")].find(e => e.title === name);
+      const tile = name => [...doc.querySelectorAll("#essentials .tile")].find(e => e.title.split("\\n")[0] === name);
+      const row = name => [...doc.querySelectorAll("#tabs .tab")].find(e => e.title.split("\\n")[0] === name);
       const head = name => [...doc.querySelectorAll("#tabs .head")].find(e => e.title === name);
       const dot = id => doc.querySelector(`#spaces .space[data-space="${id}"]`);
       const until = async (f, ms = 8000) => { for (let i = 0; i < ms / 100; i++) { if (f()) return true; await wait(100); } return false; };
@@ -2830,7 +2841,7 @@ def alone_sound(m):
                 break
             time.sleep(0.2)
         return s
-    ok = sidebar_click(m, '[...doc.querySelectorAll("#essentials .tile")].find(e => e.title === "sound tile")?.querySelector(".sound")')
+    ok = sidebar_click(m, '[...doc.querySelectorAll("#essentials .tile")].find(e => e.title.split("\\n")[0] === "sound tile")?.querySelector(".sound")')
     state_until(lambda s: s["muted"]["sound tile"])
     time.sleep(0.5)  # a selection, if the click went on to the tile, would have come with it
     s0 = state()
@@ -2839,11 +2850,11 @@ def alone_sound(m):
     check("a click on a tile's mark mutes the real tab in the other window", ok and s0["muted"]["sound tile"] and s0["windows"]["sound tile"] == "other", str(s0))
     check("and does not select it", not r["active"] and s0["selected"][0].startswith("Tidier") and s0["selected"][1] != "sound tile", str((r, s0)))
     check("the tile then offers to unmute, and only it changed", r["muted"] and r["title"] == "Unmute" and not r["row"], str(r))
-    sidebar_click(m, '[...doc.querySelectorAll("#essentials .tile")].find(e => e.title === "sound tile")?.querySelector(".sound")')
+    sidebar_click(m, '[...doc.querySelectorAll("#essentials .tile")].find(e => e.title.split("\\n")[0] === "sound tile")?.querySelector(".sound")')
     s = state_until(lambda s: not s["muted"]["sound tile"])
     check("a second click unmutes it", s["muted"]["sound tile"] is False, str(s))
     # The row's and the closed head's.
-    ok = sidebar_click(m, '[...doc.querySelectorAll("#tabs .tab")].find(e => e.title === "sound row")?.querySelector(".sound")')
+    ok = sidebar_click(m, '[...doc.querySelectorAll("#tabs .tab")].find(e => e.title.split("\\n")[0] === "sound row")?.querySelector(".sound")')
     ok2 = sidebar_click(m, '[...doc.querySelectorAll("#tabs .head")].find(e => e.title === "Sound folder")?.querySelector(".sound")')
     s1 = state_until(lambda s: s["muted"]["sound row"] and s["muted"]["sound inside"])
     r = sidebar_page(m, FIND + """await until(() => head("Sound folder").querySelector(".sound.muted"));
@@ -2896,7 +2907,7 @@ def alone_sound(m):
       a.__ticking = t;
       for (let i = 0; i < 80 && !/^[0-9]+$/.test(t.label); i++) await wait(100);
       play(t, true); return 1;""", m.pages, int(here.split("-")[-1]))
-    TICKING = '[...doc.querySelectorAll("#tabs .tab")].find(e => /^[0-9]+$/.test(e.title))'
+    TICKING = '[...doc.querySelectorAll("#tabs .tab")].find(e => /^[0-9]+$/.test(e.title.split("\\n")[0]))'
     r = sidebar_page(m, FIND + f"""const ticking = () => {TICKING}; await until(() => ticking()?.querySelector(".sound"));
       const first = ticking().title; await until(() => ticking().title !== first); return {{ticks: ticking().title !== first}};""")
     ok = sidebar_click(m, TICKING + '?.querySelector(".sound")', hold=1.5)
@@ -2960,9 +2971,9 @@ def alone_news(m):
     marked = """
       const named = which => [...doc.querySelectorAll(".tab, .tile")].find(r => r.title.includes(args[0] + which));
       const has = () => ({
-        rows: [...doc.querySelectorAll("#tabs .tab.news")].filter(r => r.offsetParent).map(r => r.title.replace(args[0], "")),
+        rows: [...doc.querySelectorAll("#tabs .tab.news")].filter(r => r.offsetParent).map(r => r.title.split("\\n")[0].replace(args[0], "")),
         heads: [...doc.querySelectorAll(".folder.collapsed.news")].map(f => f.querySelector(".head .title").textContent),
-        tiles: [...doc.querySelectorAll(".tile.news")].map(r => r.title.replace(args[0], "")),
+        tiles: [...doc.querySelectorAll(".tile.news")].map(r => r.title.split("\\n")[0].replace(args[0], "")),
         spaces: [...doc.querySelectorAll(".space.news")].map(b => b.dataset.space),
       });
       // By the clock: this page is a tab in the background, whose timers Firefox slows down.
@@ -3004,8 +3015,8 @@ def alone_news(m):
     # Past the quiet after loading. A title that only ticks says nothing, however long it does.
     time.sleep(6)
     r = sidebar_page(m, marked + """
-      const ticking = [...doc.querySelectorAll("#tabs .tab")].filter(x => /^\\d+$/.test(x.title));
-      return {ticking: ticking.length, seconds: ticking.map(x => Number(x.title)), has: has()};""", name)
+      const ticking = [...doc.querySelectorAll("#tabs .tab")].filter(x => /^\\d+$/.test(x.title.split("\\n")[0]));
+      return {ticking: ticking.length, seconds: ticking.map(x => Number(x.title.split("\\n")[0])), has: has()};""", name)
     check("a title that only ticks has no dot", r["ticking"] == 1 and r["has"] == {"rows": [], "heads": [], "tiles": [], "spaces": []}, str(r))
     m.js(H + """const w = main(); await removeWhere((x, t) => url(t).includes("/ticking?")); return 1;""")
 
@@ -3150,6 +3161,205 @@ def alone_news(m):
       return 1;""", name)
     stats = extension_message(m, {"type": "stats"})
     check("no mark stays once its pages are gone, and nothing is kept of them", stats["sizes"]["newsMarks"] == 0 and stats["sizes"]["newsSeen"] <= remembered, f"{remembered} -> {stats['sizes']}")
+
+
+def alone_touches(m):
+    # What nobody has to know about: tooltips, kept icons, warming a tab up, the sign of a slow load.
+    space = int(sidebar_page(m, """return spaces().find(s => s.active).id;""").split("-")[-1])
+    opened = m.js(H + """const a = main();
+      let w = other(), opened = !w;
+      if (opened) { w = a.OpenBrowserWindow(); w.__smoke = true; for (let i = 0; i < 100 && !w.gBrowser?.tabs.some(t => t.pinned); i++) await wait(100); await wait(1000); }
+      // In the other window, so that this window has only its placeholder.
+      w.gBrowser.addTrustedTab(args[0] + "/icon?elsewhere=secret", {userContextId: args[1], inBackground: true});
+      await wait(300);
+      a.gBrowser.addTrustedTab(args[0] + "/icon?warm", {userContextId: args[1], inBackground: true});
+      a.gBrowser.addTrustedTab(args[0] + "/icon?record", {userContextId: args[1], inBackground: true});
+      a.gBrowser.addTrustedTab(args[0] + "/icon?cross", {userContextId: args[1], inBackground: true});
+      a.gBrowser.addTrustedTab(args[0] + "/slow-icon", {userContextId: args[1], inBackground: true});
+      // A loaded essential: the sign and the warm-up are for a tile as well.
+      a.gBrowser.pinTab(a.gBrowser.addTrustedTab(args[0] + "/icon?tile", {userContextId: args[1], inBackground: true}));
+      await wait(1000);
+      // Sees what the extension's call reaches, also what it should not.
+      a.__warmed = [];
+      const warmup = a.__warmup = a.gBrowser.warmupTab;
+      a.gBrowser.warmupTab = function (t) { a.__warmed.push(url(t)); return warmup.call(this, t); };
+      // The sidebar page in front: timers in a page behind other tabs run late, and a pointer does not reach it.
+      a.__selected = a.gBrowser.selectedTab;
+      a.gBrowser.selectedTab = a.gBrowser.tabs.find(t => url(t).includes("/sidebar/sidebar.html"));
+      await wait(500);
+      return opened;""", m.pages, space)
+    until = """const until = async (test, ms = 15000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await wait(20)) { const v = await test(); if (v) return v; } return null; };
+      const here = await page.browser.windows.getCurrent();
+      // The row of the tab in this window whose address holds `part`.
+      const rowOf = async part => { const t = (await page.browser.tabs.query({windowId: here.id})).find(x => x.url.includes(part));
+        return t && doc.querySelector(`#tabs .tab[data-tab="${t.id}"]`); };
+      const status = async id => (await page.browser.tabs.get(id)).status;"""
+    r = sidebar_page(m, until + """
+      const pages = arguments[0], ctx = arguments[1], icon = "img[src^='data:image/svg']", out = {};
+
+      // Tooltips: a placeholder knows its real address only from the record.
+      const ghost = await until(() => doc.querySelector("#tabs .tab.unloaded[title*='/icon']"));
+      out.ghostTip = ghost?.title;
+      out.tileTip = doc.querySelector("#essentials .tile")?.title;
+
+      // Where to take the pointer, below.
+      const warm = await until(() => rowOf("/icon?warm"));
+      const at = e => { const b = e.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; };
+      out.warmId = Number(warm.dataset.tab);
+      const closeBox = warm.getBoundingClientRect();
+      const tile = await until(async () => { const t = (await page.browser.tabs.query({windowId: here.id, pinned: true})).find(x => x.url.includes("/icon?tile"));
+        const e = t && doc.querySelector(`#essentials .tile[data-tab="${t.id}"]`); return e?.querySelector(icon) && !e.matches(".unloaded") && e; });
+      out.points = {title: at(warm.querySelector(".title")), close: [closeBox.right - 18, closeBox.top + closeBox.height / 2], ghost: at(ghost),
+                    showing: at(doc.querySelector("#tabs .tab.active, #essentials .tile.active")), nothing: at(doc.getElementById("space-name")),
+                    tile: tile && at(tile), ghostTile: tile && at(doc.querySelector("#essentials .tile"))};
+
+      // The record's icon: a page without one keeps what the tab had, rather than a letter.
+      const record = await until(async () => { const r = await rowOf("/icon?record"); return r?.querySelector(icon) && r; });
+      if (record) {
+        const id = Number(record.dataset.tab);
+        await page.browser.tabs.update(id, {url: pages + "/no-icon"});
+        await until(async () => record.querySelector(".title")?.textContent === "No icon" && await status(id) === "complete");
+        await wait(500);
+        out.record = {own: (await page.browser.tabs.get(id)).favIconUrl ?? null, image: !!record.querySelector(icon), letter: !!record.querySelector(".letter")};
+      }
+
+      // A page changing its address and nothing else, as some do as you scroll: the tooltip
+      // follows, and the row is not drawn again, which could lose a click or a drag under way.
+      const parts = () => [...warm.children];
+      const before = parts();
+      await page.browser.tabs.update(out.warmId, {url: pages + "/icon?warm#further"});
+      await until(() => warm.title.endsWith("/icon#further"), 5000);
+      out.addressOnly = {tip: warm.title, same: parts().every((e, i) => e === before[i])};
+
+      // On another site the record's icon is the old site's, which says something untrue.
+      const cross = await until(async () => { const r = await rowOf("/icon?cross"); return r?.querySelector(icon) && r; });
+      if (cross) {
+        await page.browser.tabs.update(Number(cross.dataset.tab), {url: arguments[2] + "/no-icon"});
+        await until(() => cross.querySelector(".letter"), 5000);
+        out.cross = {image: !!cross.querySelector(icon), letter: !!cross.querySelector(".letter"), tip: cross.title};
+      }
+
+      // A slow load: nothing at first, then a sign on the icon, then nothing, all on the same element.
+      const slow = await until(async () => { const r = await rowOf("/slow-icon"); return r?.querySelector(icon) && r; });
+      if (!slow) return out;
+      const slowId = out.slowId = Number(slow.dataset.tab);
+      const finished = async () => { await until(async () => await status(slowId) === "complete"); await wait(300); };
+      await finished();
+      const img = slow.querySelector("img"), signed = () => slow.querySelector("img, .letter").classList.contains("slow-load");
+      out.quietBefore = !signed();
+      const t0 = Date.now();
+      await page.browser.tabs.reload(slowId);
+      await until(signed, 6000); // the load ends no sooner than this waits: it starts late too on a busy machine
+      out.shownAfter = Date.now() - t0;
+      out.shown = signed();
+      const moving = slow.querySelector(".slow-load")?.getAnimations()[0];
+      out.animation = moving && {state: moving.playState, name: moving.animationName, iterations: moving.effect.getComputedTiming().iterations};
+      // A page that takes longer than the breathing lasts: moved to the end of it, not waited for.
+      moving?.finish();
+      out.settled = {state: moving?.playState, opacity: page.getComputedStyle(img).opacity, stillSigned: signed()};
+      // Seen in the moment the sign goes: on a busy machine the fade may be over by the first look below.
+      const fading = new Promise(done => { const o = new page.MutationObserver(() => { if (!signed()) { o.disconnect(); done(img.getAnimations().map(x => x.effect.getTiming().duration)); } }); o.observe(img, {attributes: true}); });
+      await until(() => !signed(), 6000);
+      out.gone = !signed();
+      out.fading = await Promise.race([fading, wait(1000)]);
+      out.brightening = [];
+      for (let i = 0; i < 25; i++) { out.brightening.push(Number(page.getComputedStyle(img).opacity)); await wait(20); }
+      await finished();
+      out.sameIcon = slow.querySelector("img") === img && img.isConnected;
+
+      // A title arriving during a load draws the row again: the sign goes on from where it was.
+      const drip = (await page.browser.tabs.create({windowId: here.id, url: pages + "/drip", cookieStoreId: "firefox-container-" + ctx, active: false})).id;
+      const dripping = () => doc.querySelector(`#tabs .tab[data-tab="${drip}"]`);
+      const first = await until(() => dripping()?.querySelector(".slow-load"), 6000);
+      const started = first?.getAnimations()[0]?.startTime;
+      await until(() => dripping()?.querySelector(".title").textContent === "Dripped", 6000);
+      const second = dripping()?.querySelector(".slow-load");
+      out.redrawn = {icon: !!first && !!second && second !== first, sameStart: second?.getAnimations()[0]?.startTime === started};
+      await until(() => !dripping()?.querySelector(".slow-load"), 5000);
+      out.dripEnded = !dripping()?.querySelector(".slow-load");
+
+      // The same on a tile.
+      if (tile) {
+        await page.browser.tabs.update(Number(tile.dataset.tab), {url: pages + "/slow-icon?tile"});
+        out.tileSign = !!(await until(() => tile.querySelector(".slow-load"), 6000));
+        out.tileEnded = !!(await until(() => !tile.querySelector(".slow-load"), 6000));
+      }
+      return out;""", m.pages, space, m.pages.replace("127.0.0.1", "localhost"))
+    check("a placeholder's tooltip shows its title and real address, without the query part", r.get("ghostTip") == f"Touched\n{m.pages}/icon", str(r))
+    check("an essential's tooltip shows its address, without the query part", "\nhttps://example.org/" in (r.get("tileTip") or "") and "?" not in r["tileTip"], str(r))
+    check("a page with no icon keeps the one in the record, not a letter", r.get("record") == {"own": None, "image": True, "letter": False}, str(r))
+    check("an address changing alone changes the tooltip and draws nothing again", (r.get("addressOnly") or {}).get("same") is True and r["addressOnly"]["tip"].endswith("/icon#further"), str(r))
+    check("a page on another site with no icon has a letter, not the old site's icon, and the new address", (r.get("cross") or {}).get("letter") is True and r["cross"]["image"] is False and r["cross"]["tip"].endswith("localhost:" + m.pages.rsplit(":", 1)[1] + "/no-icon"), str(r))
+    check("a slow load shows nothing at first, and on the icon after half a second", r.get("quietBefore") is True and r.get("shown") is True and r.get("shownAfter", 0) >= 500, str(r))
+    a = r.get("animation") or {}
+    check("the sign breathes, and comes to rest by itself", a.get("name") == "slow-load" and a.get("state") == "running" and 0 < (a.get("iterations") or 0) < 100, str(r))
+    fade = r.get("brightening") or [0]
+    check("a page that never finishes leaves the sign still and dimmed, with nothing running", r.get("settled") == {"state": "finished", "opacity": "0.45", "stillSigned": True}, str(r))
+    check("the sign goes softly when the page is there", r.get("gone") is True and r.get("fading") == [300] and fade == sorted(fade) and fade[-1] == 1, str(r))
+    check("a load does not replace the icon", r.get("sameIcon") is True, str(r))
+    check("a row drawn again during a load keeps its sign where it was", r.get("redrawn") == {"icon": True, "sameStart": True} and r.get("dripEnded") is True, str(r))
+    check("a tile shows the sign too, and it goes", r.get("tileSign") is True and r.get("tileEnded") is True, str(r))
+
+    # A real pointer. On the same row twice, then away and back each time: to a placeholder,
+    # to the tab that is showing, and to nothing. Then to a tile, loaded and not.
+    p = r.get("points")
+    # An essential unloaded, as in every window but the one it was used in. Only now: looking
+    # through the tabs to find the sidebar page, as sidebar_page does, makes Firefox load it again.
+    sidebar_page(m, until + """
+      const home = doc.querySelector("#essentials .tile");
+      await page.browser.tabs.discard(Number(home.dataset.tab));
+      await until(() => home.matches(".unloaded"));""")
+    pointer_over(m, p["title"], p["close"], p["ghost"], p["title"], p["showing"], p["close"], p["nothing"], p["title"], p["ghostTile"], p["tile"], p["tile"])
+    warmed = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 5; i++) await wait(50); await wait(200); return main().__warmed;")
+    check("a tab is warmed once for each time the pointer comes to it, and only a loaded one", len(warmed) == 5 and all("/icon?warm" in u for u in warmed[:4]) and "?tile" in warmed[4], str(warmed))
+
+    # The sidebar panel itself, as in use: the page above is the same page, opened in a tab, since
+    # a test can take a real pointer only there. Here a pointer's event is sent to a row instead.
+    r2 = sidebar_page(m, until + """
+      const panel = page.browser.extension.getViews({type: "sidebar", windowId: here.id})[0];
+      if (!panel) return {panel: false};
+      const rowThere = id => panel.document.querySelector(`#tabs .tab[data-tab="${id}"]`), slow = rowThere(arguments[0]);
+      const out = {panel: true, tip: slow?.title};
+      rowThere(arguments[1])?.dispatchEvent(new panel.MouseEvent("mouseover", {bubbles: true}));
+      await page.browser.tabs.reload(arguments[0]);
+      out.sign = !!(await until(() => slow.querySelector(".slow-load"), 6000));
+      out.ended = !!(await until(() => !slow.querySelector(".slow-load"), 6000));
+      return out;""", r.get("slowId"), r.get("warmId"))
+    warmed_there = m.js(H + "for (let i = 0; i < 40 && main().__warmed.length < 6; i++) await wait(50); return main().__warmed;")
+    check("in the sidebar panel itself, the tooltip, the sign and the warm-up are the same",
+          r2.get("panel") is True and "/slow-icon" in (r2.get("tip") or "") and r2.get("sign") is True and r2.get("ended") is True and len(warmed_there) == 6 and "/icon?warm" in warmed_there[5], f"{r2} {warmed_there}")
+
+    # Asked for less motion: the sign is a still dim, and what moved in the sidebar stands still.
+    m.js('Services.prefs.setIntPref("ui.prefersReducedMotion", 1); return 1;')
+    r = sidebar_page(m, until + """
+      const slowId = arguments[0], row = doc.querySelector(`#tabs .tab[data-tab="${slowId}"]`);
+      await until(() => page.getComputedStyle(doc.documentElement).transitionDuration === "0s", 2000);
+      await page.browser.tabs.reload(slowId);
+      const icon = await until(() => row.querySelector(".slow-load"), 6000);
+      const style = icon && page.getComputedStyle(icon);
+      const out = {name: style?.animationName, opacity: style?.opacity, moving: icon?.getAnimations().length, window: page.getComputedStyle(doc.documentElement).transitionDuration};
+      // The setting off has a sidebar too, which stays as it was.
+      doc.documentElement.classList.remove("alone");
+      out.withoutAlone = page.getComputedStyle(doc.documentElement).transitionDuration;
+      doc.documentElement.classList.add("alone");
+      await until(async () => await status(slowId) === "complete");
+      await wait(300);
+      out.after = row.querySelector("img").getAnimations().length;
+      return out;""", r.get("slowId"))
+    m.js(H + """Services.prefs.clearUserPref("ui.prefersReducedMotion");
+      const a = main();
+      a.gBrowser.selectedTab = a.__selected;
+      // Unpinned first: a closed essential comes back.
+      a.gBrowser.tabs.filter(t => t.pinned && url(t).includes("?tile")).forEach(t => a.gBrowser.unpinTab(t));
+      await wait(1500);
+      await removeWhere((w, t) => url(t).startsWith(args[0]) || url(t).startsWith(args[2]));
+      a.gBrowser.warmupTab = a.__warmup;
+      if (args[1]) { other()?.close(); await wait(2500); }
+      return 1;""", m.pages, opened, m.pages.replace("127.0.0.1", "localhost"))
+    check("with less motion asked for, a slow load is a still dim", r.get("name") == "none" and r.get("moving") == 0 and r.get("opacity") == "0.55" and r.get("after") == 0, str(r))
+    check("with less motion asked for, nothing in the sidebar moves", r.get("window") == "0s", str(r))
+    check("with the setting off, what is in the sidebar's style stays as it was", r.get("withoutAlone") == "0.25s", str(r))
+    no_problems(m, "after the small touches")
 
 
 def alone_idle(m):
@@ -5649,6 +5859,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_folds_rest,
                 alone_sound,
                 alone_news,
+                alone_touches,
                 alone_idle, alone_update, alone_folds_rest_kept, alone_end, alone_restart, alone_folds_rest_kept)
 
 
