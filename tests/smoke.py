@@ -5318,6 +5318,11 @@ def alone_sync_hide(m):
     m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/settings/settings.html") || url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t); await wait(500); return 1;""")
 
 
+# A row of a web page: its tooltip is its title, then its address. (No backslash: the
+# script goes through a string on its way into the page.)
+BRIDGE_PAGE_ROW = """const isPage = r => (r.title.split(String.fromCharCode(10))[1] || "").startsWith("http");"""
+
+
 def alone_bridge(m):
     # The real thing, end to end: an MCP client, the real MCP server, the real socket and
     # native host, and Firefox. No Sidebery, no gh, no network: the page is the test server's.
@@ -5471,7 +5476,8 @@ def alone_bridge(m):
 
     # Refused: a tab in a space that is not open, also past the MCP server, straight on the socket.
     mine = m.js(H + """const t = main().gBrowser.selectedTab; return {context: t.userContextId, id: 0};""")
-    others = sidebar_page(m, """return [...doc.querySelectorAll("#tabs .tab")].map(r => Number(r.dataset.tab));""")
+    # A loaded web page: new tabs come first in the list (newtabs.js), this sidebar page among them, and they hold none.
+    others = sidebar_page(m, BRIDGE_PAGE_ROW + """return [...doc.querySelectorAll("#tabs .tab")].filter(r => !r.classList.contains("unloaded") && isPage(r)).map(r => Number(r.dataset.tab));""")
     other_tab = others[0]
     for name, args in (("read_page", {}), ("screenshot", {}), ("find", {}), ("click", {"selector": "a"}), ("type", {"selector": "a", "text": "x"}), ("close_tab", {}), ("navigate", {"url": m.pages + "/agent"}), ("select_tab", {}), ("leave_for_you", {})):
         text, is_error, _ = client.call(name, tab=other_tab, **args)
@@ -5527,7 +5533,7 @@ def alone_bridge(m):
     client.call("close_tab", tab=third_tab)
     open_space(third, "")
     # By dragging it to the space's dot, with real drag events on the real sidebar.
-    handed = sidebar_page(m, """const t = plainTabs()[0], id = Number(t.dataset.tab), title = t.querySelector(".title").textContent;
+    handed = sidebar_page(m, BRIDGE_PAGE_ROW + """const t = plainTabs().find(r => isPage(r)), id = Number(t.dataset.tab), title = t.querySelector(".title").textContent; // a page: a new tab has nothing to move
       const dot = doc.querySelector(`#spaces .space[data-space="${args[0]}"]`), box = dot.getBoundingClientRect(), data = new page.DataTransfer();
       const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5, dataTransfer: data};
       t.dispatchEvent(new page.DragEvent("dragstart", at)); dot.dispatchEvent(new page.DragEvent("dragover", at));
@@ -5596,7 +5602,7 @@ def alone_bridge(m):
 
     # Copy for Claude, by the same page.
     m.js(H + """const w = main(); w.focus(); return 1;""")
-    tab_menu = """const row = plainTabs()[0], box = row.getBoundingClientRect(); await wait(200);
+    tab_menu = BRIDGE_PAGE_ROW + """const row = plainTabs().find(r => isPage(r)), box = row.getBoundingClientRect(); await wait(200); // a page, not a new tab
       row.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5})); await wait(500);
       const labels = [...doc.querySelectorAll("#menu .item")].map(b => b.textContent); doc.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true})); doc.body.click(); return labels;"""
     labels_off = sidebar_page(m, tab_menu)
