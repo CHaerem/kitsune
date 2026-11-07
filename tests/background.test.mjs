@@ -1191,3 +1191,20 @@ test("with Tidier alone, an essential moved just after its copy was made is move
   assert.ok(ff.tabs.has(first.id));
   x.kill();
 });
+
+test("an essential's copy dragged to another window just after it was made is there once", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const from = ff.addWindow({ focused: true });
+  ff.addTab(from.id, { url: "about:blank", active: true });
+  const copy = ff.addTab(from.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const to = ff.addWindow();
+  ff.addTab(to.id, { url: "about:blank", active: true });
+  ff.addTab(to.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  x.js(`busy.add(${copy.id})`); // as createEssentials does for a second and a half
+  await x.b.tabs.move(copy.id, { windowId: to.id, index: 0 });
+  await wait(3000); // after the window it left has got its copy back
+  assert.equal(ff.list(to.id).filter(t => t.pinned).length, 1);
+  x.kill();
+});

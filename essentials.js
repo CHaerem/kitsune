@@ -368,7 +368,7 @@ browser.tabs.onDetached.addListener((tabId, info) => {
   serial(async () => { await movedAway(tabId, t => t.windowId === info.oldWindowId); await ensureWindow(info.oldWindowId); });
 });
 browser.tabs.onAttached.addListener((tabId, info) => {
-  if (!keyByTab.has(tabId) || busy.has(tabId)) return;
+  if (!keyByTab.has(tabId)) return; // (a copy made a moment ago is yours to drag as well)
   serial(() => dropDoubleCopies(tabId, info.newWindowId));
 });
 
