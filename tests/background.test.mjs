@@ -1391,3 +1391,49 @@ test("a placeholder that is the live tab, selected in a window you were not usin
   assert.equal(ff.tabs.get(placeholder.id).url, "https://a.example/");
   x.kill();
 });
+
+test("an essential's copy on its way to its placeholder is not sent there again and again", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank" });
+  const open = ff.addTab(here.id, { url: "https://e.example/", pinned: true, active: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const other = ff.addTab(there.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  // Firefox unloaded the other copy with the page in it. Sent to its placeholder, it says "loading"
+  // while it is still about:blank; the placeholder's address comes only if the load gets through.
+  Object.assign(ff.tabs.get(other.id), { url: "https://e.example/", discarded: true });
+  let starts = 0;
+  const update = x.b.tabs.update;
+  x.b.tabs.update = async (id, p) => {
+    if (id !== other.id || !p.url) return update(id, p);
+    starts++;
+    if (starts >= 50) return update(id, p);
+    Object.assign(ff.tabs.get(id), { url: "about:blank", discarded: false, status: "loading" });
+    x.b.tabs.onUpdated.fire(id, { status: "loading" }, ff.snap(ff.tabs.get(id)));
+    setTimeout(() => { if (starts < 50) update(id, p); }, 100 / 100);
+    return ff.snap(ff.tabs.get(id));
+  };
+  ff.navigate(open.id, "https://e.example/");
+  await wait(500);
+  assert.equal(starts, 1, "its load is started once");
+  x.kill();
+});
+
+test("an essential's placeholder opens its page itself when the other copy is still on its way, on about:blank", async () => {
+  const ff = new FakeFirefox();
+  ff.store.essentials = [{ key: "e", url: "https://e.example/", cookieStoreId: C1, title: "E", icon: "x" }];
+  const here = ff.addWindow({ focused: true });
+  ff.addTab(here.id, { url: "about:blank", active: true });
+  const placeholder = ff.addTab(here.id, { url: GHOST("essential", "e"), pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const there = ff.addWindow();
+  ff.addTab(there.id, { url: "about:blank", active: true });
+  const onItsWay = ff.addTab(there.id, { url: "about:blank", pinned: true, cookieStoreId: C1 }, { essentialKey: "e" });
+  const x = await run(ff);
+  const asked = await x.send({ type: "essentialShown" }, { tab: ff.snap(ff.tabs.get(placeholder.id)) });
+  assert.equal(asked.load, true);
+  assert.equal(ff.tabs.get(onItsWay.id).windowId, there.id, "the other copy is not moved");
+  x.kill();
+});

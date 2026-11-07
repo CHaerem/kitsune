@@ -430,7 +430,7 @@ async function dropDoubleCopies(tabId, windowId) {
 // itself. A copy that loads anyway (restored by Firefox, or unloaded by it
 // and selected again) makes the other copies placeholders (oneLoaded).
 
-const isLoadedCopy = t => !t.discarded && !isGhostUrl(t.url);
+const isLoadedCopy = t => !t.discarded && isWeb(t.url); // (not one still on about:blank, on its way to a page or its placeholder)
 
 async function copiesOf(key) {
   const pinned = await browser.tabs.query({ pinned: true });
@@ -466,7 +466,7 @@ async function essentialShown(tab) {
 // are using, else a loaded one there, else the one used last. Every other copy
 // that shows the real page (loaded, or unloaded by Firefox) becomes a placeholder.
 async function oneLoaded(key) {
-  const real = (await copiesOf(key)).filter(t => !isGhostUrl(t.url));
+  const real = (await copiesOf(key)).filter(t => isWeb(t.url));
   const loaded = real.filter(t => !t.discarded);
   const here = loaded.filter(t => t.windowId === focusedWindowId);
   const keep = here.find(t => t.active) || here[0] || loaded.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
@@ -501,8 +501,11 @@ function selectedEssential(windowId) {
 }
 
 // A copy started loading its page: the others become placeholders.
+// (A copy on its way to a page or its placeholder says it is loading while it is still
+// about:blank. Taken for a page, it would be sent to its placeholder again, which starts
+// that load over and says the same: a thousand times a second, until a load got through.)
 browser.tabs.onUpdated.addListener((tabId, change, tab) => {
-  if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || isGhostUrl(tab.url)) return;
+  if (!started || busy.has(tabId) || !tab.pinned || change.status !== "loading" || !isWeb(tab.url)) return;
   const key = keyByTab.get(tabId);
   if (key) serial(() => oneLoaded(key));
 }, { properties: ["status"] });
