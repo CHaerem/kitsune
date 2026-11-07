@@ -1659,3 +1659,18 @@ test("an unpinned essential whose page is slow to answer is not closed as a stra
   assert.ok(ff.tabs.has(copy.id), "the tab you unpinned is still there");
   x.kill();
 });
+
+test("a link seen late with no space to go to is still synced", async () => {
+  const ff = new ChaosFirefox({});
+  ff.managed = { tidierAlone: true };
+  ff.containers = new Set(["firefox-default"]); // no container, so no space at all
+  ff.store.syncedTabs = { a: entry("https://a.example/", { cookieStoreId: "firefox-default" }) };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "https://a.example/", active: true }, { syncKey: "a", syncRole: "live" });
+  const late = ff.addTab(w.id, { url: "https://late.example/" });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "update" });
+  await ff.clock.idle(60000);
+  assert.ok(ff.values.get(late.id)?.syncKey);
+  x.kill();
+});

@@ -194,7 +194,8 @@ function seenLateInSpace(tab) {
   if (!tidierAlone || tab.pinned || tab.incognito) return false;
   if (!isWeb(tab.url)) { if (!isGhostUrl(tab.url)) firstPage.add(tab.id); return false; }
   if (tab.cookieStoreId !== NO_CONTAINER) return false;
-  serial(() => byRule(tab.id, tab.url));
+  // (With no space to go to it stays where it is, and is a tab like any other.)
+  serial(async () => { await byRule(tab.id, tab.url); registerSoon(tab.id); });
   return true;
 }
 
