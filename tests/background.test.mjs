@@ -1626,3 +1626,18 @@ test("a pinned tab in a private window does not become an essential, at a start 
   assert.equal(ff.list(w.id).filter(t => t.pinned).length, 0);
   x.kill();
 });
+
+test("with Sidebery a start leaves the order of the essentials alone, since Sidebery has sorted them its own way", async () => {
+  const ff = new ChaosFirefox();
+  ff.store.essentials = four().map((e, i) => ({ ...e, cookieStoreId: i < 2 ? C1 : "firefox-container-2" }));
+  const w = ff.addWindow({ focused: true });
+  // Sidebery's order of spaces has the second container first.
+  const order = ["c", "d", "a", "b"];
+  for (const key of order) ff.addTab(w.id, { url: GHOST("essential", key), pinned: true, discarded: true, cookieStoreId: ff.store.essentials.find(e => e.key === key).cookieStoreId }, { essentialKey: key });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const x = ff.boot();
+  x.b.runtime.onStartup.fire();
+  await ff.clock.idle(120000);
+  assert.deepEqual(ff.list(w.id).filter(t => t.pinned).map(t => ff.values.get(t.id).essentialKey), order);
+  x.kill();
+});

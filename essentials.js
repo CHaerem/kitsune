@@ -586,5 +586,7 @@ async function essentialsAgree() {
     else await copyNotYetPinned(t);
   }
   // And a move in the moment a copy appeared is not looked at (see onMoved): the list decides.
-  for (const w of await normalWindows()) await sortEssentials(w.id, await getList());
+  // (Not with Sidebery: when Firefox starts it sorts them by its own order of spaces, and
+  // the two must not take turns moving them at every start.)
+  if (tidierAlone) for (const w of await normalWindows()) await sortEssentials(w.id, await getList());
 }

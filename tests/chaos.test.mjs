@@ -484,7 +484,8 @@ async function check(W, phase, { strong }) {
       }
       // (A move in the moment a copy appears is not looked at: put right at the next start.)
       const shown = pinned.map(t => W.value(t, "essentialKey")).filter(k => keys.includes(k));
-      if (strong && shown.join() !== keys.filter(k => shown.includes(k)).join()) bad("essential-order", `window ${w.id} has ${shown}, the list ${keys}`);
+      // (With Sidebery the start leaves that to Sidebery's own sorting, which is not here.)
+      if (strong && W.alone && shown.join() !== keys.filter(k => shown.includes(k)).join()) bad("essential-order", `window ${w.id} has ${shown}, the list ${keys}`);
     }
     for (const e of list) {
       const loaded = tabs.filter(t => t.pinned && W.value(t, "essentialKey") === e.key && !t.discarded && isWeb(t.url));
