@@ -147,7 +147,9 @@ const OPS = {
   // Going to another address in a page.
   navigate: { weight: 4, run(W, { a }) {
     const t = pick(W.allTabs().filter(t => isWeb(t.url) && !t.discarded), a);
-    if (t) W.ff.load(t, W.newUrl());
+    if (!t) return;
+    W.closedAddresses.add(t.url); // the old address has gone, also from a key it no longer has
+    W.ff.load(t, W.newUrl());
   } },
   title: { weight: 3, run(W, { a, b }) {
     const t = pick(W.allTabs().filter(t => isWeb(t.url) && !t.discarded), a);
@@ -486,7 +488,8 @@ async function check(W, phase, { strong }) {
         // What the sidebar has drawn is what is true now.
         if (ff.ports.has(w.id)) {
           const drawn = ff.views.get(w.id), fresh = await W.read(`viewFor(${w.id})`);
-          if (JSON.stringify(drawn) !== JSON.stringify(fresh)) bad("stale-view", `window ${w.id}: drawn ${JSON.stringify(drawn)?.slice(0, 300)} is not ${JSON.stringify(fresh).slice(0, 300)}`);
+          const differ = Object.keys(fresh ?? {}).filter(k => JSON.stringify(drawn?.[k]) !== JSON.stringify(fresh[k]));
+          if (differ.length) bad("stale-view", `window ${w.id}: drawn ${differ.map(k => `${k} ${JSON.stringify(drawn?.[k])}`).join(", ").slice(0, 400)} is not ${differ.map(k => JSON.stringify(fresh[k])).join(", ").slice(0, 400)}`);
         }
       }
     }

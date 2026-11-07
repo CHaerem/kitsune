@@ -1466,3 +1466,23 @@ test("a move Firefox ignores does not make the next one you make not count", asy
   assert.equal(stale.length, 2);
   x.kill();
 });
+
+test("an essential's tile shows the title its page has now", async () => {
+  const ff = new ChaosFirefox();
+  ff.managed = { tidierAlone: true };
+  const w = ff.addWindow({ focused: true });
+  ff.addTab(w.id, { url: "about:home", active: true });
+  const x = ff.boot();
+  x.b.runtime.onInstalled.fire({ reason: "install" });
+  await ff.clock.run(3000);
+  ff.connectSidebar(w.id);
+  const t = ff.openTab(w.id, { url: "https://e.example/", active: true, cookieStoreId: C1 });
+  await ff.clock.run(3000);
+  ff.pinTab(t);
+  await ff.clock.idle(60000);
+  t.title = "(3) E";
+  ff.updated(t, { title: t.title });
+  await ff.clock.idle(60000);
+  assert.equal(ff.views.get(w.id).essentials[0].title, "(3) E");
+  x.kill();
+});

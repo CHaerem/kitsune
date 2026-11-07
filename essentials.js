@@ -304,6 +304,7 @@ async function updateFromCopy(key, tab) {
   if (tab.title) entry.title = tab.title;
   if (tab.favIconUrl) entry.icon = tab.favIconUrl;
   setList([...list], { lazy: true });
+  viewAllSoon(); // the sidebar shows this title: the event that told of it has drawn the old one
 }
 
 // An essential with no icon saved yet (not opened since it became one) takes
