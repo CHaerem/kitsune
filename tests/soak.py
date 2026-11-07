@@ -64,7 +64,8 @@ SPARE_ENTRIES = 25        # what a list in memory may hold beyond the tabs and w
 # space"), and this is not the setup Tidier is going to. The pin race is reported upstream
 # (KNOWN_SIDEBERY_BUGS in smoke.py). In a soak, windows and tabs come and go faster than its
 # sidebar settles them; tools/fix_spaces.py exists for the daily browser.
-SIDEBERY_SAYS = {"an essential is in another space (pin race)", "a tab is in another space"}
+# It also keeps pinned tabs by space, and moves them itself at times.
+SIDEBERY_SAYS = {"an essential is in another space (pin race)", "a tab is in another space", "essentials not in the list's order"}
 
 
 def grows_steadily(samples):
@@ -854,9 +855,11 @@ WHAT_CHANGES = LIB + r"""
   return [...now].filter(([t, s]) => before.get(t) !== s).map(([t, s]) => before.get(t) + " -> " + s + " " + url(t).slice(-40)).slice(0, 8).join("; ") || "nothing";
 """
 
+# A page whose title ticks keeps Tidier working, so it is closed before Tidier can go quiet.
 CLOSE_TICKING = LIB + r"""
-  for (const w of normal()) for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/tick/")) w.gBrowser.removeTab(t);
-  return 1;
+  const closed = [];
+  for (const w of normal()) for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/tick/")) { closed.push(keyOf(w, t)); w.gBrowser.removeTab(t); }
+  return closed.filter(Boolean);
 """
 
 FOCUS = LIB + r"""
@@ -1001,7 +1004,7 @@ class Soak:
     def settle(self):
         """Wait until Tidier has stopped working: its queue is empty and no jobs ran for a while."""
         t0 = time.time()
-        self.call(CLOSE_TICKING)
+        self.closed.update(self.call(CLOSE_TICKING))
         self.call(FOCUS)
         last, quiet_since = None, None
         while time.time() - t0 < SETTLE_LIMIT_S:
