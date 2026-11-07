@@ -1,6 +1,7 @@
 // sidebar/selection.js on a tiny stand-in for the sidebar's page: which tabs a gesture
-// picks, which messages come out, and in what order. What really happens to the tabs,
-// with real events, is for the smoke test (alone_selection).
+// picks, which messages come out, and in what order. Then, on the fake Firefox, what the
+// background does when many tabs get the same message at once. What really happens to
+// the tabs, with real events, is for the smoke test (alone_selection).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
