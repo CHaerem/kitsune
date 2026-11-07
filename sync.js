@@ -119,6 +119,9 @@ async function syncSnapshot(st) {
   const containers = await browser.contextualIdentities.query({});
   const sidOf = new Map(Object.entries(st.map).map(([sid, id]) => [id, sid]));
   sidOf.set(NO_CONTAINER, SYNC_NO_SPACE);
+  // Nothing an agent did may reach a machine that has not turned it on (bridge.js): not the
+  // Agent space with what is in it, nor a For you folder elsewhere.
+  if (agentSpaceId) sidOf.delete(agentSpaceId);
   for (const c of containers) {
     const sid = sidOf.get(c.cookieStoreId);
     if (sid) here.spaces[sid] = syncDefined({ name: c.name, color: c.color, icon: c.icon });
@@ -137,7 +140,7 @@ async function syncSnapshot(st) {
   const folders = Object.entries(all).filter(([key]) => isShared(key)).sort((a, b) => (a[1].rank ?? 0) - (b[1].rank ?? 0));
   for (const [key, e] of folders) {
     const space = sidOf.get(e.cookieStoreId);
-    if (!space) continue;
+    if (!space || e.forYou) continue;
     here.folders[key] = { name: e.name, space };
     note("f:" + space, key);
   }

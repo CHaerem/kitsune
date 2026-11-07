@@ -109,6 +109,26 @@ test("an essential added on one machine appears on the other, in the right conta
   end();
 });
 
+// The design of the bridge: nothing an agent did reaches a machine that has not turned it on.
+test("the Agent space, what is in it, and a For you folder stay on their machine", async () => {
+  const { A, B, server, machines, end } = await pair({ 1: "Work", 2: "Private", 3: "Agent" });
+  A.ff.store.claude = { agentSpace: c(3) };
+  A.x.js(`agentSpaceId = ${JSON.stringify(c(3))}`);
+  await turnOn(A.x);
+  await turnOn(B.x);
+  await pin(A.x, A.ff, A.w.id, "https://agent.example/", c(3));
+  await pin(A.x, A.ff, A.w.id, "https://jira.example/", c(1));
+  const forYou = await A.x.js("createFolder")("For you", c(1)); // as bridge.js makes it (forYouFolder)
+  await A.x.js("(async key => { const all = await getSynced(); all[key].forYou = true; saveSynced(all); })")(forYou);
+  await A.x.js("createFolder")("Shared", c(1));
+  await syncAround(server, machines);
+  const shared = JSON.stringify(A.ff.syncArea);
+  assert.ok(shared.includes("jira.example") && shared.includes("Shared"), "the rest goes across");
+  assert.ok(!shared.includes("agent.example") && !shared.includes("Agent") && !shared.includes("For you"), shared);
+  assert.ok(!B.ff.store.essentials?.some(e => e.url === "https://agent.example/"));
+  end();
+});
+
 test("nothing that was not asked for: no write with nothing happening, and no answer to one's own write", async () => {
   const { A, B, server, machines, end } = await pair();
   await turnOn(A.x);

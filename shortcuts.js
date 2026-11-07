@@ -62,6 +62,10 @@ const COMMANDS = [
   // to the bar as soon as Firefox lets go of it (customKeys.json in the dotfiles).
   { name: "command-bar", label: "Open or close the command bar", key: "Ctrl+Shift+K" },
   { name: "command-bar-t", label: "The command bar's second key, once Firefox lets go of it", key: "Ctrl+T" },
+  // Copy for Claude, carried out by bridge.js once turned on, with a key only if you give it one.
+  { name: "claude-copy-page", label: "Copy this page for Claude (once turned on in Tidier's settings)" },
+  { name: "claude-copy-tabs", label: "Copy this space's tabs for Claude (once turned on in Tidier's settings)" },
+  { name: "claude-ask", label: "Ask Claude about this page (once turned on in Tidier's settings)" },
 ];
 
 // _execute_sidebar_action never comes here: Firefox carries that one out itself.

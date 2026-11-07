@@ -44,6 +44,7 @@ const tabItem = (t, title, entry) => ({
   sound: ownSound(t), soundTabId: t.id, // what a row shows; with Tidier alone, the real page's (addSounds)
   news: hasNews(t.id),
   page: isWeb(t.url) || isGhostUrl(t.url), // else a new tab page or the like, which only has a place among the tabs (drag.js)
+  note: forYouNotes.get(syncKeyByTab.get(t.id)), // bridge.js
 });
 
 const folderName = url => decodeURIComponent((url.split("#")[1] || "").replace(/~!.*!~$/, "")) || "Folder";

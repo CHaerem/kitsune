@@ -45,7 +45,7 @@ let started = false;             // tab sync waits for startup before reacting
 
 const syncable = tab => !tab.pinned && !tab.incognito && !isHiddenSpace(tab.cookieStoreId) && (isWeb(tab.url) || isSideberyGroup(tab.url));
 const getSynced = () => syncedList.get();
-const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); };
+const saveSynced = (all, options) => { syncedList.set(all, options); viewAllSoon(); forYouSoon(); };
 // The icon a record keeps. Firefox drops a tab's icon as a new page comes in, and a page
 // may have none: on the same site the one the record has is still right, and keeps a row
 // from showing a letter meanwhile. On another site it is the old site's, which a placeholder
@@ -1039,6 +1039,7 @@ async function start(delayMs) {
   await step(async () => { for (const w of await normalWindows()) noteOrder(w.id); });
   started = true;
   serial(moveStragglers); // isolation.js: once new tabs are registered again
+  await step(startBridge); // bridge.js
   // A ghost selected while Tidier was starting was not pulled in, and waits blank.
   if (focusedWindowId !== browser.windows.WINDOW_ID_NONE) pullSelected(focusedWindowId);
   await step(startSync); // sync.js

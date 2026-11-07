@@ -19,7 +19,7 @@ async function theCopy() {
   return {
     tidier: browser.runtime.getManifest().version, when: Date.now(),
     spaces: containers.map(c => ({ id: c.cookieStoreId, name: c.name, colorCode: c.colorCode, color: c.color, icon: c.icon })),
-    data: await browser.storage.local.get(COPY_KEYS),
+    data: bridgeOutOfCopy(await browser.storage.local.get(COPY_KEYS)), // bridge.js: the Agent space stays on this machine
   };
 }
 

@@ -55,6 +55,7 @@
   "background": {
     "scripts": [
       "common.js",
+      "bridge.js",
       "essentials.js",
       "tabsync.js",
       "folders.js",
@@ -116,7 +117,10 @@
     "tab-6": { "description": "Go to the sixth tab of this space" },
     "tab-7": { "description": "Go to the seventh tab of this space" },
     "tab-8": { "description": "Go to the eighth tab of this space" },
-    "tab-9": { "description": "Go to the ninth tab of this space" }
+    "tab-9": { "description": "Go to the ninth tab of this space" },
+    "claude-copy-page": { "description": "Copy this page for Claude (once turned on in Tidier's settings)" },
+    "claude-copy-tabs": { "description": "Copy this space's tabs for Claude (once turned on in Tidier's settings)" },
+    "claude-ask": { "description": "Ask Claude about this page (once turned on in Tidier's settings)" }
   },
   "icons": {
     "48": "icon.svg",

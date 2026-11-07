@@ -163,7 +163,7 @@ async function moveOutOfPlace(tab, url, wasFirstPage = false) {
   const popup = !!win && win.type !== "normal";
   const home = tab.cookieStoreId === NO_CONTAINER ? await homeOf(tab) : null;
   const rules = home?.inFolder ? [] : (await rulesList.get()).filter(ruleCounts);
-  const space = whereItBelongs({ url, tab, firstPage: wasFirstPage, popup, rules, activeSpace: home?.space });
+  const space = whereItBelongs({ url, tab, firstPage: wasFirstPage, popup, rules, activeSpace: home?.space, exempt: bridgeKeeps(tab) }); // bridge.js
   if (!space) return;
   reopening.add(tab.id); // a request it makes meanwhile is stopped too
   try {
@@ -205,7 +205,7 @@ async function lookAtRequest(details, look) {
   if (byHandNow) settle(tabId, url);
   const space = whereItBelongs({
     url, tab: { ...tab, cookieStoreId: here }, originUrl: details.originUrl, firstPage, redirect, popup, rules: home?.inFolder ? [] : rules.filter(ruleCounts),
-    activeSpace: home?.space, exempt: tab.pinned || byHandNow,
+    activeSpace: home?.space, exempt: tab.pinned || byHandNow || bridgeKeeps(tab), // bridge.js: no rule takes an agent's tab among your logins
   });
   if (!space) return {};
   // The tab has moved on to another address meanwhile (Enter pressed twice): Firefox has

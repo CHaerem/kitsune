@@ -163,6 +163,94 @@ It writes `~/Library/Application Support/Mozilla/NativeMessagingHosts/tidier_git
 which only allows this extension to start the host. The `native/` folder is not
 part of the signed extension.
 
+## Working with Claude and other agents
+
+Two things, each off until you turn it on under *Claude and other agents* on the settings
+page, on this machine only, and only with Tidier alone. Neither setting, nor what an agent
+did in its space or left you, is part of a copy.
+
+**Copy for Claude.** A tab's menu and the command bar get *Copy page for Claude* (title,
+address and the page as clean Markdown; with several tabs selected, a list), *Copy these
+tabs for Claude* (the space's folders and tabs as a list) and *Ask Claude about this page*
+(copies it and opens claude.ai in the space you are in, with your login there). Your own keys
+can be set for them in `about:addons`. Nothing is sent anywhere: you paste it, or do not. A
+page that is not loaded is not loaded for this: you get its title and address.
+
+**The bridge.** An MCP server, so that an agent such as Claude Code can work in the
+browser. To add it, run `native/install.sh` once, turn it on on the settings page, and:
+
+```bash
+claude mcp add tidier -- python3 -I "$PWD/native/tidier-mcp.py"
+```
+
+An agent can then list spaces and tabs, open, go to, select and close tabs, read a page as
+Markdown, take a screenshot, find elements, click, type, and wait for something to show up.
+It can leave you a tab with a note in a folder *For you*, which exists only while it holds
+something, and you can hand it a tab by dragging it to the Agent space's dot.
+
+```
+agent <-stdio-> native/tidier-mcp.py <-Unix socket-> native/tidier-bridge.py <-native port-> bridge.js
+```
+
+### What keeps this safe
+
+- **Agents have a space of their own.** Turning the bridge on makes a space named Agent,
+  with its own container and so its own logins. By default an agent can see and touch only
+  that. It does not learn your other spaces or tabs exist. A rule never sends a tab out of it,
+  nor a tab an agent opened in a space you opened to it on into a closed one.
+- **Another space is your decision,** per space, on the settings page: closed unless you
+  say otherwise, and *Can read* before *Can read and act*. A space you open is open with
+  the logins in it, so a workplace's space is never opened by itself. Closing one counts at
+  once, also for what an agent has under way there.
+- **The decision is made in the extension,** in one place (`bridgeAllows`, `bridge.js`), on
+  every call. The two scripts in `native/` only carry messages; anything you run could talk
+  to the socket directly, and gets the same answers. No tool can change a setting or open
+  a space: those messages are taken only from the settings page.
+- **Never reachable, since no tool does it:** cookies, passwords, storage, downloads,
+  files, Firefox's or Tidier's settings. Agents go to `http:` and `https:` only, never
+  `file:`, `about:` or an extension's pages. What is in a form field is never read, not even
+  by asking a selector about it letter by letter. A password
+  or card field is left to you. Firefox fills in saved passwords in any container, and an
+  extension cannot stop that, so on a page with a password filled in an agent cannot click
+  or send a form: it could otherwise sign in to your account without knowing the password.
+- **It cannot take you along.** An agent's tabs open in the background, a hundred in a
+  space at most. A tab comes to the front only where you are already looking at its space.
+- **It shows.** While an agent is at work, its space's dot has a thin ring and every sidebar
+  has one line with its last action and a *Stop*. Stop cuts the bridge at once, also what
+  is under way, and it stays off until you turn it on again. The settings page has a short
+  log, with what was refused, kept only in memory and holding sites, not addresses.
+- **Local only, and only while on.** `tidier-bridge.py` is started by Firefox and only
+  Tidier may start it; it lives exactly as long as the port, so off means no process and no
+  socket. The socket is `~/.config/tidier/bridge.sock`, mode 0600, in a folder only you can
+  write to, and each connection's user is checked. There is no network port. Web pages
+  cannot reach any of it: they cannot use native messaging, there is no content script
+  listening, and no page of Tidier's can be framed or loaded by them.
+- **Pages can try to steer an agent.** Everything read from a page (text, titles,
+  addresses, what `find` returns, a screenshot) goes back marked as untrusted, between markers
+  with a random number the page cannot know, so it cannot write its own end to them.
+  An agent is told that it is data and not instructions. Text a person cannot see is
+  left out. **This is help, not a guarantee:** no marking can force a language model to
+  ignore what it reads, and white text on a white background gets through.
+
+What this does not do: it does not limit where an agent goes in its own space (a page may
+start a download into your Downloads folder, as for you; Firefox asks before installing
+an add-on), it does not hide a space you opened from it, and it does not protect you
+from what you run yourself: anything running under your account can reach the socket while
+it is on, and could read your Firefox profile anyway. Keep it off when you are not
+using it. A note an agent leaves you can have been steered by a page as well. A
+screenshot shows what the page shows, also a name typed in a field, and a rich text box
+that is part of a page (not a form field) is read as the page's text.
+
+Reading pages and screenshots need access to all websites, which is optional and asked
+for in the click that turns these on. Without it an agent can still see tabs and addresses,
+and a copy holds the title and address. A click in the sidebar does not give a page's
+`activeTab` in Firefox (only its own menus, keys and toolbar button do), so that is not used.
+It can be taken back in `about:addons`.
+
+The checks are in `tests/bridge.test.mjs` (what is allowed, on a fake Firefox),
+`tests/test_bridge.py` (the socket and the protocol, playing Firefox) and `alone_bridge` in
+`tests/smoke.py` (end to end, in a real Firefox).
+
 ## Placeholders (ghost.html)
 
 Firefox cannot give an unloaded tab a title or icon. Ghosts and essential

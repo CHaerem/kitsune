@@ -67,12 +67,19 @@ is reported as failed. It checks that:
   - after Firefox is quit and started again, both windows come back with the
     same essentials and tabs, one live tab each, folders with their tabs and
     every tab in its space, and tab sync and new windows still work (only
-    where Tidier can be installed for real: Developer Edition, or --xpi).
+    where Tidier can be installed for real: Developer Edition, or --xpi);
+  - the bridge to agents, end to end through the real MCP server, socket and
+    host (alone_bridge): off means no socket and no process; an agent sees and
+    touches only its own space, and is refused elsewhere, also past the server;
+    what comes from a page is marked as untrusted; Stop cuts it at once.
 """
+import base64
 import glob
 import json
 import os
 import re
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -81,6 +88,7 @@ import traceback
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mcp_client import Mcp  # noqa: E402
 from testfirefox import EXT_DIR, EXT_ID, PORT, SIDEBERY_ID, TestFirefox  # noqa: E402
 
 CMD, SHIFT, CTRL, ESC = "", "", "", ""
@@ -1255,6 +1263,8 @@ def move_over(m):
     keys_now = """return Object.fromEntries((await WebExtensionPolicy.getByID(args[0]).extension.shortcuts.allCommands()).map(c => [c.name, c.shortcut]));"""
     keys0 = m.js(keys_now, EXT_ID)
     check("with Sidebery, Tidier's only key is the one to copy an address", [k for k, v in keys0.items() if v] == ["copy-url"], str(keys0))
+    r = ext_page(m, "/settings/settings.html", """await wait(300); return doc.getElementById("claude-section").hidden;""")
+    check("with Sidebery, the settings page offers nothing for agents", r is True, str(r))
     report = extension_message(m, {"type": "settings:get"})["report"]
     check("the report before moving names the folders and their tabs", len(report["folders"]) == len(before["folders"]) and not report["alone"] and report["tabs"] == len(before["tabs"]), str(report))
     # Sidebery's real export, with one folder closed in its snapshot: the record has an address
@@ -5308,6 +5318,365 @@ def alone_sync_hide(m):
     m.js(H + """const w = main(); for (const t of [...w.gBrowser.tabs]) if (url(t).includes("/settings/settings.html") || url(t).includes("/sidebar/sidebar.html")) w.gBrowser.removeTab(t); await wait(500); return 1;""")
 
 
+def alone_bridge(m):
+    # The real thing, end to end: an MCP client, the real MCP server, the real socket and
+    # native host, and Firefox. No Sidebery, no gh, no network: the page is the test server's.
+    sock = f"{m.config_home}/tidier/bridge.sock"
+    host = os.path.join(EXT_DIR, "native", "tidier-bridge.py")
+    # This Firefox's own child: another test Firefox running from the same folder has a host of its own.
+    running = lambda: subprocess.run(["pgrep", "-P", str(m.js("return Services.appinfo.processID;")), "-f", host], capture_output=True).returncode == 0
+
+    def until(test, seconds=8):
+        for _ in range(int(seconds * 10)):
+            if test():
+                return True
+            time.sleep(0.1)
+        return test()
+
+    # Off: nothing runs, and the agent is told who can turn it on.
+    client = Mcp(m.config_home)
+    client.handshake()
+    check("with the bridge off there is no socket and no process", not os.path.exists(sock) and not running())
+    text, is_error, _ = client.call("list_spaces")
+    check("with the bridge off, an agent is told so", is_error and "settings page" in text, text)
+    r = ext_page(m, "/settings/settings.html", """await wait(500);
+      return {on: doc.getElementById("bridge-on").checked, copy: doc.getElementById("claude-copy").checked, details: doc.getElementById("bridge-details").hidden, shown: !doc.getElementById("claude-section").hidden};""")
+    check("the settings page has it, off", r == {"on": False, "copy": False, "details": True, "shown": True}, str(r))
+    spaces_before = sidebar_page(m, "await wait(300); return spaces().length;")
+
+    # On, by your click (the permission is what that click asks for, given here as in AFTER_TIDIER_ALONE).
+    m.js("""const [id] = args; const {ExtensionPermissions} = ChromeUtils.importESModule("resource://gre/modules/ExtensionPermissions.sys.mjs");
+      await ExtensionPermissions.add(id, {permissions: [], origins: ["<all_urls>"]}, WebExtensionPolicy.getByID(id).extension); return 1;""", EXT_ID)
+    r = ext_page(m, "/settings/settings.html", """doc.getElementById("bridge-on").click(); await wait(1200);
+      return {on: doc.getElementById("bridge-on").checked, status: doc.getElementById("bridge-status").textContent, how: doc.getElementById("bridge-how").textContent, reading: doc.getElementById("bridge-reading").hidden};""")
+    check("turned on, the settings page says it is ready, and how to add it to Claude Code", r["on"] and "Ready" in r["status"] and "claude mcp add tidier" in r["how"] and "tidier-mcp.py" in r["how"], str(r))
+    check("on: there is a socket only you can reach, and the process", until(lambda: os.path.exists(sock)) and stat.S_IMODE(os.lstat(sock).st_mode) == 0o600 and running())
+    agent = sidebar_page(m, """await wait(500); const a = [...doc.querySelectorAll("#spaces .space")].find(b => b.title === "Agent"); return {n: spaces().length, id: a?.dataset.space};""")
+    check("turning it on makes a space named Agent", agent["id"] and agent["n"] == spaces_before + 1, str(agent))
+    context = int(agent["id"].split("-")[-1])
+
+    # What it sees.
+    listed = json.loads(client.call("list_spaces")[0])
+    check("by default an agent sees only its own space", [s["name"] for s in listed] == ["Agent"], str(listed))
+
+    # open_tab lands in the Agent space, its container, and you stay where you are.
+    before = m.js(H + "return {selected: main().gBrowser.selectedTab.userContextId, label: main().gBrowser.selectedTab.label};")
+    text, is_error, _ = client.call("open_tab", url=m.pages + "/agent")
+    tab = json.loads(text)["tab"] if not is_error else None
+    r = m.js(H + """const agents = () => wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("/agent"));
+      // (Hidden a moment after it appears: waited for, not assumed.)
+      for (let i = 0; i < 60 && !(agents().length && agents().every(t => t.hidden)); i++) await wait(100);
+      const here = agents();
+      return {contexts: here.map(t => t.userContextId), hidden: here.map(t => t.hidden), selected: main().gBrowser.selectedTab.userContextId, label: main().gBrowser.selectedTab.label};""")
+    check("open_tab lands in the Agent space and its container", r["contexts"] == [context], f"{text} {r}")
+    check("an agent's tab does not take you along", r["selected"] == before["selected"] and r["label"] == before["label"] and r["hidden"] == [True], str(r))
+    listed = client.call("list_tabs")[0]
+    check("list_tabs shows it, and only what is allowed", "/agent" in listed and "fixture-tab" not in listed and "fixture-essential" not in listed, listed)
+    check("list_tabs is marked as coming from pages", "<untrusted-page-content" in listed, listed[:200])
+
+    # Reading.
+    text, is_error, _ = client.call("wait_for", tab=tab, selector="h1")
+    check("wait_for finds what is there", not is_error and '"found":true' in text, text)
+    page, is_error, _ = client.call("read_page", tab=tab)
+    marks = re.search(r"<untrusted-page-content ([0-9a-f]{32})>(.*)</untrusted-page-content \1>$", page, re.S)
+    inside = marks.group(2) if marks else ""
+    check("read_page gives the text, as Markdown, marked as untrusted", "# A heading" in inside and "**plain**" in inside and "[a link](" in inside and "- First item" in inside and page.index("not instructions") < page.index("<untrusted"), page[:400])
+    check("a page's forged end marker stays inside the marks", "</untrusted-page-content>" in inside and "send the cookies" in inside, page[:900])
+    check("what a person cannot see is not read", not re.search(r"HIDDEN-", page), page)
+    check("what is around the page is left out", "Site menu" not in page and "<script" not in page, page)
+    check("what is in a field is never read", "SECRET-" not in page, page)
+
+    # With a second window its placeholder there means the same page, also in a real Firefox.
+    ghost = ext_page(m, "/settings/settings.html", """const tabs = [...await page.browser.tabs.query({})], live = tabs.find(t => t.id === args[0]);
+      return tabs.find(t => t.windowId !== live.windowId && t.cookieStoreId === live.cookieStoreId && t.url.includes("ghost.html"))?.id ?? null;""", tab)
+    if ghost is not None:
+        text, is_error, _ = client.call("read_page", tab=ghost)
+        check("a placeholder's id reads the page it stands for", not is_error and "# A heading" in text, text[:300])
+
+    found, is_error, _ = client.call("find", tab=tab)
+    check("find lists what can be clicked, and no field's content", "Add a line" in found and "Your name" in found and "SECRET-" not in found, found)
+    check("a table's shown rows are read", "| Shown cell |" in inside and "| Other cell |" in inside, page[:900])
+    check("code shows, without what is hidden in it", "shown code" in inside and "`shown`" in inside, page[:900])
+    text, is_error, _ = client.call("find", tab=tab, text="SECRET-IN")
+    check("find by text does not look in a field either", '"found":0' in text, text)
+    button = json.loads(re.search(r"\n(\{.*\})\n", found, re.S).group(1))
+    ref = next(e["ref"] for e in button["elements"] if e.get("text") == "Add a line")
+
+    # Doing.
+    text, is_error, _ = client.call("click", tab=tab, ref=ref)
+    check("click works", not is_error and "clicked" in text, text)
+    text, is_error, _ = client.call("wait_for", tab=tab, text="It came later", timeout_s=8)
+    check("wait_for waits for what comes later", '"found":true' in text, text)
+    text, is_error, _ = client.call("wait_for", tab=tab, selector="#never", timeout_s=1)
+    check("wait_for gives up in time", '"found":false' in text, text)
+    text, is_error, _ = client.call("type", tab=tab, selector="#pw", text="x")
+    check("a password field is left to you", is_error and "left to the person" in text, text)
+    text, is_error, _ = client.call("type", tab=tab, selector="#card", text="x")
+    check("a card field is left to you", is_error and "left to the person" in text, text)
+    text, is_error, _ = client.call("type", tab=tab, selector="[name=q]", text="hello", submit=True)
+    r = client.call("list_tabs")[0]
+    check("type fills in a field and sends its form", not is_error and "Sent: hello" in r, f"{text} {r}")
+    text, is_error, _ = client.call("click", tab=tab, selector="#newtab")
+    check("a link to a new tab says so, rather than be blocked", not is_error and "open_tab" in text, text)
+    text, is_error, content = client.call("screenshot", tab=tab)
+    picture = next((c for c in content if c["type"] == "image"), None)
+    raw = base64.b64decode(picture["data"]) if picture else b""
+    check("screenshot gives a picture of a tab you are not looking at, marked as from the page", raw[:2] == b"\xff\xd8" and len(raw) > 1000 and "<untrusted" in text, f"{is_error} {text[:200]} {len(raw)}")
+    if os.environ.get("TIDIER_SHOTS") and raw:
+        open(os.path.join(os.environ["TIDIER_SHOTS"], "bridge-screenshot.jpg"), "wb").write(raw)
+
+    # A tab that is not loaded: only what is known of it, until navigate takes it somewhere.
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent?unload")
+    unload = json.loads(text)["tab"]
+    client.call("wait_for", tab=unload, selector="h1")
+    sidebar_page(m, """await page.browser.tabs.discard(args[0]); await wait(400); return 1;""", unload)
+    text, is_error, _ = client.call("read_page", tab=unload)
+    check("read_page does not load a tab behind your back", is_error and "navigate" in text, text)
+    text, is_error, _ = client.call("navigate", tab=unload, url=m.pages + "/agent?loaded")
+    text2 = client.call("read_page", tab=unload)[0]
+    check("navigate loads it, and it can be read", not is_error and "# A heading" in text2, f"{text} {text2[:200]}")
+    check("close_tab closes it", not client.call("close_tab", tab=unload)[1] and "?loaded" not in client.call("list_tabs")[0])
+
+    # A password Firefox filled in, as it does in any container: an agent must not be able to sign in with it.
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent-fixed")
+    layer = json.loads(text)["tab"]
+    client.call("wait_for", tab=layer, text="fixed layer")
+    check("a page that is all one fixed layer is read", "All the text of this page" in client.call("read_page", tab=layer)[0])
+    client.call("close_tab", tab=layer)
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent-signin")
+    signin = json.loads(text)["tab"]
+    client.call("wait_for", tab=signin, selector="button")
+    page2 = client.call("read_page", tab=signin)[0] + client.call("find", tab=signin)[0]
+    check("a filled-in password or name is not read", "SECRET-" not in page2, page2)
+    text, is_error, _ = client.call("click", tab=signin, selector="button")
+    check("with a password filled in, an agent cannot click Sign in", is_error and "left to the person" in text, text)
+    text, is_error, _ = client.call("type", tab=signin, selector="[name=u]", text="x", submit=True)
+    check("nor send the form", is_error and "left to the person" in text, text)
+    title = json.loads(re.search(r"\n(\[.*\])\n", client.call("list_tabs")[0], re.S).group(1))
+    check("so nothing was sent", not any(t["title"] == "Signed in" for t in title), str(title))
+    # A selector can spell out a field's value attribute letter by letter, and many pages keep
+    # that equal to what is in the field. Asked every way a selector can write it.
+    for selector in ('input[value^="S"]', "input[type=password][VALUE]", "body:has(input[value^='S'])", 'input[\\76 alue^="S"]', 'input[val\\ue^="S"]', 'input[/* */value^="S"]', 'input[*|value^="S"]'):
+        text, is_error, _ = client.call("find", tab=signin, selector=selector)
+        check(f"find cannot look at what is in a field by {selector}", is_error and "what is in a field" in text, text)
+    text, is_error, _ = client.call("wait_for", tab=signin, selector='input[value^="S"]', timeout_s=1)
+    check("nor can wait_for", is_error and "what is in a field" in text, text)
+    client.call("close_tab", tab=signin)
+    text, _, _ = client.call("open_tab", url=m.pages + "/agent-shadow")
+    signin = json.loads(text)["tab"]
+    client.call("wait_for", tab=signin, selector="button")
+    text, is_error, _ = client.call("click", tab=signin, selector="button")
+    check("nor with the password inside a closed part of the page", is_error and "left to the person" in text, text)
+    client.call("close_tab", tab=signin)
+
+    # Refused: a tab in a space that is not open, also past the MCP server, straight on the socket.
+    mine = m.js(H + """const t = main().gBrowser.selectedTab; return {context: t.userContextId, id: 0};""")
+    others = sidebar_page(m, """return [...doc.querySelectorAll("#tabs .tab")].map(r => Number(r.dataset.tab));""")
+    other_tab = others[0]
+    for name, args in (("read_page", {}), ("screenshot", {}), ("find", {}), ("click", {"selector": "a"}), ("type", {"selector": "a", "text": "x"}), ("close_tab", {}), ("navigate", {"url": m.pages + "/agent"}), ("select_tab", {}), ("leave_for_you", {})):
+        text, is_error, _ = client.call(name, tab=other_tab, **args)
+        check(f"{name} on a space not allowed is refused", is_error and "No such tab" in text, text)
+    direct = raw_bridge(sock, "open_tab", {"url": "file:///etc/passwd"})
+    check("the extension refuses file: too, past the MCP server", not direct["ok"] and "Refused" in direct["error"], str(direct))
+    direct = raw_bridge(sock, "open_tab", {"url": "about:config"})
+    check("the extension refuses about: too", not direct["ok"] and "Refused" in direct["error"], str(direct))
+    r = raw_bridge(sock, "navigate", {"tab": tab, "url": "moz-extension://" + m.js("return JSON.parse(Services.prefs.getStringPref('extensions.webextensions.uuids'))[args[0]];", EXT_ID) + "/settings/settings.html"})
+    check("the extension refuses its own pages too", not r["ok"] and "Refused" in r["error"], str(r))
+    r = raw_bridge(sock, "open_tab", {"url": m.pages + "/agent", "space": f"firefox-container-{mine['context']}"})
+    check("an agent cannot open a tab in your space", not r["ok"], str(r))
+    r = raw_bridge(sock, "bridge:allow", {"space": f"firefox-container-{mine['context']}", "mode": "write"})
+    check("no message from an agent can allow more", not r["ok"], str(r))
+    check("and nothing was allowed by it", len(json.loads(client.call("list_spaces")[0])) == 1)
+
+    # A space you open: read-only, then more, then closed again. On the settings page, with its own control.
+    open_space = lambda space, mode: ext_page(m, "/settings/settings.html", """const s = doc.querySelector(`#bridge-spaces select[data-space="${args[0]}"]`); s.value = args[1];
+      s.dispatchEvent(new page.Event("change", {bubbles: true})); await wait(600); return doc.querySelectorAll("#bridge-spaces select").length;""", space, mode)
+    open_as = lambda mode: open_space(f"firefox-container-{mine['context']}", mode)
+    check("the settings page lists the other spaces", open_as("read") >= 3 - 1)
+    r = ext_page(m, "/settings/settings.html", """const s = doc.querySelector(`#bridge-spaces select[data-space="${args[0]}"]`); s.focus(); s.dispatchEvent(new page.Event("change", {bubbles: true})); await wait(300);
+      return doc.activeElement?.dataset?.space ?? null;""", f"firefox-container-{mine['context']}")
+    check("choosing for a space keeps the keyboard on its list", r == f"firefox-container-{mine['context']}", str(r))
+    text, is_error, _ = client.call("read_page", tab=other_tab)
+    check("a space you open read-only can be read", not is_error and "<untrusted" in text, text[:200])
+    check("the agent is told which it is", "read only" in client.call("list_spaces")[0])
+    text, is_error, _ = client.call("click", tab=other_tab, selector="a")
+    check("a read-only space cannot be touched", is_error and "No such tab" in text, text)
+    open_as("")
+    text, is_error, _ = client.call("read_page", tab=other_tab)
+    check("closed again, at once", is_error and "No such tab" in text, text)
+
+    # Rules are for your own browsing: a rule cannot send an agent's tab to its space. Nor a tab you hand over.
+    extension_message(m, {"type": "settings:rules", "rules": [{"url": "/agent", "space": f"firefox-container-{mine['context']}"}]})
+    text, is_error, _ = client.call("open_tab", url=m.pages + "/agent?second")
+    second = json.loads(text)["tab"]
+    client.call("wait_for", tab=second, selector="h1")
+    r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?second")).map(t => t.userContextId);""")
+    check("a rule does not send an agent's tab out of its space", r == [context], str(r))
+    client.call("navigate", tab=second, url=m.pages + "/agent?second-again")
+    client.call("wait_for", tab=second, selector="h1")
+    r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?second-again")).map(t => t.userContextId);""")
+    check("nor when it goes to an address that matches", r == [context], str(r))
+    # In a space you opened to it too: a rule must not carry what it opens on into a closed one.
+    third = ext_page(m, "/settings/settings.html", """return [...doc.querySelectorAll("#bridge-spaces select")].map(s => s.dataset.space).find(s => s !== args[0]);""", f"firefox-container-{mine['context']}")
+    open_space(third, "write")
+    text, is_error, _ = client.call("open_tab", url=m.pages + "/agent?third", space=third)
+    third_tab = json.loads(text)["tab"]
+    client.call("wait_for", tab=third_tab, selector="h1")
+    r = m.js(H + """await wait(1500); return wins().flatMap(w => w.gBrowser.tabs).filter(t => url(t).includes("?third")).map(t => t.userContextId);""")
+    check("nor one it opens in a space you opened to it, into one you did not", r == [int(third.split("-")[-1])], str(r))
+    client.call("close_tab", tab=third_tab)
+    open_space(third, "")
+    # By dragging it to the space's dot, with real drag events on the real sidebar.
+    handed = sidebar_page(m, """const t = plainTabs()[0], id = Number(t.dataset.tab), title = t.querySelector(".title").textContent;
+      const dot = doc.querySelector(`#spaces .space[data-space="${args[0]}"]`), box = dot.getBoundingClientRect(), data = new page.DataTransfer();
+      const at = {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5, dataTransfer: data};
+      t.dispatchEvent(new page.DragEvent("dragstart", at)); dot.dispatchEvent(new page.DragEvent("dragover", at));
+      dot.dispatchEvent(new page.DragEvent("drop", at)); t.dispatchEvent(new page.DragEvent("dragend", at));
+      await wait(3000); return {title, gone: !doc.querySelector(`[data-tab="${id}"]`)};""", agent["id"])
+    listing = client.call("list_tabs")[0]
+    check("a tab you hand over by moving it to the Agent space is there for the agent", handed["gone"] and handed["title"] in listing, f"{handed} {listing[:500]}")
+    extension_message(m, {"type": "settings:rules", "rules": []})
+
+    # It shows: a quiet ring on its dot, one line, and it goes by itself.
+    client.call("read_page", tab=tab)
+    r = sidebar_page(m, """await wait(200); const line = doc.getElementById("agent-line"), dot = doc.querySelector(`#spaces .space[data-space="${args[0]}"]`);
+      return {shown: !line.hidden, text: line.querySelector(".agent-action").textContent, stop: !!line.querySelector(".agent-stop"), ring: dot.classList.contains("agent-active"), others: doc.querySelectorAll("#spaces .agent-active").length, listH: doc.getElementById("tabs").getBoundingClientRect().top};""", agent["id"])
+    check("what an agent does shows: its last action, a Stop, and a ring on its space's dot", r["shown"] and r["text"].startswith("Agent:") and r["stop"] and r["ring"] and r["others"] == 1, str(r))
+    log = ext_page(m, "/settings/settings.html", """await wait(300); return [...doc.querySelectorAll("#bridge-log li")].map(l => l.textContent);""")
+    bridge_shot(m, "bridge-settings", "/settings/settings.html")
+    check("the settings page has a short log, with refusals", any("read" in l for l in log) and any("refused" in l for l in log), str(log[:6]))
+    check("the log holds no address, only sites", not any("/agent" in l or "?" in l for l in log), str(log[:6]))
+
+    # Leaving you a tab: the folder For you, with a note, and a still mark on the space's dot.
+    text, is_error, _ = client.call("leave_for_you", tab=second, note="Please look at this one")
+    check("an agent can leave you a tab", not is_error, text)
+    r = sidebar_page(m, """doc.querySelector(`#spaces .space[data-space="${args[0]}"]`).click(); await wait(1500);
+      const folder = folders().find(f => f.name === "For you");
+      const row = [...doc.querySelectorAll("#tabs .folder .tab")].find(x => x.querySelector(".agent-note"));
+      return {folder, note: row?.querySelector(".agent-note").textContent, tip: row?.title, left: doc.querySelector(`#spaces .space[data-space="${args[0]}"]`).classList.contains("agent-left"), name: doc.getElementById("space-name").textContent, id: row && Number(row.dataset.tab)};""", agent["id"])
+    check("it is in the folder For you, with its note, and the dot says so", r["folder"] and r["note"] == "Please look at this one" and r["left"] and r["name"] == "Agent", str(r))
+    bridge_shot(m, "bridge-agent-space")
+    # Going there yourself: the agent's select_tab follows where you are looking; away, it does not.
+    r2 = client.call("select_tab", tab=tab)
+    check("select_tab brings a tab to the front only where you look at its space", not r2[1] and '"broughtToFront":true' in r2[0], r2[0])
+    sidebar_page(m, """doc.querySelector(`#spaces .space[data-space="${args[0]}"]`).click(); await wait(800); return 1;""", f"firefox-container-{mine['context']}")
+    away = m.js(H + "return main().gBrowser.selectedTab.userContextId;")
+    r2 = client.call("select_tab", tab=tab)
+    still = m.js(H + "await wait(400); return main().gBrowser.selectedTab.userContextId;")
+    check("elsewhere, select_tab leaves you where you are", '"broughtToFront":false' in r2[0] and away == still == mine["context"], f"{r2[0]} {away} {still}")
+    # Gone from For you, it is gone: closing (twice, as a saved tab) leaves no empty folder.
+    text, is_error, _ = client.call("close_tab", tab=second)
+    r = m.js(H + """await wait(1500); const all = (await storage("%s", ["syncedTabs"])).syncedTabs; return Object.values(all).filter(e => e.forYou).length;""" % EXT_ID)
+    check("For you exists only while it has something", not is_error and r == 0, f"{text} {r}")
+
+    # With the bridge on and nothing happening, nothing happens.
+    time.sleep(1)
+    idle = extension_message(m, {"type": "idle", "ms": 4000})
+    check("with the bridge on and no agent at work, Tidier does nothing", idle["jobs"] == 0 and idle["views"] == 0 and idle["lookups"] == 0, str(idle))
+
+    # Stop cuts it at once, also for an agent in the middle of something.
+    waiting = Mcp(m.config_home)
+    waiting.handshake()
+    waiting.send({"jsonrpc": "2.0", "id": 900, "method": "tools/call", "params": {"name": "wait_for", "arguments": {"tab": tab, "selector": "#never", "timeout_s": 30}}})
+    time.sleep(1)
+    bridge_shot(m, "bridge-line")
+    r = sidebar_page(m, """const stop = doc.querySelector("#agent-line .agent-stop"), shown = !doc.getElementById("agent-line").hidden; stop.click(); await wait(300);
+      return {shown, gone: doc.getElementById("agent-line").hidden, ring: doc.querySelectorAll("#spaces .agent-active").length};""")
+    check("Stop is there while an agent works, and the line goes with it", r["shown"] and r["gone"] and r["ring"] == 0, str(r))
+    r = ext_page(m, "/settings/settings.html", """await wait(100); return {on: doc.getElementById("bridge-on").checked, details: doc.getElementById("bridge-details").hidden};""")
+    check("a settings page that is open shows it at once", r == {"on": False, "details": True}, str(r))
+    check("Stop cuts it at once: no socket, no process", until(lambda: not os.path.exists(sock) and not running(), 5), f"{os.path.exists(sock)} {running()}")
+    answer = waiting.receive(5)
+    check("and an agent waiting on it gets its answer at once", answer["result"]["isError"] and "stopped" in answer["result"]["content"][0]["text"], str(answer))
+    waiting.close()
+    text, is_error, _ = client.call("list_spaces")
+    check("after Stop, an agent can do nothing", is_error and "off" in text, text)
+    check("and it stays off", not os.path.exists(sock) and not running())
+    check("what the agent had open is still there for you to see", m.js(H + """return wins().flatMap(w => w.gBrowser.tabs).filter(t => t.userContextId === args[0]).length;""", context) >= 1)
+
+    # Copy for Claude, by the same page.
+    m.js(H + """const w = main(); w.focus(); return 1;""")
+    tab_menu = """const row = plainTabs()[0], box = row.getBoundingClientRect(); await wait(200);
+      row.dispatchEvent(new page.MouseEvent("contextmenu", {bubbles: true, cancelable: true, clientX: box.left + 5, clientY: box.top + 5})); await wait(500);
+      const labels = [...doc.querySelectorAll("#menu .item")].map(b => b.textContent); doc.dispatchEvent(new page.KeyboardEvent("keydown", {key: "Escape", bubbles: true})); doc.body.click(); return labels;"""
+    labels_off = sidebar_page(m, tab_menu)
+    r = ext_page(m, "/settings/settings.html", """doc.getElementById("claude-copy").click(); await wait(500); return doc.getElementById("claude-copy").checked;""")
+    check("Copy for Claude can be turned on by itself", r is True and not running(), str(r))
+    labels_on = sidebar_page(m, tab_menu)
+    if labels_off or labels_on:  # where Tidier draws the tab's menu
+        check("a tab's menu offers Copy for Claude only once it is on", not any("Claude" in x for x in labels_off) and "Copy page for Claude" in labels_on and "Ask Claude about this page" in labels_on, f"{labels_off} {labels_on}")
+    r = copy_for_claude(m, tab)
+    check("Copy page for Claude gives title, address and clean text", r.startswith("# ") and "/agent" in r and "# A heading" in r and "SECRET" not in r and "<untrusted" not in r, r[:400])
+    ext_page(m, "/settings/settings.html", """doc.getElementById("claude-copy").click(); await wait(300); return 1;""")
+
+    # Back on, for what starts again by itself: a restart where one can be made.
+    if m.can_restart:
+        ext_page(m, "/settings/settings.html", """doc.getElementById("bridge-on").click(); await wait(800); return 1;""")
+        check("on again", until(lambda: os.path.exists(sock)))
+        # (The test's own pages are closed first: restored unloaded, they could not be scripted.)
+        m.js(H + """for (const w of wins()) for (const t of [...w.gBrowser.tabs]) if (/\\/(settings|sidebar)\\/[a-z]+\\.html/.test(url(t))) w.gBrowser.removeTab(t); await wait(500); return 1;""")
+        m.restart()
+        m.js(H + """for (let i = 0; i < 100 && wins().length < 2; i++) await wait(200); await wait(9000); return 1;""")
+        check("on stays on across a restart", until(lambda: os.path.exists(sock), 15) and running())
+        check("and works", not client.call("list_spaces")[1])
+        r = ext_page(m, "/settings/settings.html", """const on = doc.getElementById("bridge-on"); for (let i = 0; i < 50 && !on.checked; i++) await wait(100);
+          const was = on.checked; on.click(); await wait(800); return was;""")
+        check("the settings page shows it on, after a restart", r is True, str(r))
+        check("off again", until(lambda: not os.path.exists(sock) and not running(), 5))
+    client.close()
+    # What the agent left, so the rest sees the same tabs as before.
+    m.js(H + """await removeWhere((w, t) => t.userContextId === args[0]); return 1;""", context)
+
+
+def raw_bridge(sock, tool, args):
+    """A call straight on the socket, past the MCP server, as anything you run could."""
+    with socket.socket(socket.AF_UNIX) as conn:
+        cwd = os.getcwd()
+        os.chdir(os.path.dirname(sock))  # the test's folder can be deeper than a socket's path may be
+        conn.connect(os.path.basename(sock))
+        os.chdir(cwd)
+        conn.settimeout(60)
+        conn.sendall(json.dumps({"id": 1, "tool": tool, "args": args}).encode() + b"\n")
+        data = b""
+        while b"\n" not in data:
+            data += conn.recv(1 << 20)
+    return json.loads(data)
+
+
+def bridge_shot(m, name, path="/sidebar/sidebar.html"):
+    """A picture of one of Tidier's pages, a sidebar at a sidebar's width, to look at, with TIDIER_SHOTS set: as it is, and in a light theme."""
+    folder = os.environ.get("TIDIER_SHOTS")
+    if not folder:
+        return
+    ext_page(m, path, """if (doc.getElementById("spaces").tagName === "NAV") doc.body.style.maxWidth = "300px"; await wait(100); return 1;""")
+
+    def shoot(suffix):
+        m.cmd("Marionette:SetContext", {"value": "content"})
+        for h in m.cmd("WebDriver:GetWindowHandles"):
+            m.cmd("WebDriver:SwitchToWindow", {"handle": h, "focus": False})
+            if path in m.cmd("WebDriver:GetCurrentURL"):
+                break
+        open(os.path.join(folder, name + suffix + ".png"), "wb").write(base64.b64decode(m.cmd("WebDriver:TakeScreenshot", {"full": "settings" in path})))
+        m.chrome()
+
+    shoot("")
+    m.js("Services.prefs.setIntPref('layout.css.prefers-color-scheme.content-override', 1); return 1;")
+    # (Without the look from dotfiles, whose tints per space are for a dark theme, and without
+    # the fade to a new colour, which does not run in a tab that is not in front.)
+    ext_page(m, path, """for (const style of doc.head.querySelectorAll("style")) style.remove(); doc.documentElement.style.transition = "none"; await wait(500); return 1;""")
+    shoot("-light")
+    m.js("Services.prefs.clearUserPref('layout.css.prefers-color-scheme.content-override'); return 1;")
+
+
+def copy_for_claude(m, tab):
+    """What Copy page for Claude puts on the clipboard, by the message its menu item sends."""
+    sidebar_page(m, """const agent = page.browser.runtime.connect({name: "agent"}); const windowId = (await page.browser.windows.getCurrent()).id;
+      agent.postMessage(page.JSON.parse(JSON.stringify({type: "copyForClaude", tabIds: [args[0]], windowId}))); await wait(1500); agent.disconnect(); return 1;""", tab)
+    return m.js(H + """const t = Cc["@mozilla.org/widget/transferable;1"].createInstance(Ci.nsITransferable); t.init(null); t.addDataFlavor("text/plain");
+      Services.clipboard.getData(t, Ci.nsIClipboard.kGlobalClipboard, main().browsingContext.currentWindowContext);
+      const o = {}; try { t.getTransferData("text/plain", o); return o.value.QueryInterface(Ci.nsISupportsString).data; } catch (e) { return ""; }""")
+
+
 def alone_idle(m):
     # What the groups before did can still have a timer running, started by what they did:
     # the quiet line (10 s) and a placeholder's new title (up to a minute, refreshGhostsSoon).
@@ -8596,6 +8965,7 @@ ALONE_GROUPS = (alone_setup, alone_second_window, alone_spaces, alone_keys, alon
                 alone_bar_edges,
                 alone_shortcuts,
                 alone_sync_hide,
+                alone_bridge,
                 alone_idle, alone_update, alone_folds_rest_kept, alone_end, alone_restart, alone_folds_rest_kept, alone_isolation_start, alone_little_restart)
 
 
